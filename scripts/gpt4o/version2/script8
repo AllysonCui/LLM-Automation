@@ -1,0 +1,57 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/analysis_data/step3_repeats_marked.csv")
+csv_output = Path("scripts/gpt4o/version2/analysis_data/step8_annual_proportions.csv")
+plot_output = Path("scripts/gpt4o/version2/analysis_data/step8_annual_reappointment_proportions.png")
+
+if not input_file.exists():
+    print(f"[Error] Input file not found: {input_file}")
+else:
+    try:
+        df = pd.read_csv(input_file)
+        print(f"[✓] Loaded Step 3 data: {len(df)} rows")
+
+        # Validate required columns
+        if 'reappointed' not in df.columns or 'source_year' not in df.columns:
+            raise ValueError("Missing 'reappointed' or 'source_year' columns.")
+
+        # Ensure correct dtypes
+        df['reappointed'] = df['reappointed'].astype(bool)
+
+        # Group by year, calculate proportion
+        annual_stats = (
+            df.groupby('source_year')
+            .agg(
+                total_appointments=('name', 'count'),
+                total_reappointments=('reappointed', 'sum')
+            )
+            .reset_index()
+        )
+        annual_stats['reappointment_proportion'] = (
+            annual_stats['total_reappointments'] / annual_stats['total_appointments']
+        )
+
+        # Save CSV
+        annual_stats.to_csv(csv_output, index=False)
+        print(f"[✓] Annual proportions saved to: {csv_output}")
+
+        # Plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(
+            annual_stats['source_year'],
+            annual_stats['reappointment_proportion'],
+            marker='o'
+        )
+        plt.title("Government-Wide Annual Reappointment Proportion")
+        plt.xlabel("Year")
+        plt.ylabel("Proportion Reappointed")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(plot_output)
+        print(f"[✓] Plot saved to: {plot_output}")
+
+    except Exception as e:
+        print(f"[Error] Step 8 failed: {e}")

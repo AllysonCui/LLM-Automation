@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""
+Script to create a summary table of appointment counts by organization and year
+Creates a pivot table with organizations as rows and years as columns
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def create_appointment_counts():
+    """
+    Load dataset and create summary table of appointment counts by organization and year
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file {input_file} not found!")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from {input_file}...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df)} records")
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    if 'org' not in df.columns:
+        print("ERROR: 'org' column not found in dataset!")
+        sys.exit(1)
+    if 'year' not in df.columns:
+        print("ERROR: 'year' column not found in dataset!")
+        sys.exit(1)
+    
+    # Convert year to numeric and validate
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Check for invalid years
+    invalid_years = df['year'].isna().sum()
+    if invalid_years > 0:
+        print(f"WARNING: {invalid_years} records have invalid year values - these will be excluded")
+        df = df[df['year'].notna()]
+    
+    # Check year range for reasonableness
+    year_min = df['year'].min()
+    year_max = df['year'].max()
+    print(f"\nYear range in data: {int(year_min)} to {int(year_max)}")
+    
+    if year_min < 2000 or year_max > 2030:
+        print(f"WARNING: Unusual year range detected. Please verify data quality.")
+    
+    # Handle missing organization names
+    missing_orgs = df['org'].isna().sum()
+    if missing_orgs > 0:
+        print(f"WARNING: {missing_orgs} records have missing organization names")
+        # Replace missing org names with a placeholder
+        df['org'] = df['org'].fillna('[No Organization Listed]')
+    
+    # Create initial statistics
+    print(f"\nDataset overview:")
+    print(f"  Total appointments: {len(df)}")
+    print(f"  Unique organizations: {df['org'].nunique()}")
+    print(f"  Years covered: {df['year'].nunique()}")
+    
+    # Group by organization and year, then count appointments
+    print("\nCreating appointment counts by organization and year...")
+    grouped = df.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Validate counts for reasonableness
+    max_count = grouped['count'].max()
+    if max_count > 1000:
+        print(f"WARNING: Maximum count of {max_count} appointments for a single org/year seems high")
+        high_counts = grouped[grouped['count'] > 100]
+        if not high_counts.empty:
+            print("\nOrganizations with >100 appointments in a year:")
+            for _, row in high_counts.iterrows():
+                print(f"  {row['org']} ({int(row['year'])}): {row['count']} appointments")
+    
+    # Create pivot table with organizations as rows and years as columns
+    print("\nCreating pivot table...")
+    pivot_table = grouped.pivot(index='org', columns='year', values='count')
+    
+    # Fill missing values with 0 (no appointments that year)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    # Sort organizations by total appointments (descending)
+    pivot_table['Total'] = pivot_table.sum(axis=1)
+    pivot_table = pivot_table.sort_values('Total', ascending=False)
+    
+    # Save the pivot table
+    print(f"\nSaving appointment counts to {output_file}...")
+    pivot_table.to_csv(output_file, encoding='utf-8')
+    
+    # Print summary statistics
+    print("\n" + "="*70)
+    print("APPOINTMENT COUNTS SUMMARY")
+    print("="*70)
+    print(f"Total organizations: {len(pivot_table)}")
+    print(f"Years covered: {sorted([col for col in pivot_table.columns if col != 'Total'])}")
+    
+    # Show top 10 organizations by total appointments
+    print("\nTop 10 organizations by total appointments:")
+    top_10 = pivot_table.head(10)
+    for idx, (org, row) in enumerate(top_10.iterrows()):
+        print(f"{idx+1:2d}. {org}: {int(row['Total'])} total appointments")
+    
+    # Show organizations with most appointments in a single year
+    print("\nTop 5 highest single-year appointment counts:")
+    # Get the maximum value for each organization (excluding Total column)
+    year_columns = [col for col in pivot_table.columns if col != 'Total']
+    max_yearly = pivot_table[year_columns].max(axis=1).sort_values(ascending=False).head(5)
+    
+    for idx, (org, max_count) in enumerate(max_yearly.items()):
+        # Find which year had this maximum
+        year_mask = pivot_table.loc[org, year_columns] == max_count
+        max_year = [col for col in year_columns if year_mask[col]][0]
+        print(f"{idx+1}. {org}: {int(max_count)} appointments in {int(max_year)}")
+    
+    # Show yearly totals
+    print("\nTotal appointments by year:")
+    yearly_totals = grouped.groupby('year')['count'].sum().sort_index()
+    for year, total in yearly_totals.items():
+        print(f"  {int(year)}: {total} appointments")
+    
+    # Data quality summary
+    print("\nData quality summary:")
+    print(f"  Records with valid org and year: {len(grouped)}")
+    print(f"  Organizations with appointments: {len(pivot_table)}")
+    print(f"  Average appointments per org per year: {grouped['count'].mean():.2f}")
+    print(f"  Median appointments per org per year: {grouped['count'].median():.0f}")
+    
+    # Show a sample of the pivot table
+    print("\nSample of appointment counts table (first 5 orgs, all years):")
+    print(pivot_table.head())
+    
+    print(f"\nAppointment counts saved successfully to: {output_file}")
+    
+    return pivot_table
+
+if __name__ == "__main__":
+    # Run the main function
+    try:
+        counts_table = create_appointment_counts()
+        print("\nScript completed successfully!")
+    except Exception as e:
+        print(f"\nERROR: Script failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

@@ -1,0 +1,223 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+def count_employees_by_org_year():
+    """
+    Step 4: Count number of employees for each organization for each year
+    
+    This function:
+    1. Reads the marked repeats dataset from Step 3
+    2. Counts total appointments per organization per year
+    3. Counts unique employees per organization per year
+    4. Creates comprehensive employee count analysis
+    5. Identifies organizations with most appointments and employees
+    6. Saves the employee counts dataset for further analysis
+    """
+    
+    # Define paths
+    input_dir = Path("scripts/claudesonnet4/version2/analysis_data")
+    input_file = input_dir / "step3_repeats_marked.csv"
+    output_file = input_dir / "step4_employee_counts.csv"
+    
+    print("=== Step 4: Counting Employees by Organization and Year ===")
+    print(f"Reading from: {input_file}")
+    print(f"Saving to: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}. Please run Step 3 first.")
+    
+    # Read the marked repeats dataset
+    print("Loading marked repeats dataset...")
+    df = pd.read_csv(input_file)
+    original_rows = len(df)
+    print(f"Loaded {original_rows:,} appointment records")
+    
+    # Validate required columns
+    required_columns = ['name', 'position', 'org', 'reappointed', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    print(f"Year range: {df['year'].min()}-{df['year'].max()}")
+    print(f"Organizations: {df['org'].nunique()} unique")
+    
+    # Data quality check
+    print(f"\n=== Data Quality Check ===")
+    null_orgs = df['org'].isna().sum()
+    null_years = df['year'].isna().sum()
+    null_names = df['name'].isna().sum()
+    
+    print(f"Records with missing organization: {null_orgs:,}")
+    print(f"Records with missing year: {null_years:,}")
+    print(f"Records with missing name: {null_names:,}")
+    
+    # Filter out records with missing critical data
+    clean_df = df.dropna(subset=['org', 'year']).copy()
+    removed_records = len(df) - len(clean_df)
+    
+    if removed_records > 0:
+        print(f"Removed {removed_records:,} records with missing org/year data")
+    
+    print(f"Clean dataset: {len(clean_df):,} records for analysis")
+    
+    # Create employee counts analysis
+    print(f"\n=== Creating Employee Counts Analysis ===")
+    
+    # Method 1: Count total appointments per org per year
+    print("Counting total appointments per organization per year...")
+    appointment_counts = clean_df.groupby(['org', 'year']).size().reset_index(name='total_appointments')
+    
+    # Method 2: Count unique employees per org per year
+    print("Counting unique employees per organization per year...")
+    # Use name+position combination to identify unique employees
+    # (same person in different positions counts as different employees)
+    clean_df['employee_key'] = clean_df['name'].fillna('UNKNOWN') + '|' + clean_df['position'].fillna('UNKNOWN')
+    employee_counts = clean_df.groupby(['org', 'year'])['employee_key'].nunique().reset_index(name='unique_employees')
+    
+    # Method 3: Count unique individuals per org per year (regardless of position)
+    individual_counts = clean_df.groupby(['org', 'year'])['name'].nunique().reset_index(name='unique_individuals')
+    
+    # Method 4: Count reappointments per org per year
+    reappointment_counts = clean_df.groupby(['org', 'year'])['reappointed'].sum().reset_index(name='reappointments')
+    
+    # Method 5: Count new appointments per org per year
+    new_appointment_counts = clean_df.groupby(['org', 'year'])['reappointed'].apply(lambda x: (x == False).sum()).reset_index(name='new_appointments')
+    
+    # Combine all counts into comprehensive dataset
+    print("Combining all count metrics...")
+    employee_counts_combined = appointment_counts.copy()
+    
+    # Merge all count types
+    employee_counts_combined = employee_counts_combined.merge(
+        employee_counts, on=['org', 'year'], how='left'
+    )
+    employee_counts_combined = employee_counts_combined.merge(
+        individual_counts, on=['org', 'year'], how='left'
+    )
+    employee_counts_combined = employee_counts_combined.merge(
+        reappointment_counts, on=['org', 'year'], how='left'
+    )
+    employee_counts_combined = employee_counts_combined.merge(
+        new_appointment_counts, on=['org', 'year'], how='left'
+    )
+    
+    # Fill any missing values with 0
+    numeric_columns = ['total_appointments', 'unique_employees', 'unique_individuals', 'reappointments', 'new_appointments']
+    employee_counts_combined[numeric_columns] = employee_counts_combined[numeric_columns].fillna(0).astype(int)
+    
+    # Calculate additional metrics
+    employee_counts_combined['reappointment_rate'] = (
+        employee_counts_combined['reappointments'] / employee_counts_combined['total_appointments'] * 100
+    ).round(2)
+    
+    # Handle division by zero
+    employee_counts_combined['reappointment_rate'] = employee_counts_combined['reappointment_rate'].fillna(0)
+    
+    print(f"Employee counts dataset created: {len(employee_counts_combined):,} org-year combinations")
+    
+    # Summary statistics
+    print(f"\n=== Employee Counts Summary ===")
+    total_org_years = len(employee_counts_combined)
+    total_orgs = employee_counts_combined['org'].nunique()
+    years_covered = sorted(employee_counts_combined['year'].unique())
+    
+    print(f"Total organization-year combinations: {total_org_years:,}")
+    print(f"Unique organizations: {total_orgs:,}")
+    print(f"Years covered: {years_covered[0]}-{years_covered[-1]} ({len(years_covered)} years)")
+    
+    # Overall statistics
+    total_appointments_all = employee_counts_combined['total_appointments'].sum()
+    total_unique_employees = clean_df['employee_key'].nunique()
+    total_unique_individuals = clean_df['name'].nunique()
+    total_reappointments = employee_counts_combined['reappointments'].sum()
+    
+    print(f"\nOverall Statistics:")
+    print(f"Total appointments across all years: {total_appointments_all:,}")
+    print(f"Total unique employees (name+position): {total_unique_employees:,}")
+    print(f"Total unique individuals: {total_unique_individuals:,}")
+    print(f"Total reappointments: {total_reappointments:,}")
+    print(f"Overall reappointment rate: {(total_reappointments/total_appointments_all)*100:.2f}%")
+    
+    # Top organizations by total appointments
+    print(f"\n=== Top 15 Organizations by Total Appointments (All Years) ===")
+    org_totals = employee_counts_combined.groupby('org').agg({
+        'total_appointments': 'sum',
+        'unique_employees': 'sum',
+        'unique_individuals': 'sum',
+        'reappointments': 'sum'
+    }).reset_index()
+    
+    org_totals['overall_reappointment_rate'] = (org_totals['reappointments'] / org_totals['total_appointments'] * 100).round(2)
+    org_totals_sorted = org_totals.sort_values('total_appointments', ascending=False)
+    
+    for i, (_, row) in enumerate(org_totals_sorted.head(15).iterrows(), 1):
+        print(f"{i:2d}. {row['org']}")
+        print(f"    Total appointments: {row['total_appointments']:,}")
+        print(f"    Unique employees: {row['unique_employees']:,}")
+        print(f"    Reappointments: {row['reappointments']:,} ({row['overall_reappointment_rate']:.1f}%)")
+    
+    # Year-over-year trends
+    print(f"\n=== Year-over-Year Appointment Trends ===")
+    yearly_totals = employee_counts_combined.groupby('year').agg({
+        'total_appointments': 'sum',
+        'unique_employees': 'sum',
+        'reappointments': 'sum'
+    }).reset_index()
+    
+    yearly_totals['reappointment_rate'] = (yearly_totals['reappointments'] / yearly_totals['total_appointments'] * 100).round(2)
+    
+    print(f"Year | Total Appts | Unique Employees | Reappointments | Rate")
+    print(f"-----|-------------|------------------|----------------|------")
+    for _, row in yearly_totals.iterrows():
+        print(f"{int(row['year'])} | {row['total_appointments']:10,} | {row['unique_employees']:15,} | {row['reappointments']:13,} | {row['reappointment_rate']:4.1f}%")
+    
+    # Organizations with highest reappointment rates (minimum 50 appointments for significance)
+    print(f"\n=== Organizations with Highest Reappointment Rates (Min 50 Total Appointments) ===")
+    significant_orgs = org_totals[org_totals['total_appointments'] >= 50].sort_values('overall_reappointment_rate', ascending=False)
+    
+    for i, (_, row) in enumerate(significant_orgs.head(10).iterrows(), 1):
+        print(f"{i:2d}. {row['org']}: {row['overall_reappointment_rate']:.1f}% ({row['reappointments']}/{row['total_appointments']})")
+    
+    # Sample of the data for verification
+    print(f"\n=== Sample Employee Counts Data ===")
+    print("First 10 records from employee counts dataset:")
+    sample_data = employee_counts_combined.head(10)
+    for _, row in sample_data.iterrows():
+        print(f"{row['org']} ({int(row['year'])}): {row['total_appointments']} appointments, {row['unique_employees']} employees, {row['reappointments']} reappointed ({row['reappointment_rate']:.1f}%)")
+    
+    # Save the employee counts dataset
+    print(f"\n=== Saving Employee Counts Dataset ===")
+    employee_counts_combined.to_csv(output_file, index=False)
+    print(f"Employee counts dataset saved to: {output_file}")
+    
+    # Validation check
+    validation_df = pd.read_csv(output_file)
+    if len(validation_df) == len(employee_counts_combined):
+        print(f"✓ Validation successful: {len(validation_df):,} org-year records saved correctly")
+        
+        # Verify key statistics
+        validation_total = validation_df['total_appointments'].sum()
+        validation_reappointments = validation_df['reappointments'].sum()
+        print(f"✓ Total appointments validation: {validation_total:,}")
+        print(f"✓ Total reappointments validation: {validation_reappointments:,}")
+    else:
+        print(f"⚠ Validation warning: Expected {len(employee_counts_combined):,}, found {len(validation_df):,}")
+    
+    print(f"\n=== Step 4 Complete ===")
+    print(f"Employee counts by organization and year completed successfully")
+    print(f"Dataset contains {len(employee_counts_combined):,} org-year combinations")
+    print(f"Ready for Step 5: Reappointment count analysis")
+    
+    return employee_counts_combined
+
+# Execute the function
+if __name__ == "__main__":
+    try:
+        employee_counts_data = count_employees_by_org_year()
+        print(f"\nStep 4 successful! Created employee counts for {len(employee_counts_data):,} org-year combinations.")
+        print("Ready for reappointment analysis.")
+    except Exception as e:
+        print(f"CRITICAL ERROR in Step 4: {str(e)}")
+        raise

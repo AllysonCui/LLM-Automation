@@ -1,0 +1,201 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+def extract_key_columns():
+    """
+    Step 2: Extract and keep only the key columns needed for reappointment analysis
+    
+    This function:
+    1. Reads the combined appointment dataset from Step 1
+    2. Identifies and extracts the key columns: reappointed, name, position, org, year
+    3. Validates data quality and handles missing values
+    4. Cleans and standardizes the data
+    5. Saves the cleaned key columns dataset for further analysis
+    """
+    
+    # Define paths
+    input_dir = Path("scripts/claudesonnet4/version2/analysis_data")
+    input_file = input_dir / "step1_combined_appointments.csv"
+    output_file = input_dir / "step2_key_columns_data.csv"
+    
+    print("=== Step 2: Extracting Key Columns for Reappointment Analysis ===")
+    print(f"Reading from: {input_file}")
+    print(f"Saving to: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}. Please run Step 1 first.")
+    
+    # Read the combined dataset
+    print("Loading combined appointment data...")
+    df = pd.read_csv(input_file)
+    original_rows = len(df)
+    print(f"Loaded {original_rows:,} appointment records")
+    print(f"Available columns: {list(df.columns)}")
+    
+    # Define key columns needed for analysis
+    key_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    print(f"\n=== Identifying Key Columns ===")
+    print(f"Required columns: {key_columns}")
+    
+    # Check which key columns exist
+    available_columns = []
+    missing_columns = []
+    
+    for col in key_columns:
+        if col in df.columns:
+            available_columns.append(col)
+            print(f"✓ Found: {col}")
+        else:
+            missing_columns.append(col)
+            print(f"✗ Missing: {col}")
+    
+    if missing_columns:
+        print(f"\nERROR: Missing required columns: {missing_columns}")
+        print("Available columns in dataset:")
+        for col in sorted(df.columns):
+            print(f"  - {col}")
+        raise ValueError(f"Cannot proceed without required columns: {missing_columns}")
+    
+    # Extract key columns
+    print(f"\n=== Extracting Key Columns ===")
+    key_df = df[key_columns].copy()
+    
+    print(f"Extracted {len(key_df)} rows with {len(key_columns)} key columns")
+    
+    # Data quality assessment before cleaning
+    print(f"\n=== Data Quality Assessment (Before Cleaning) ===")
+    for col in key_columns:
+        total_count = len(key_df)
+        null_count = key_df[col].isna().sum()
+        non_null_count = total_count - null_count
+        null_percentage = (null_count / total_count) * 100
+        
+        print(f"{col}:")
+        print(f"  - Non-null: {non_null_count:,} ({100-null_percentage:.1f}%)")
+        print(f"  - Null: {null_count:,} ({null_percentage:.1f}%)")
+        
+        if col == 'reappointed':
+            # Special handling for reappointed column
+            if key_df[col].notna().any():
+                true_count = key_df[col].sum()
+                false_count = (key_df[col] == False).sum()
+                print(f"  - True (reappointed): {true_count:,}")
+                print(f"  - False (new appointment): {false_count:,}")
+    
+    # Data cleaning and standardization
+    print(f"\n=== Data Cleaning and Standardization ===")
+    
+    # Clean name column
+    if 'name' in key_df.columns:
+        print("Cleaning 'name' column...")
+        # Remove extra whitespace and standardize case
+        key_df['name'] = key_df['name'].astype(str).str.strip()
+        key_df['name'] = key_df['name'].str.title()  # Title case for consistency
+        # Replace 'nan' strings with actual NaN
+        key_df.loc[key_df['name'].str.lower() == 'nan', 'name'] = np.nan
+        
+        name_cleaned = key_df['name'].notna().sum()
+        print(f"  - Cleaned names: {name_cleaned:,} valid entries")
+    
+    # Clean position column
+    if 'position' in key_df.columns:
+        print("Cleaning 'position' column...")
+        key_df['position'] = key_df['position'].astype(str).str.strip()
+        # Replace 'nan' strings with actual NaN
+        key_df.loc[key_df['position'].str.lower() == 'nan', 'position'] = np.nan
+        
+        position_cleaned = key_df['position'].notna().sum()
+        print(f"  - Cleaned positions: {position_cleaned:,} valid entries")
+    
+    # Clean org column
+    if 'org' in key_df.columns:
+        print("Cleaning 'org' column...")
+        key_df['org'] = key_df['org'].astype(str).str.strip()
+        # Replace 'nan' strings with actual NaN
+        key_df.loc[key_df['org'].str.lower() == 'nan', 'org'] = np.nan
+        
+        org_cleaned = key_df['org'].notna().sum()
+        print(f"  - Cleaned organizations: {org_cleaned:,} valid entries")
+    
+    # Validate reappointed column
+    if 'reappointed' in key_df.columns:
+        print("Validating 'reappointed' column...")
+        # Ensure proper boolean values
+        reappointed_valid = key_df['reappointed'].notna().sum()
+        print(f"  - Valid reappointment flags: {reappointed_valid:,}")
+    
+    # Remove rows where all key identifier columns are null
+    print(f"\n=== Removing Invalid Records ===")
+    before_cleanup = len(key_df)
+    
+    # A record is considered invalid if name, position, AND org are all null
+    invalid_mask = key_df['name'].isna() & key_df['position'].isna() & key_df['org'].isna()
+    invalid_count = invalid_mask.sum()
+    
+    if invalid_count > 0:
+        print(f"Removing {invalid_count} records with no identifying information...")
+        key_df = key_df[~invalid_mask].reset_index(drop=True)
+    
+    after_cleanup = len(key_df)
+    print(f"Records after cleanup: {after_cleanup:,} (removed {before_cleanup - after_cleanup:,})")
+    
+    # Final data quality summary
+    print(f"\n=== Final Data Quality Summary ===")
+    print(f"Total records: {len(key_df):,}")
+    
+    for col in key_columns:
+        null_count = key_df[col].isna().sum()
+        valid_count = len(key_df) - null_count
+        valid_percentage = (valid_count / len(key_df)) * 100
+        
+        print(f"{col}: {valid_count:,} valid ({valid_percentage:.1f}%)")
+        
+        if col == 'reappointed' and key_df[col].notna().any():
+            reappointment_count = key_df[col].sum()
+            reappointment_rate = (reappointment_count / valid_count) * 100
+            print(f"  - Reappointments: {reappointment_count:,} ({reappointment_rate:.1f}% of valid records)")
+    
+    # Year distribution
+    if 'year' in key_df.columns:
+        print(f"\n=== Year Distribution ===")
+        year_counts = key_df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"{int(year)}: {count:,} appointments")
+    
+    # Organization distribution (top 10)
+    if 'org' in key_df.columns and key_df['org'].notna().any():
+        print(f"\n=== Top 10 Organizations by Appointment Count ===")
+        org_counts = key_df['org'].value_counts().head(10)
+        for org, count in org_counts.items():
+            print(f"{org}: {count:,} appointments")
+    
+    # Save the cleaned key columns dataset
+    print(f"\n=== Saving Key Columns Dataset ===")
+    key_df.to_csv(output_file, index=False)
+    print(f"Key columns dataset saved to: {output_file}")
+    
+    # Validation check
+    validation_df = pd.read_csv(output_file)
+    if len(validation_df) == len(key_df):
+        print(f"✓ Validation successful: {len(validation_df):,} records saved correctly")
+    else:
+        print(f"⚠ Validation warning: Expected {len(key_df):,}, found {len(validation_df):,}")
+    
+    print(f"\n=== Step 2 Complete ===")
+    print(f"Key columns extracted and cleaned: {list(key_df.columns)}")
+    print(f"Dataset ready for Step 3: Marking repeat appointees")
+    
+    return key_df
+
+# Execute the function
+if __name__ == "__main__":
+    try:
+        key_data = extract_key_columns()
+        print(f"\nStep 2 successful! Processed {len(key_data):,} appointment records with key columns.")
+        print("Ready for repeat appointee analysis.")
+    except Exception as e:
+        print(f"CRITICAL ERROR in Step 2: {str(e)}")
+        raise

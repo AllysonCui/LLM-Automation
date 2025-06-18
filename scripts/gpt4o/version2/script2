@@ -1,0 +1,64 @@
+import pandas as pd
+from pathlib import Path
+
+# Define input and output paths
+input_file = Path("scripts/gpt4o/version2/analysis_data/step1_combined_appointments.csv")
+output_file = Path("scripts/gpt4o/version2/analysis_data/step2_key_columns_data.csv")
+
+# Expected standard column names
+standard_columns = {
+    "reappointed": ["reappointed", "re_appointed", "reappt", "is_reappointed"],
+    "name": ["name", "appointee_name", "full_name"],
+    "position": ["position", "job_title", "appointment_position"],
+    "org": ["org", "organization", "department", "agency"]
+}
+
+def find_column(df, possible_names):
+    """Helper to find actual column name in DataFrame from a list of possible options."""
+    for name in possible_names:
+        for col in df.columns:
+            if col.strip().lower() == name:
+                return col
+    return None
+
+# Load data
+if not input_file.exists():
+    print(f"[Error] Input file not found: {input_file}")
+else:
+    try:
+        df = pd.read_csv(input_file)
+        print(f"[✓] Loaded combined dataset: {len(df)} rows")
+
+        # Identify actual columns
+        selected_cols = {}
+        for key, variants in standard_columns.items():
+            found = find_column(df, [v.lower() for v in variants])
+            if found:
+                selected_cols[key] = found
+            else:
+                print(f"[Warning] Column not found for key: {key}")
+
+        if len(selected_cols) < 4:
+            print("[!] Not all key columns were found. Halting.")
+        else:
+            # Subset and rename columns
+            columns_to_keep = [selected_cols[k] for k in ["reappointed", "name", "position", "org"]]
+            if 'source_year' in df.columns:
+                columns_to_keep.append('source_year')
+            key_df = df[columns_to_keep].copy()
+
+            rename_map = {
+                selected_cols["reappointed"]: "reappointed",
+                selected_cols["name"]: "name",
+                selected_cols["position"]: "position",
+                selected_cols["org"]: "org"
+            }
+            key_df.rename(columns=rename_map, inplace=True)
+
+            # Save output
+            key_df.to_csv(output_file, index=False)
+            print(f"[✓] Key columns saved to: {output_file}")
+            print(f"[Info] Rows in filtered dataset: {len(key_df)}")
+
+    except Exception as e:
+        print(f"[Error] Failed to process file: {e}")

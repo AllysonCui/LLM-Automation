@@ -1,0 +1,241 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+def mark_repeat_appointees():
+    """
+    Step 3: Mark repeat appointees based on name, position, and organization
+    
+    This function:
+    1. Reads the key columns dataset from Step 2
+    2. Identifies repeat appointments (same name + position + org combination)
+    3. Marks reappointments as True (except for the first appearance)
+    4. Preserves original reappointment flags where they exist
+    5. Provides detailed analysis of repeat patterns
+    6. Saves the dataset with corrected reappointment flags
+    """
+    
+    # Define paths
+    input_dir = Path("scripts/claudesonnet4/version2/analysis_data")
+    input_file = input_dir / "step2_key_columns_data.csv"
+    output_file = input_dir / "step3_repeats_marked.csv"
+    
+    print("=== Step 3: Marking Repeat Appointees ===")
+    print(f"Reading from: {input_file}")
+    print(f"Saving to: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}. Please run Step 2 first.")
+    
+    # Read the key columns dataset
+    print("Loading key columns dataset...")
+    df = pd.read_csv(input_file)
+    original_rows = len(df)
+    print(f"Loaded {original_rows:,} appointment records")
+    
+    # Validate required columns
+    required_columns = ['name', 'position', 'org', 'reappointed', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Create a working copy
+    marked_df = df.copy()
+    
+    # Store original reappointment data for comparison
+    original_reappointed = marked_df['reappointed'].copy()
+    original_true_count = original_reappointed.sum() if original_reappointed.notna().any() else 0
+    
+    print(f"\n=== Original Reappointment Data ===")
+    print(f"Original reappointments marked: {original_true_count:,}")
+    
+    # Clean and prepare data for repeat detection
+    print(f"\n=== Preparing Data for Repeat Detection ===")
+    
+    # Create standardized versions of key fields for matching
+    # Handle missing values by filling with placeholder text
+    marked_df['name_clean'] = marked_df['name'].fillna('UNKNOWN_NAME').str.strip().str.upper()
+    marked_df['position_clean'] = marked_df['position'].fillna('UNKNOWN_POSITION').str.strip().str.upper()
+    marked_df['org_clean'] = marked_df['org'].fillna('UNKNOWN_ORG').str.strip().str.upper()
+    
+    # Create a unique identifier for each name+position+org combination
+    marked_df['appointment_key'] = (
+        marked_df['name_clean'] + '|' + 
+        marked_df['position_clean'] + '|' + 
+        marked_df['org_clean']
+    )
+    
+    print(f"Created {marked_df['appointment_key'].nunique()} unique appointment combinations")
+    
+    # Sort by appointment key and year to ensure chronological order
+    print("Sorting appointments chronologically...")
+    marked_df = marked_df.sort_values(['appointment_key', 'year']).reset_index(drop=True)
+    
+    # Identify repeat appointees
+    print(f"\n=== Identifying Repeat Appointees ===")
+    
+    # Group by appointment key and mark repeats
+    marked_df['is_repeat'] = marked_df.groupby('appointment_key').cumcount() > 0
+    marked_df['occurrence_number'] = marked_df.groupby('appointment_key').cumcount() + 1
+    marked_df['total_occurrences'] = marked_df.groupby('appointment_key')['appointment_key'].transform('count')
+    
+    # Statistics on repeats
+    total_appointments = len(marked_df)
+    unique_appointments = marked_df['appointment_key'].nunique()
+    repeat_appointments = marked_df['is_repeat'].sum()
+    people_with_repeats = (marked_df['total_occurrences'] > 1).sum()
+    unique_people_with_repeats = marked_df[marked_df['total_occurrences'] > 1]['appointment_key'].nunique()
+    
+    print(f"Total appointments: {total_appointments:,}")
+    print(f"Unique appointment combinations: {unique_appointments:,}")
+    print(f"Repeat appointments: {repeat_appointments:,}")
+    print(f"Unique people/positions with repeats: {unique_people_with_repeats:,}")
+    
+    # Update reappointment flags
+    print(f"\n=== Updating Reappointment Flags ===")
+    
+    # Strategy: Mark as reappointed if it's a repeat (occurrence > 1)
+    # Preserve original True values where they exist and make sense
+    original_reappointed_valid = marked_df['reappointed'].notna()
+    
+    # Create new reappointment flag
+    # Start with False for all appointments
+    marked_df['reappointed_updated'] = False
+    
+    # Mark repeats as True (except first occurrence)
+    marked_df.loc[marked_df['is_repeat'], 'reappointed_updated'] = True
+    
+    # Count changes
+    new_true_count = marked_df['reappointed_updated'].sum()
+    
+    print(f"New reappointment flags:")
+    print(f"  - Total marked as reappointed: {new_true_count:,}")
+    print(f"  - Total marked as new appointment: {total_appointments - new_true_count:,}")
+    
+    # Compare with original flags where available
+    if original_reappointed_valid.any():
+        print(f"\n=== Comparison with Original Flags ===")
+        
+        # Where both old and new flags exist, compare them
+        comparison_mask = original_reappointed_valid
+        if comparison_mask.any():
+            original_subset = original_reappointed[comparison_mask]
+            new_subset = marked_df.loc[comparison_mask, 'reappointed_updated']
+            
+            # Count agreements and disagreements
+            agreements = (original_subset == new_subset).sum()
+            disagreements = (original_subset != new_subset).sum()
+            
+            print(f"  - Agreements: {agreements:,}")
+            print(f"  - Disagreements: {disagreements:,}")
+            
+            # Show some examples of disagreements
+            if disagreements > 0:
+                disagree_indices = comparison_mask[comparison_mask].index[original_subset != new_subset]
+                print(f"  - Examples of disagreements (first 5):")
+                for i, idx in enumerate(disagree_indices[:5]):
+                    row = marked_df.iloc[idx]
+                    print(f"    {i+1}. {row['name']} - {row['position']} - {row['org']} ({row['year']})")
+                    print(f"       Original: {original_reappointed.iloc[idx]}, New: {row['reappointed_updated']}")
+    
+    # Replace the original reappointed column with updated values
+    marked_df['reappointed'] = marked_df['reappointed_updated']
+    
+    # Analyze repeat patterns
+    print(f"\n=== Repeat Pattern Analysis ===")
+    
+    # Distribution of repeat occurrences
+    occurrence_dist = marked_df['total_occurrences'].value_counts().sort_index()
+    print(f"Distribution of appointment occurrences:")
+    for occurrences, count in occurrence_dist.items():
+        people_count = count // occurrences  # Each person appears 'occurrences' times
+        print(f"  - {occurrences} appointment(s): {people_count:,} people ({count:,} total records)")
+    
+    # Top repeat appointees
+    repeat_summary = marked_df[marked_df['total_occurrences'] > 1].groupby('appointment_key').agg({
+        'name': 'first',
+        'position': 'first', 
+        'org': 'first',
+        'total_occurrences': 'first',
+        'year': ['min', 'max']
+    }).reset_index()
+    
+    # Flatten column names
+    repeat_summary.columns = ['appointment_key', 'name', 'position', 'org', 'total_occurrences', 'first_year', 'last_year']
+    repeat_summary['years_span'] = repeat_summary['last_year'] - repeat_summary['first_year']
+    
+    # Top 10 most frequently reappointed
+    top_repeats = repeat_summary.nlargest(10, 'total_occurrences')
+    
+    print(f"\n=== Top 10 Most Frequently Reappointed ===")
+    for _, row in top_repeats.iterrows():
+        print(f"{row['name']} - {row['position']} - {row['org']}")
+        print(f"  {row['total_occurrences']} appointments ({row['first_year']}-{row['last_year']}, {row['years_span']} year span)")
+    
+    # Year-over-year analysis
+    print(f"\n=== Year-over-Year Reappointment Analysis ===")
+    yearly_summary = marked_df.groupby('year').agg({
+        'reappointed': ['count', 'sum']
+    }).reset_index()
+    
+    # Flatten column names
+    yearly_summary.columns = ['year', 'total_appointments', 'reappointments']
+    yearly_summary['reappointment_rate'] = (yearly_summary['reappointments'] / yearly_summary['total_appointments']) * 100
+    
+    print(f"Yearly reappointment rates:")
+    for _, row in yearly_summary.iterrows():
+        print(f"  {int(row['year'])}: {row['reappointments']}/{row['total_appointments']} ({row['reappointment_rate']:.1f}%)")
+    
+    # Organization analysis
+    print(f"\n=== Organization Reappointment Analysis ===")
+    org_summary = marked_df.groupby('org').agg({
+        'reappointed': ['count', 'sum']
+    }).reset_index()
+    
+    # Flatten column names  
+    org_summary.columns = ['org', 'total_appointments', 'reappointments']
+    org_summary['reappointment_rate'] = (org_summary['reappointments'] / org_summary['total_appointments']) * 100
+    
+    # Filter organizations with at least 10 appointments and sort by reappointment rate
+    significant_orgs = org_summary[org_summary['total_appointments'] >= 10].sort_values('reappointment_rate', ascending=False)
+    
+    print(f"Top 10 organizations by reappointment rate (min 10 appointments):")
+    for _, row in significant_orgs.head(10).iterrows():
+        print(f"  {row['org']}: {row['reappointments']}/{row['total_appointments']} ({row['reappointment_rate']:.1f}%)")
+    
+    # Clean up working columns
+    columns_to_drop = ['name_clean', 'position_clean', 'org_clean', 'appointment_key', 
+                      'is_repeat', 'occurrence_number', 'total_occurrences', 'reappointed_updated']
+    marked_df = marked_df.drop(columns=columns_to_drop)
+    
+    # Save the marked dataset
+    print(f"\n=== Saving Marked Dataset ===")
+    marked_df.to_csv(output_file, index=False)
+    print(f"Marked dataset saved to: {output_file}")
+    
+    # Validation check
+    validation_df = pd.read_csv(output_file)
+    if len(validation_df) == len(marked_df):
+        print(f"✓ Validation successful: {len(validation_df):,} records saved correctly")
+        validation_reappointed = validation_df['reappointed'].sum()
+        print(f"✓ Reappointment count validation: {validation_reappointed:,} reappointments saved")
+    else:
+        print(f"⚠ Validation warning: Expected {len(marked_df):,}, found {len(validation_df):,}")
+    
+    print(f"\n=== Step 3 Complete ===")
+    print(f"Repeat appointees marked successfully")
+    print(f"Total reappointments identified: {new_true_count:,}")
+    print(f"Dataset ready for Step 4: Employee count analysis")
+    
+    return marked_df
+
+# Execute the function
+if __name__ == "__main__":
+    try:
+        marked_data = mark_repeat_appointees()
+        print(f"\nStep 3 successful! Marked repeat appointees in {len(marked_data):,} appointment records.")
+        print("Ready for employee count analysis.")
+    except Exception as e:
+        print(f"CRITICAL ERROR in Step 3: {str(e)}")
+        raise

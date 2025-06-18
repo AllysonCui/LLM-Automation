@@ -1,0 +1,172 @@
+"""
+Step 1: Combine 12 Raw Datasets
+This script reads appointment CSV files from 2013-2024 and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def combine_appointment_datasets():
+    """
+    Combines appointment CSV files from 2013-2024 into a single dataset.
+    """
+    # Define paths
+    raw_data_path = Path('raw_data')
+    output_path = Path('scripts/claudeopus4/version2/analysis_data')
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory created/verified: {output_path}")
+    
+    # Initialize list to store dataframes
+    all_dfs = []
+    
+    # Track statistics for validation
+    total_rows = 0
+    files_processed = 0
+    column_variations = {}
+    
+    # Process each year from 2013 to 2024
+    for year in range(2013, 2025):
+        filename = f'appointments_{year}.csv'
+        filepath = raw_data_path / filename
+        
+        print(f"\nProcessing {filename}...")
+        
+        # Check if file exists
+        if not filepath.exists():
+            print(f"WARNING: {filepath} does not exist. Skipping...")
+            continue
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Add year column for tracking
+            df['source_year'] = year
+            
+            # Print file statistics
+            print(f"  - Rows: {len(df)}")
+            print(f"  - Columns: {len(df.columns)}")
+            print(f"  - Column names: {', '.join(df.columns.tolist())}")
+            
+            # Track column variations
+            col_set = frozenset(df.columns.tolist())
+            if col_set not in column_variations:
+                column_variations[col_set] = []
+            column_variations[col_set].append(year)
+            
+            # Handle column name standardization
+            # Common variations to standardize
+            column_mappings = {
+                'organization': 'org',
+                'Organisation': 'org',
+                'Organization': 'org',
+                'Name': 'name',
+                'Position': 'position',
+                'Location': 'location',
+                'Region': 'region',
+                'Posted Date': 'posted_date',
+                'Start Date': 'start_date',
+                'End Date': 'end_date',
+                'Term Length': 'term_length',
+                'Acts': 'acts',
+                'Remuneration': 'remuneration',
+                'Reappointed': 'reappointed',
+                'OIC': 'oic',
+                'Href': 'href',
+                'Body': 'body',
+                'Link': 'link'
+            }
+            
+            # Apply column mappings
+            df.rename(columns=column_mappings, inplace=True)
+            
+            # Standardize column names to lowercase
+            df.columns = df.columns.str.lower().str.strip()
+            
+            # Add to list
+            all_dfs.append(df)
+            files_processed += 1
+            total_rows += len(df)
+            
+            # Check for 'reappointed' column
+            if 'reappointed' in df.columns:
+                reappointed_values = df['reappointed'].value_counts()
+                print(f"  - Reappointed values: {reappointed_values.to_dict()}")
+            else:
+                print(f"  - WARNING: No 'reappointed' column found")
+            
+        except Exception as e:
+            print(f"ERROR processing {filename}: {str(e)}")
+            continue
+    
+    # Check if we have any data
+    if not all_dfs:
+        print("\nERROR: No data files were successfully processed!")
+        sys.exit(1)
+    
+    print(f"\n{'='*50}")
+    print(f"Files processed: {files_processed}")
+    print(f"Total rows before combining: {total_rows}")
+    
+    # Display column variations
+    print(f"\nColumn variations found:")
+    for i, (cols, years) in enumerate(column_variations.items()):
+        print(f"\nVariation {i+1} (Years: {', '.join(map(str, years))}):")
+        print(f"  Columns: {', '.join(sorted(cols))}")
+    
+    # Combine all dataframes
+    print(f"\nCombining {len(all_dfs)} dataframes...")
+    combined_df = pd.concat(all_dfs, ignore_index=True, sort=False)
+    
+    # Print combined dataset statistics
+    print(f"\nCombined dataset statistics:")
+    print(f"  - Total rows: {len(combined_df)}")
+    print(f"  - Total columns: {len(combined_df.columns)}")
+    print(f"  - Columns: {', '.join(sorted(combined_df.columns.tolist()))}")
+    
+    # Check data integrity
+    print(f"\nData integrity checks:")
+    print(f"  - Null values per column:")
+    null_counts = combined_df.isnull().sum()
+    for col, count in null_counts[null_counts > 0].items():
+        print(f"    - {col}: {count} ({count/len(combined_df)*100:.2f}%)")
+    
+    # Check 'reappointed' column specifically
+    if 'reappointed' in combined_df.columns:
+        print(f"\n'Reappointed' column analysis:")
+        print(f"  - Data type: {combined_df['reappointed'].dtype}")
+        print(f"  - Unique values: {combined_df['reappointed'].unique()}")
+        print(f"  - Value counts:")
+        value_counts = combined_df['reappointed'].value_counts(dropna=False)
+        for val, count in value_counts.items():
+            print(f"    - {val}: {count} ({count/len(combined_df)*100:.2f}%)")
+    
+    # Save combined dataset
+    output_file = output_path / 'step1_combined_appointments.csv'
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nCombined dataset saved to: {output_file}")
+    
+    # Create a summary report
+    summary = {
+        'files_processed': files_processed,
+        'total_rows': len(combined_df),
+        'total_columns': len(combined_df.columns),
+        'years_covered': sorted(combined_df['source_year'].unique().tolist()),
+        'has_reappointed_column': 'reappointed' in combined_df.columns
+    }
+    
+    print(f"\n{'='*50}")
+    print("SUMMARY:")
+    for key, value in summary.items():
+        print(f"  - {key}: {value}")
+    
+    return combined_df
+
+if __name__ == "__main__":
+    # Run the combination process
+    combined_df = combine_appointment_datasets()
+    print("\nStep 1 completed successfully!")

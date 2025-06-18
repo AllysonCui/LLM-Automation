@@ -1,0 +1,336 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from scipy import stats
+from scipy.stats import pearsonr
+
+def perform_regression_analysis():
+    """
+    Step 9: Fit linear regression on annual reappointment proportions to determine trend direction
+    
+    This function:
+    1. Reads the annual proportions dataset from Step 8
+    2. Fits a linear regression model with year as predictor and reappointment proportion as outcome
+    3. Determines if the coefficient is positive (increasing trend) or negative (decreasing trend)
+    4. Calculates statistical significance of the trend
+    5. Provides comprehensive interpretation of results
+    6. Saves regression results and conclusions
+    """
+    
+    # Define paths
+    input_dir = Path("scripts/claudesonnet4/version2/analysis_data")
+    input_file = input_dir / "step8_annual_proportions.csv"
+    output_file = input_dir / "step9_regression_results.txt"
+    
+    print("=== Step 9: Linear Regression Analysis of Annual Reappointment Trends ===")
+    print(f"Reading from: {input_file}")
+    print(f"Saving results to: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}. Please run Step 8 first.")
+    
+    # Read the annual proportions dataset
+    print("Loading annual proportions dataset...")
+    annual_df = pd.read_csv(input_file)
+    original_rows = len(annual_df)
+    print(f"Loaded {original_rows:,} annual records")
+    
+    # Validate required columns
+    required_columns = ['year', 'annual_reappointment_proportion']
+    missing_columns = [col for col in required_columns if col not in annual_df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    print(f"Year range: {annual_df['year'].min()}-{annual_df['year'].max()}")
+    
+    # Data preparation for regression
+    print(f"\n=== Data Preparation for Regression Analysis ===")
+    
+    # Remove any rows with missing data
+    clean_df = annual_df.dropna(subset=['year', 'annual_reappointment_proportion']).copy()
+    removed_rows = len(annual_df) - len(clean_df)
+    
+    if removed_rows > 0:
+        print(f"Removed {removed_rows} rows with missing data")
+    
+    print(f"Clean dataset: {len(clean_df):,} annual records")
+    
+    if len(clean_df) < 3:
+        raise ValueError(f"Insufficient data for regression analysis. Need at least 3 years, have {len(clean_df)}")
+    
+    # Sort by year to ensure proper order
+    clean_df = clean_df.sort_values('year').reset_index(drop=True)
+    
+    # Extract variables for regression
+    years = clean_df['year'].values
+    proportions = clean_df['annual_reappointment_proportion'].values
+    
+    print(f"Regression variables:")
+    print(f"  - Years: {years[0]} to {years[-1]} ({len(years)} data points)")
+    print(f"  - Proportions range: {proportions.min():.3f}% to {proportions.max():.3f}%")
+    
+    # Display the data points
+    print(f"\n=== Annual Data Points for Regression ===")
+    print(f"Year | Reappointment Proportion")
+    print(f"-----|----------------------")
+    for year, prop in zip(years, proportions):
+        print(f"{int(year)} | {prop:19.3f}%")
+    
+    # Perform linear regression using scipy.stats
+    print(f"\n=== Linear Regression Analysis ===")
+    
+    # Method 1: Using scipy.stats.linregress (most comprehensive)
+    slope, intercept, r_value, p_value, std_err = stats.linregress(years, proportions)
+    
+    # Method 2: Using Pearson correlation for verification
+    correlation, correlation_p_value = pearsonr(years, proportions)
+    
+    # Calculate additional statistics
+    n = len(years)
+    r_squared = r_value ** 2
+    
+    # Calculate confidence intervals for slope (95% confidence)
+    t_critical = stats.t.ppf(0.975, n - 2)  # 95% confidence, n-2 degrees of freedom
+    margin_of_error = t_critical * std_err
+    slope_ci_lower = slope - margin_of_error
+    slope_ci_upper = slope + margin_of_error
+    
+    # Calculate predicted values and residuals
+    predicted_proportions = slope * years + intercept
+    residuals = proportions - predicted_proportions
+    residual_sum_squares = np.sum(residuals ** 2)
+    total_sum_squares = np.sum((proportions - np.mean(proportions)) ** 2)
+    
+    print(f"Linear Regression Results:")
+    print(f"  - Equation: Reappointment % = {slope:.6f} × Year + {intercept:.6f}")
+    print(f"  - Slope (coefficient): {slope:.6f}% per year")
+    print(f"  - Intercept: {intercept:.6f}%")
+    print(f"  - R-squared: {r_squared:.6f}")
+    print(f"  - Correlation coefficient: {r_value:.6f}")
+    print(f"  - P-value: {p_value:.6f}")
+    print(f"  - Standard error of slope: {std_err:.6f}")
+    print(f"  - 95% Confidence interval for slope: [{slope_ci_lower:.6f}, {slope_ci_upper:.6f}]")
+    
+    # Trend direction analysis
+    print(f"\n=== Trend Direction Analysis ===")
+    
+    # Determine trend direction based on slope
+    if slope > 0:
+        trend_direction = "INCREASING"
+        trend_description = "positive"
+    elif slope < 0:
+        trend_direction = "DECREASING" 
+        trend_description = "negative"
+    else:
+        trend_direction = "STABLE"
+        trend_description = "zero"
+    
+    print(f"COEFFICIENT SIGN: {trend_description.upper()}")
+    print(f"TREND DIRECTION: {trend_direction}")
+    print(f"SLOPE VALUE: {slope:.6f}% per year")
+    
+    # Statistical significance interpretation
+    alpha = 0.05
+    if p_value < alpha:
+        significance = "STATISTICALLY SIGNIFICANT"
+        confidence = "95%"
+    else:
+        significance = "NOT STATISTICALLY SIGNIFICANT"
+        confidence = "95%"
+    
+    print(f"STATISTICAL SIGNIFICANCE: {significance} at {confidence} confidence level")
+    print(f"P-value: {p_value:.6f} (threshold: {alpha})")
+    
+    # Practical significance interpretation
+    print(f"\n=== Practical Significance Interpretation ===")
+    
+    # Calculate change over the entire period
+    years_span = years[-1] - years[0]
+    total_predicted_change = slope * years_span
+    
+    # Calculate percentage change relative to starting value
+    starting_proportion = predicted_proportions[0]
+    ending_proportion = predicted_proportions[-1]
+    percentage_change = ((ending_proportion - starting_proportion) / starting_proportion) * 100
+    
+    print(f"Change over {years_span}-year period:")
+    print(f"  - Absolute change: {total_predicted_change:+.3f} percentage points")
+    print(f"  - Starting proportion (predicted): {starting_proportion:.3f}%")
+    print(f"  - Ending proportion (predicted): {ending_proportion:.3f}%")
+    print(f"  - Relative change: {percentage_change:+.1f}%")
+    
+    # Magnitude interpretation
+    if abs(slope) < 0.1:
+        magnitude = "very small"
+    elif abs(slope) < 0.5:
+        magnitude = "small"
+    elif abs(slope) < 1.0:
+        magnitude = "moderate"
+    elif abs(slope) < 2.0:
+        magnitude = "large"
+    else:
+        magnitude = "very large"
+    
+    print(f"  - Trend magnitude: {magnitude}")
+    
+    # Model quality assessment
+    print(f"\n=== Model Quality Assessment ===")
+    
+    # R-squared interpretation
+    if r_squared > 0.8:
+        r_squared_quality = "excellent"
+    elif r_squared > 0.6:
+        r_squared_quality = "good"
+    elif r_squared > 0.4:
+        r_squared_quality = "moderate"
+    elif r_squared > 0.2:
+        r_squared_quality = "weak"
+    else:
+        r_squared_quality = "very weak"
+    
+    print(f"Model fit quality ({r_squared_quality}):")
+    print(f"  - R-squared: {r_squared:.6f} ({r_squared*100:.2f}% of variance explained)")
+    print(f"  - Correlation strength: {abs(r_value):.3f}")
+    
+    # Residual analysis
+    residual_mean = np.mean(residuals)
+    residual_std = np.std(residuals, ddof=1)
+    
+    print(f"Residual analysis:")
+    print(f"  - Mean residual: {residual_mean:.6f} (should be close to 0)")
+    print(f"  - Residual standard deviation: {residual_std:.6f}")
+    print(f"  - Residual range: {residuals.min():.3f} to {residuals.max():.3f}")
+    
+    # Prediction for next year (extrapolation)
+    print(f"\n=== Future Prediction (Extrapolation) ===")
+    next_year = years[-1] + 1
+    next_year_prediction = slope * next_year + intercept
+    prediction_uncertainty = t_critical * std_err * np.sqrt(1 + 1/n + (next_year - np.mean(years))**2 / np.sum((years - np.mean(years))**2))
+    
+    print(f"Predicted reappointment proportion for {int(next_year)}:")
+    print(f"  - Point estimate: {next_year_prediction:.3f}%")
+    print(f"  - 95% prediction interval: [{next_year_prediction - prediction_uncertainty:.3f}%, {next_year_prediction + prediction_uncertainty:.3f}%]")
+    
+    # Summary conclusions
+    print(f"\n=== SUMMARY CONCLUSIONS ===")
+    print(f"1. RESEARCH QUESTION ANSWER:")
+    print(f"   The reappointment trend in New Brunswick government is {trend_direction}")
+    print(f"   over the {years_span}-year period ({int(years[0])}-{int(years[-1])}).")
+    
+    print(f"\n2. STATISTICAL EVIDENCE:")
+    print(f"   - Linear regression coefficient: {slope:.6f}% per year ({trend_description})")
+    print(f"   - Statistical significance: {significance}")
+    print(f"   - Model explains {r_squared*100:.1f}% of the variance in reappointment rates")
+    
+    print(f"\n3. PRACTICAL IMPACT:")
+    print(f"   - The trend represents a {magnitude} change in reappointment practices")
+    print(f"   - Over the full period, reappointment rates changed by {total_predicted_change:+.1f} percentage points")
+    print(f"   - This represents a {percentage_change:+.1f}% relative change from the starting level")
+    
+    # Save detailed results to file
+    print(f"\n=== Saving Regression Results ===")
+    
+    results_text = f"""NEW BRUNSWICK GOVERNMENT REAPPOINTMENT TREND ANALYSIS
+Linear Regression Results ({int(years[0])}-{int(years[-1])})
+
+=== RESEARCH QUESTION ===
+Which government branch in New Brunswick most frequently reappoints past appointees, 
+and is this trend increasing or declining over the past 12 years?
+
+=== REGRESSION ANALYSIS RESULTS ===
+Data Points: {n} annual observations
+Time Period: {int(years[0])}-{int(years[-1])} ({years_span} years)
+
+Linear Regression Equation:
+Reappointment % = {slope:.6f} × Year + {intercept:.6f}
+
+Key Statistics:
+- Slope (Coefficient): {slope:.6f}% per year
+- Intercept: {intercept:.6f}%
+- R-squared: {r_squared:.6f}
+- Correlation: {r_value:.6f}
+- P-value: {p_value:.6f}
+- Standard Error: {std_err:.6f}
+- 95% CI for Slope: [{slope_ci_lower:.6f}, {slope_ci_upper:.6f}]
+
+=== TREND DIRECTION ===
+COEFFICIENT SIGN: {trend_description.upper()}
+TREND DIRECTION: {trend_direction}
+STATISTICAL SIGNIFICANCE: {significance}
+
+=== PRACTICAL INTERPRETATION ===
+Total Change Over Period: {total_predicted_change:+.3f} percentage points
+Relative Change: {percentage_change:+.1f}%
+Trend Magnitude: {magnitude}
+Model Quality: {r_squared_quality} (R² = {r_squared:.3f})
+
+=== CONCLUSION ===
+The linear regression analysis shows that New Brunswick government reappointment 
+rates have a {trend_direction.lower()} trend over the {years_span}-year period.
+The coefficient is {trend_description} ({slope:.6f}% per year), indicating that
+reappointment practices are {trend_direction.lower()} over time.
+
+This trend is {significance.lower()} at the 95% confidence level (p = {p_value:.6f}).
+
+=== ANNUAL DATA POINTS ===
+Year | Reappointment %
+-----|----------------
+"""
+    
+    for year, prop in zip(years, proportions):
+        results_text += f"{int(year)} | {prop:13.3f}%\n"
+    
+    results_text += f"\n=== PREDICTED VALUES ===\n"
+    results_text += f"Year | Actual % | Predicted % | Residual\n"
+    results_text += f"-----|----------|-------------|----------\n"
+    
+    for year, actual, predicted, residual in zip(years, proportions, predicted_proportions, residuals):
+        results_text += f"{int(year)} | {actual:7.3f}% | {predicted:10.3f}% | {residual:7.3f}\n"
+    
+    # Write results to file
+    with open(output_file, 'w') as f:
+        f.write(results_text)
+    
+    print(f"Detailed regression results saved to: {output_file}")
+    
+    # Validation check
+    if output_file.exists():
+        print(f"✓ Results file created successfully")
+        file_size = output_file.stat().st_size
+        print(f"✓ File size: {file_size:,} bytes")
+    else:
+        print(f"⚠ Warning: Results file was not created")
+    
+    print(f"\n=== Step 9 Complete ===")
+    print(f"Linear regression analysis completed successfully")
+    print(f"FINAL ANSWER: The reappointment trend is {trend_direction}")
+    print(f"Coefficient: {slope:.6f}% per year ({trend_description})")
+    print(f"Statistical significance: {significance}")
+    
+    # Return key results as a dictionary
+    results_dict = {
+        'slope': slope,
+        'intercept': intercept,
+        'r_squared': r_squared,
+        'p_value': p_value,
+        'trend_direction': trend_direction,
+        'coefficient_sign': trend_description,
+        'statistical_significance': significance,
+        'years_analyzed': years_span,
+        'total_change': total_predicted_change,
+        'relative_change': percentage_change
+    }
+    
+    return results_dict
+
+# Execute the function
+if __name__ == "__main__":
+    try:
+        regression_results = perform_regression_analysis()
+        print(f"\nStep 9 successful! Regression analysis complete.")
+        print(f"Trend: {regression_results['trend_direction']}")
+        print(f"Coefficient: {regression_results['slope']:.6f} ({regression_results['coefficient_sign']})")
+    except Exception as e:
+        print(f"CRITICAL ERROR in Step 9: {str(e)}")
+        raise
