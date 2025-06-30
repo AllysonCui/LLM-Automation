@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step6_reappointment_rates.csv")
+    output_csv = Path("scripts/gpt4o/version1/execution8/analysis_data/step7_yearly_max_rates.csv")
+    output_plot = Path("scripts/gpt4o/version1/execution8/analysis_data/step7_yearly_max_rates.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"[ERROR] Failed to load input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if df.empty or "year" not in df.columns or "org" not in df.columns or "reappointment_rate" not in df.columns:
+        print("[ERROR] Input data is invalid or missing required columns.", file=sys.stderr)
+        sys.exit(1)
+
+    # Drop rows with missing year or rate
+    df = df.dropna(subset=["year", "reappointment_rate"])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    # Identify max rate per year with tie-breaking: choose first alphabetically
+    grouped = df.groupby("year")
+
+    results = []
+    for year, group in grouped:
+        max_rate = group["reappointment_rate"].max()
+        top_orgs = group[group["reappointment_rate"] == max_rate]
+        # Handle ties by selecting the alphabetically first organization
+        top_org = top_orgs.sort_values("org", kind="stable").iloc[0]["org"]
+        results.append({"year": year, "top_org": top_org, "max_rate": max_rate})
+
+    result_df = pd.DataFrame(results).sort_values("year", kind="stable")
+
+    # Save CSV
+    try:
+        result_df.to_csv(output_csv, index=False)
+        print(f"[INFO] Yearly max rate table saved to: {output_csv}")
+    except Exception as e:
+        print(f"[ERROR] Could not save summary CSV: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Visualization
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(result_df["year"], result_df["max_rate"], marker="o")
+        plt.title("Top Reappointment Rate by Organization Over Time")
+        plt.xlabel("Year")
+        plt.ylabel("Max Reappointment Rate")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_plot)
+        print(f"[INFO] Visualization saved to: {output_plot}")
+    except Exception as e:
+        print(f"[ERROR] Could not generate or save plot: {e}", file=sys.stderr)
+
+    # Print summary
+    print("\n[INFO] Year-by-year top organizations by reappointment rate:")
+    for _, row in result_df.iterrows():
+        print(f"  {row['year']}: {row['top_org']} ({row['max_rate']:.2%})")
+
+if __name__ == "__main__":
+    main()

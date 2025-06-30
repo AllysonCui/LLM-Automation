@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""
+Script to identify top organizations by reappointment rate for each year.
+
+Author: Allyson Cui
+Date: 2025-06-09
+"""
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_path = Path("scripts/human/version1/analysis_data/step6_reappointment_rates.csv")
+    output_csv = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
+    output_png = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.png")
+
+    df = pd.read_csv(input_path)
+
+    # Drop rows with missing data
+    df = df.dropna(subset=["org"])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    # Find max rate by year
+    yearly_max_list = []
+    for year, group in df.groupby("year"):
+        max_rate = group["reappointment_rate"].max()
+        top_orgs = group[group["reappointment_rate"] == max_rate]
+        # Handle ties by selecting first alphabetically
+        top_org = top_orgs.sort_values("org", kind="stable").iloc[0]
+        yearly_max_list.append({
+            "year": year,
+            "top_org": top_org["org"],
+            "max_rate": round(top_org["reappointment_rate"], 4)
+        })
+
+    # Summary DataFrame
+    summary_df = pd.DataFrame(yearly_max_list).sort_values("year")
+    summary_df.to_csv(output_csv, index=False)
+    print(f"✓ Saved yearly max reappointment rates to {output_csv}")
+
+    # Plotting
+    plt.figure(figsize=(10, 5))
+    plt.plot(summary_df["year"], summary_df["max_rate"], marker='o')
+    plt.title("Top Organization Reappointment Rates by Year")
+    plt.xlabel("Year")
+    plt.ylabel("Max Reappointment Rate")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_png)
+    print(f"✓ Saved plot to {output_png}")
+
+    # Print summary
+    print("\n→ Year-by-year top organizations:")
+    for _, row in summary_df.iterrows():
+        print(f"  {row['year']}: {row['top_org']} ({row['max_rate']:.2%})")
+
+if __name__ == "__main__":
+    main()

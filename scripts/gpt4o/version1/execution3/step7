@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step6_reappointment_rates.csv")
+    output_csv = Path("scripts/gpt4o/version1/execution3/analysis_data/step7_yearly_max_rates.csv")
+    output_png = Path("scripts/gpt4o/version1/execution3/analysis_data/step7_yearly_max_rates.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input file: {e}", file=sys.stderr)
+        return
+
+    df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+    df = df.dropna(subset=['year', 'reappointment_rate'])
+
+    # Handle ties by selecting the first organization by alphabetical order
+    top_per_year = (
+        df.sort_values(by=['year', 'reappointment_rate', 'org'], ascending=[True, False, True], kind='stable')
+          .dropna(subset=['reappointment_rate'])
+          .groupby('year')
+          .first()
+          .reset_index()
+          .loc[:, ['year', 'org', 'reappointment_rate']]
+    )
+
+    top_per_year.columns = ['year', 'top_org', 'max_rate']
+
+    try:
+        top_per_year.to_csv(output_csv, index=False)
+        print(f"Yearly top reappointment rates saved to: {output_csv}")
+    except Exception as e:
+        print(f"Failed to save output CSV: {e}", file=sys.stderr)
+        return
+
+    # Visualization
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(top_per_year['year'], top_per_year['max_rate'], marker='o')
+        for idx, row in top_per_year.iterrows():
+            plt.text(row['year'], row['max_rate'], row['top_org'], fontsize=8, ha='right', va='bottom', rotation=45)
+        plt.title("Top Organization Reappointment Rates by Year")
+        plt.xlabel("Year")
+        plt.ylabel("Max Reappointment Rate")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_png)
+        print(f"Plot saved to: {output_png}")
+    except Exception as e:
+        print(f"Failed to generate plot: {e}", file=sys.stderr)
+        return
+
+    print("\nYear-by-Year Top Reappointment Rates:")
+    print(top_per_year)
+
+if __name__ == "__main__":
+    main()

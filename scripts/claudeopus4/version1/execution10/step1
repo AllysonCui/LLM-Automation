@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    """
+    Load and combine 12 years of New Brunswick government appointment data (2013-2024).
+    """
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("scripts/claudeopus4/version1/execution10/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize list to store all dataframes
+    all_dfs = []
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        # Construct filename
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(filename, encoding='utf-8')
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            all_dfs.append(df)
+            
+            print(f"Successfully loaded {filename}: {len(df)} rows")
+            
+        except FileNotFoundError:
+            print(f"Warning: File {filename} not found. Skipping...")
+        except Exception as e:
+            print(f"Error loading {filename}: {str(e)}")
+            sys.exit(1)
+    
+    # Check if any data was loaded
+    if not all_dfs:
+        print("Error: No data files were successfully loaded.")
+        sys.exit(1)
+    
+    print(f"\nSuccessfully loaded {len(all_dfs)} files.")
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Save combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nCombined dataset saved to: {output_file}")
+    
+    # Print dataset information
+    print("\n" + "="*50)
+    print("COMBINED DATASET INFORMATION")
+    print("="*50)
+    
+    # Shape
+    print(f"\nDataset shape: {combined_df.shape}")
+    print(f"Total rows: {combined_df.shape[0]:,}")
+    print(f"Total columns: {combined_df.shape[1]}")
+    
+    # Basic info
+    print("\nColumn information:")
+    print("-"*30)
+    combined_df.info()
+    
+    # Year distribution
+    print("\nAppointments by year:")
+    print("-"*30)
+    year_counts = combined_df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"{year}: {count:,} appointments")
+    
+    # Check for reappointment column
+    if 'reappointed' in combined_df.columns:
+        reappointed_count = combined_df['reappointed'].sum()
+        print(f"\nTotal reappointments: {reappointed_count:,}")
+        print(f"Reappointment rate: {reappointed_count/len(combined_df)*100:.2f}%")
+    
+    # Column data types
+    print("\nData types summary:")
+    print("-"*30)
+    dtype_counts = combined_df.dtypes.value_counts()
+    for dtype, count in dtype_counts.items():
+        print(f"{dtype}: {count} columns")
+    
+    print("\n" + "="*50)
+    print("Script completed successfully!")
+    
+
+if __name__ == "__main__":
+    main()

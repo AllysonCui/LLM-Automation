@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Data Combiner
+Loads CSV files from 2013-2024 and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_csv_files(script_dir, years):
+    """Find CSV files in possible locations."""
+    # Start from project root and search recursively
+    project_root = script_dir
+    while project_root.name != "LLM-Automation" and project_root.parent != project_root:
+        project_root = project_root.parent
+    
+    print("Searching for CSV files...")
+    print(f"Script directory: {script_dir}")
+    print(f"Project root: {project_root}")
+    
+    # Search locations in order of preference
+    search_locations = [
+        script_dir / "raw_data",
+        script_dir,
+        script_dir.parent / "raw_data", 
+        script_dir.parent,
+        project_root / "raw_data",
+        project_root,
+    ]
+    
+    # First, try the structured search
+    for location in search_locations:
+        if location.exists():
+            print(f"\nChecking location: {location}")
+            csv_files = list(location.glob("appointments_*.csv"))
+            if csv_files:
+                print(f"  Found {len(csv_files)} CSV files:")
+                for f in sorted(csv_files):
+                    print(f"    {f.name}")
+                return location
+            else:
+                print("  No appointments CSV files found")
+    
+    # If not found, do a broader recursive search from project root
+    print(f"\nPerforming recursive search from {project_root}...")
+    all_csv_files = list(project_root.rglob("*.csv"))
+    
+    if all_csv_files:
+        print(f"Found {len(all_csv_files)} CSV files in project:")
+        appointment_files = []
+        
+        for csv_file in sorted(all_csv_files):
+            relative_path = csv_file.relative_to(project_root)
+            print(f"  {relative_path}")
+            
+            # Check if this looks like an appointments file
+            if "appointment" in csv_file.name.lower():
+                appointment_files.append(csv_file)
+        
+        if appointment_files:
+            print(f"\nFound {len(appointment_files)} potential appointment files:")
+            for f in appointment_files:
+                print(f"  {f.relative_to(project_root)}")
+            
+            # Return the directory containing the first appointment file
+            return appointment_files[0].parent
+    
+    print("No CSV files found in the entire project directory")
+    return None
+
+def main():
+    """Main function to combine appointment datasets."""
+    
+    # Define paths
+    script_dir = Path(__file__).parent
+    analysis_data_dir = script_dir / "analysis_data"
+    
+    # Create analysis_data directory if it doesn't exist
+    analysis_data_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    # Find CSV files
+    csv_location = find_csv_files(script_dir, years)
+    
+    if csv_location is None:
+        print("\n✗ Error: Could not locate CSV files")
+        print("Please ensure the appointments_YYYY.csv files are in one of the expected locations")
+        sys.exit(1)
+    
+    print(f"\n✓ Using CSV files from: {csv_location}")
+    
+    # Initialize list to store DataFrames
+    dataframes = []
+    
+    print("\nLoading CSV files...")
+    
+    for year in years:
+        filename = f"appointments_{year}.csv"
+        filepath = csv_location / filename
+        
+        try:
+            # Load CSV file
+            df = pd.read_csv(filepath)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Add to list
+            dataframes.append(df)
+            
+            print(f"✓ Loaded {filename}: {df.shape[0]} rows, {df.shape[1]} columns")
+            
+        except FileNotFoundError:
+            print(f"⚠ Warning: File not found - {filename}")
+            continue
+        except pd.errors.EmptyDataError:
+            print(f"⚠ Warning: Empty file - {filename}")
+            continue
+        except Exception as e:
+            print(f"✗ Error loading {filename}: {str(e)}")
+            continue
+    
+    # Check if we have any data
+    if not dataframes:
+        print("✗ Error: No CSV files could be loaded successfully")
+        sys.exit(1)
+    
+    print(f"\nCombining {len(dataframes)} datasets...")
+    
+    try:
+        # Combine all DataFrames
+        combined_df = pd.concat(dataframes, ignore_index=True, sort=False)
+        
+        # Save combined dataset
+        output_file = analysis_data_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(output_file, index=False)
+        
+        print(f"✓ Combined dataset saved to: {output_file}")
+        
+        # Print basic information about the combined dataset
+        print("\n" + "="*50)
+        print("COMBINED DATASET SUMMARY")
+        print("="*50)
+        print(f"Shape: {combined_df.shape}")
+        print(f"Total rows: {combined_df.shape[0]:,}")
+        print(f"Total columns: {combined_df.shape[1]}")
+        
+        print("\nColumns:")
+        for i, col in enumerate(combined_df.columns, 1):
+            print(f"  {i:2d}. {col}")
+        
+        print("\nYear distribution:")
+        year_counts = combined_df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} appointments")
+        
+        print("\nData types:")
+        print(combined_df.dtypes.to_string())
+        
+        print("\nMissing values per column:")
+        missing_counts = combined_df.isnull().sum()
+        missing_counts = missing_counts[missing_counts > 0]
+        if len(missing_counts) > 0:
+            for col, count in missing_counts.items():
+                pct = (count / len(combined_df)) * 100
+                print(f"  {col}: {count:,} ({pct:.1f}%)")
+        else:
+            print("  No missing values found")
+        
+        print("\n✓ Data combination completed successfully!")
+        
+    except Exception as e:
+        print(f"✗ Error combining datasets: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,55 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution3/analysis_data/step1_combined_appointments.csv")
+output_dir = Path("scripts/gpt4o/version2/execution3/analysis_data")
+output_dir.mkdir(parents=True, exist_ok=True)
+output_file = output_dir / "step2_key_columns_data.csv"
+
+# Define column mapping variants
+column_aliases = {
+    "name": ["name", "full name", "appointee"],
+    "position": ["position", "title", "role"],
+    "org": ["organization", "org", "department", "agency"],
+    "reappointed": ["reappointed", "re-appointment", "is_reappointed"],
+}
+
+def find_column(df_columns, possible_names):
+    for name in possible_names:
+        if name in df_columns:
+            return name
+    return None
+
+print("Starting Step 2: Extracting key columns...")
+
+if not input_file.exists():
+    print(f"❌ Input file not found: {input_file}")
+    exit(1)
+
+try:
+    df = pd.read_csv(input_file)
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Find best matches for each key column
+    selected_columns = {}
+    for canonical, options in column_aliases.items():
+        match = find_column(df.columns, options)
+        if match:
+            selected_columns[canonical] = match
+        else:
+            print(f"❌ Missing expected column for '{canonical}'. Available columns: {list(df.columns)}")
+            raise ValueError(f"Missing required column: {canonical}")
+
+    # Extract and rename key columns
+    key_df = df[[selected_columns[col] for col in selected_columns] + ["year"]].copy()
+    key_df.columns = list(selected_columns.keys()) + ["year"]
+
+    # Save result
+    key_df.to_csv(output_file, index=False)
+    print(f"✅ Extracted key columns and saved to: {output_file}")
+    print(f"📊 Records retained: {key_df.shape[0]}")
+    print(f"📄 Columns retained: {list(key_df.columns)}")
+
+except Exception as e:
+    print(f"❌ Failed to process key column extraction: {e}")

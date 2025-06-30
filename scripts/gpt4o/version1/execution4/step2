@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step1_combined_appointments.csv")
+    output_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step2_key_columns_data.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error loading combined CSV: {e}", file=sys.stderr)
+        return
+
+    # Standardize column names to lowercase for easier matching
+    df.columns = df.columns.str.lower()
+
+    # Mapping of possible column name variants
+    column_map = {
+        'reappointed': ['reappointed'],
+        'name': ['name'],
+        'position': ['position', 'appointment'],
+        'org': ['org', 'organization'],
+        'year': ['year']
+    }
+
+    selected_columns = {}
+    for standard_col, possible_names in column_map.items():
+        for col in possible_names:
+            if col in df.columns:
+                selected_columns[standard_col] = col
+                break
+        if standard_col not in selected_columns:
+            print(f"Warning: Could not find a matching column for '{standard_col}'", file=sys.stderr)
+
+    try:
+        filtered_df = df[[selected_columns[col] for col in ['reappointed', 'name', 'position', 'org', 'year']]]
+        filtered_df.columns = ['reappointed', 'name', 'position', 'org', 'year']
+        filtered_df.to_csv(output_file, index=False)
+        print(f"Filtered data saved to: {output_file}")
+        print("\nFiltered DataFrame Info:")
+        print(filtered_df.info())
+        print("\nMissing Values:")
+        print(filtered_df.isnull().sum())
+    except KeyError as e:
+        print(f"Error: Missing one or more required columns - {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

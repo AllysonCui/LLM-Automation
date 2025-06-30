@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""
+Script to create a summary table of appointment counts by organization and year.
+Groups data by org and year, creating a pivot table with counts.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    # Define paths
+    base_path = Path.cwd()
+    data_dir = base_path / "scripts" / "claudeopus4" / "version1" / "execution3" / "analysis_data"
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found at {input_file}")
+        sys.exit(1)
+    
+    print(f"Loading dataset from: {input_file}")
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+        
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns exist
+    required_columns = ['org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    # Handle missing values in org column
+    print(f"\nHandling missing values...")
+    org_missing = df['org'].isna().sum()
+    year_missing = df['year'].isna().sum()
+    
+    if org_missing > 0:
+        print(f"  - Found {org_missing} rows with missing organization")
+        df['org'] = df['org'].fillna('Unknown Organization')
+    
+    if year_missing > 0:
+        print(f"  - Found {year_missing} rows with missing year")
+        # Remove rows with missing year as they can't be placed in timeline
+        df = df.dropna(subset=['year'])
+        print(f"  - Removed rows with missing year. New shape: {df.shape}")
+    
+    # Ensure year is integer
+    df['year'] = df['year'].astype(int)
+    
+    # Group by organization and year to get counts
+    print("\nGrouping data by organization and year...")
+    grouped = df.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Create pivot table
+    print("\nCreating pivot table...")
+    pivot_table = grouped.pivot(index='org', columns='year', values='count')
+    
+    # Fill NaN values with 0 (no appointments that year)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    # Sort columns (years) in ascending order
+    pivot_table = pivot_table.reindex(sorted(pivot_table.columns), axis=1)
+    
+    # Add total column
+    pivot_table['Total'] = pivot_table.sum(axis=1)
+    
+    # Sort by total appointments (descending)
+    pivot_table = pivot_table.sort_values('Total', ascending=False)
+    
+    # Save the pivot table
+    pivot_table.to_csv(output_file, encoding='utf-8')
+    print(f"\nSummary table saved to: {output_file}")
+    
+    # Print summary statistics
+    print("\n" + "="*50)
+    print("APPOINTMENT COUNTS SUMMARY")
+    print("="*50)
+    
+    print(f"\nTotal organizations: {len(pivot_table)}")
+    print(f"Years covered: {min(df['year'])} - {max(df['year'])}")
+    print(f"Total appointments: {df.shape[0]:,}")
+    
+    # Validation: Check for unusually high counts
+    print("\nValidation checks:")
+    max_count_per_year = grouped['count'].max()
+    max_org_year = grouped.loc[grouped['count'].idxmax()]
+    print(f"  - Highest appointments in single year: {max_count_per_year} "
+          f"({max_org_year['org']} in {int(max_org_year['year'])})")
+    
+    # Check for reasonable counts
+    suspicious_counts = grouped[grouped['count'] > 100]
+    if len(suspicious_counts) > 0:
+        print(f"  - Organizations with >100 appointments in a single year: {len(suspicious_counts)}")
+    
+    # Print top 20 organizations by total appointments
+    print("\nTop 20 Organizations by Total Appointments:")
+    print("-" * 50)
+    top_20 = pivot_table.head(20)
+    
+    # Create a formatted display
+    for idx, (org, row) in enumerate(top_20.iterrows(), 1):
+        total = int(row['Total'])
+        print(f"{idx:2d}. {org[:50]:<50} {total:>5,} appointments")
+    
+    # Year-by-year summary
+    print("\nAppointments by Year:")
+    print("-" * 30)
+    yearly_totals = df.groupby('year').size().sort_index()
+    for year, count in yearly_totals.items():
+        print(f"  {year}: {count:>5,} appointments")
+    
+    # Organizations with most consistent appointments
+    print("\nOrganizations with appointments in most years:")
+    print("-" * 50)
+    years_active = (pivot_table.drop('Total', axis=1) > 0).sum(axis=1)
+    consistent_orgs = years_active.sort_values(ascending=False).head(10)
+    
+    for idx, (org, years) in enumerate(consistent_orgs.items(), 1):
+        total_years = len(pivot_table.columns) - 1  # Exclude 'Total' column
+        print(f"{idx:2d}. {org[:50]:<50} {years}/{total_years} years")
+    
+    # Summary of the pivot table structure
+    print(f"\nPivot Table Dimensions:")
+    print(f"  - Rows (Organizations): {len(pivot_table)}")
+    print(f"  - Columns (Years + Total): {len(pivot_table.columns)}")
+    print(f"  - Non-zero cells: {(pivot_table.drop('Total', axis=1) > 0).sum().sum()}")
+    
+    # Average appointments per org per year
+    avg_per_org_year = pivot_table.drop('Total', axis=1).values.mean()
+    print(f"\nAverage appointments per organization per year: {avg_per_org_year:.2f}")
+    
+    print("\n" + "="*50)
+    print("Script completed successfully!")
+
+if __name__ == "__main__":
+    main()

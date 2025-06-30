@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input file: {e}", file=sys.stderr)
+        return
+
+    # Ensure correct datatypes
+    df['reappointed'] = df['reappointed'].astype(str).str.lower() == 'true'
+    df['org'] = df['org'].astype(str).str.strip()
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['org', 'year'])
+    df['year'] = df['year'].astype(int)
+
+    # Filter to only reappointments
+    reapp_df = df.loc[df['reappointed'] == True].copy()
+
+    if reapp_df.empty:
+        print("No reappointment records found.", file=sys.stderr)
+        return
+
+    # Group and count
+    group_counts = reapp_df.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    print("\nSample grouped reappointment counts:")
+    print(group_counts.head())
+
+    try:
+        pivot = group_counts.pivot(index='org', columns='year', values='reappointment_count').fillna(0).astype(int)
+    except Exception as e:
+        print(f"Failed to pivot data: {e}", file=sys.stderr)
+        return
+
+    # Verify table is not all zeros
+    if (pivot.sum().sum() == 0):
+        print("Warning: Pivot table contains only zeros.", file=sys.stderr)
+    else:
+        print("\nPivot table created successfully.")
+
+    try:
+        pivot.to_csv(output_file)
+        print(f"Reappointment summary saved to: {output_file}")
+    except Exception as e:
+        print(f"Failed to save summary table: {e}", file=sys.stderr)
+        return
+
+    print("\nReappointment Summary (head):")
+    print(pivot.head())
+
+    # Summary statistics
+    total_reapps = group_counts['reappointment_count'].sum()
+    mean_reapps = group_counts['reappointment_count'].mean()
+    print(f"\nTotal reappointments: {total_reapps}")
+    print(f"Average reappointments per org-year group: {mean_reapps:.2f}")
+
+if __name__ == "__main__":
+    main()

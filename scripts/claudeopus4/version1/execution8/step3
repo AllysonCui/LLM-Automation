@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments based on repeated combinations
+of name, position, and organization in NB government appointments data.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize names to handle variations.
+    Converts to lowercase, removes extra spaces, handles None values.
+    """
+    if pd.isna(name):
+        return ""
+    # Convert to string, lowercase, strip whitespace, replace multiple spaces
+    name_str = str(name).lower().strip()
+    # Replace multiple spaces with single space
+    name_str = ' '.join(name_str.split())
+    return name_str
+
+def main():
+    # Define paths
+    input_file = Path("scripts/claudeopus4/version1/execution8/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/claudeopus4/version1/execution8/analysis_data/step3_repeats_marked.csv")
+    
+    # Load the dataset from step 2
+    try:
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+    except FileNotFoundError:
+        print(f"Error: File {input_file} not found")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {e}")
+        sys.exit(1)
+    
+    # Verify required columns exist
+    required_columns = ['name', 'position', 'org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    # Create or verify reappointed column exists
+    if 'reappointed' not in df.columns:
+        print("Creating 'reappointed' column...")
+        df['reappointed'] = False
+    
+    # Convert reappointed to boolean if it's not already
+    print("\nConverting 'reappointed' column to boolean...")
+    df['reappointed'] = df['reappointed'].astype(bool)
+    
+    # Count initial reappointments
+    initial_reappointments = df['reappointed'].sum()
+    print(f"Initial reappointments marked: {initial_reappointments}")
+    
+    # Create normalized columns for grouping
+    print("\nNormalizing names for comparison...")
+    df['name_normalized'] = df['name'].apply(normalize_name)
+    df['position_normalized'] = df['position'].apply(normalize_name)
+    df['org_normalized'] = df['org'].apply(normalize_name)
+    
+    # Sort by year to ensure chronological order
+    print("Sorting data by year...")
+    df = df.sort_values('year', kind='stable').reset_index(drop=True)
+    
+    # Create a copy to track changes
+    df['newly_identified'] = False
+    
+    # Group by normalized name, position, and org
+    print("\nIdentifying reappointments...")
+    groupby_cols = ['name_normalized', 'position_normalized', 'org_normalized']
+    
+    # Counter for progress tracking
+    total_groups = df.groupby(groupby_cols, dropna=False).ngroups
+    processed_groups = 0
+    
+    # Process each group
+    for group_key, group_indices in df.groupby(groupby_cols, dropna=False).groups.items():
+        processed_groups += 1
+        if processed_groups % 1000 == 0:
+            print(f"  Processing group {processed_groups}/{total_groups}...")
+        
+        # Convert to list for safe indexing
+        indices_list = group_indices.tolist()
+        
+        # Skip single occurrences or empty groups
+        if len(indices_list) <= 1:
+            continue
+        
+        # Skip if any key component is empty
+        if any(pd.isna(val) or val == "" for val in group_key):
+            continue
+        
+        # Sort indices by year to ensure chronological order
+        sorted_indices = sorted(indices_list, key=lambda idx: df.loc[idx, 'year'])
+        
+        # Mark all except the first as reappointments
+        for idx in sorted_indices[1:]:
+            if not df.loc[idx, 'reappointed']:
+                df.loc[idx, 'reappointed'] = True
+                df.loc[idx, 'newly_identified'] = True
+    
+    # Calculate statistics
+    final_reappointments = df['reappointed'].sum()
+    newly_identified = df['newly_identified'].sum()
+    
+    print("\n" + "="*60)
+    print("REAPPOINTMENT IDENTIFICATION RESULTS")
+    print("="*60)
+    print(f"Initial reappointments marked: {initial_reappointments}")
+    print(f"Newly identified reappointments: {newly_identified}")
+    print(f"Total reappointments after processing: {final_reappointments}")
+    print(f"Percentage of appointments that are reappointments: {(final_reappointments/len(df)*100):.2f}%")
+    
+    # Analyze by year
+    print("\nReappointments by year:")
+    year_stats = df.groupby('year').agg({
+        'reappointed': ['sum', 'count', lambda x: (x.sum()/len(x)*100)]
+    }).round(2)
+    year_stats.columns = ['Reappointments', 'Total', 'Percentage']
+    print(year_stats)
+    
+    # Top organizations with reappointments
+    print("\nTop 10 organizations by number of reappointments:")
+    org_reappointments = df[df['reappointed']].groupby('org').size().sort_values(ascending=False).head(10)
+    for org, count in org_reappointments.items():
+        print(f"  {org}: {count}")
+    
+    # Examples of newly identified reappointments
+    if newly_identified > 0:
+        print("\nExamples of newly identified reappointments:")
+        examples = df[df['newly_identified']].head(5)[['name', 'position', 'org', 'year']]
+        for idx, row in examples.iterrows():
+            print(f"  - {row['name']} | {row['position']} | {row['org']} | Year: {row['year']}")
+    
+    # Drop temporary columns before saving
+    columns_to_drop = ['name_normalized', 'position_normalized', 'org_normalized', 'newly_identified']
+    df_final = df.drop(columns=columns_to_drop)
+    
+    # Save the updated dataset
+    try:
+        df_final.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nUpdated dataset saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving file: {e}")
+        sys.exit(1)
+    
+    # Validation checks
+    print("\nData validation:")
+    print(f"  - Total rows preserved: {len(df_final) == len(df)}")
+    print(f"  - All required columns present: {all(col in df_final.columns for col in required_columns)}")
+    print(f"  - Reappointed column is boolean: {df_final['reappointed'].dtype == bool}")
+    
+    # Check for potential issues
+    print("\nPotential data quality issues:")
+    
+    # Check for missing names
+    missing_names = df_final['name'].isna().sum()
+    if missing_names > 0:
+        print(f"  - Records with missing names: {missing_names}")
+    
+    # Check for very similar names that might be the same person
+    print("\nChecking for potential name variations...")
+    unique_names = df_final['name'].dropna().unique()
+    if len(unique_names) < 100:  # Only check if manageable number
+        similar_names = []
+        for i, name1 in enumerate(unique_names):
+            for name2 in unique_names[i+1:]:
+                if name1.lower() != name2.lower() and len(set(name1.lower().split()) & set(name2.lower().split())) > 1:
+                    similar_names.append((name1, name2))
+        
+        if similar_names[:5]:  # Show first 5
+            print("  Potentially similar names (may be same person):")
+            for name1, name2 in similar_names[:5]:
+                print(f"    - '{name1}' vs '{name2}'")
+    
+    print("\nScript completed successfully!")
+
+if __name__ == "__main__":
+    main()

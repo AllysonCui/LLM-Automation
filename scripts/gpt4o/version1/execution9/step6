@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    emp_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step4_employee_counts.csv")
+    reapp_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step5_reappointment_counts.csv")
+    output_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step6_reappointment_rates.csv")
+
+    try:
+        emp_df = pd.read_csv(emp_file, index_col=0)
+        reapp_df = pd.read_csv(reapp_file, index_col=0)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print("Error: One of the input files is empty.", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing CSV: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Ensure all years are integers
+    emp_df.columns = emp_df.columns.astype(int)
+    reapp_df.columns = reapp_df.columns.astype(int)
+
+    # Reformat to long format
+    emp_long = emp_df.reset_index().melt(id_vars='org', var_name='year', value_name='total_employees')
+    reapp_long = reapp_df.reset_index().melt(id_vars='org', var_name='year', value_name='reappointments')
+
+    # Merge datasets
+    merged = pd.merge(emp_long, reapp_long, on=['org', 'year'], how='left')
+
+    # Replace missing reappointment counts with 0
+    merged['reappointments'] = merged['reappointments'].fillna(0).astype(int)
+
+    # Avoid division by zero
+    merged['reappointment_rate'] = np.where(
+        merged['total_employees'] > 0,
+        merged['reappointments'] / merged['total_employees'],
+        np.nan
+    )
+
+    # Save result
+    merged.to_csv(output_file, index=False)
+
+    # Print top orgs by average reappointment rate
+    avg_rates = merged.groupby('org')['reappointment_rate'].mean().dropna()
+    top_orgs = avg_rates.sort_values(ascending=False).head(5)
+    print("Top 5 organizations by average reappointment rate:")
+    print(top_orgs)
+
+if __name__ == "__main__":
+    main()

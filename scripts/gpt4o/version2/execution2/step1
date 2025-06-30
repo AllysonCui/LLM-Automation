@@ -1,0 +1,61 @@
+import pandas as pd
+from pathlib import Path
+
+# Set paths
+RAW_DATA_DIR = Path("raw_data")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step1_combined_appointments.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def standardize_columns(df):
+    # Convert all column names to lowercase and strip whitespace
+    df.columns = df.columns.str.lower().str.strip()
+    # Normalize common column name variants
+    rename_map = {
+        'org': 'organization',
+        'date': 'dates',
+        'appointment date': 'dates',
+        're-appointment': 'reappointed',
+        'reappointment': 'reappointed'
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    return df
+
+def load_and_process_file(year):
+    file_path = RAW_DATA_DIR / f"appointments_{year}.csv"
+    if not file_path.exists():
+        print(f"[WARNING] File missing: {file_path}")
+        return None
+    try:
+        df = pd.read_csv(file_path)
+        df = standardize_columns(df)
+        df['year'] = year  # Add year column for tracking
+        return df
+    except Exception as e:
+        print(f"[ERROR] Failed to process {file_path}: {e}")
+        return None
+
+def main():
+    combined_data = []
+    print("[INFO] Starting to combine appointment datasets from 2013 to 2024.")
+
+    for year in range(2013, 2025):
+        df = load_and_process_file(year)
+        if df is not None:
+            combined_data.append(df)
+            print(f"[INFO] Successfully loaded {year}, shape: {df.shape}")
+
+    if not combined_data:
+        print("[ERROR] No data files loaded. Exiting.")
+        return
+
+    all_data = pd.concat(combined_data, ignore_index=True)
+    print(f"[INFO] Combined dataset shape: {all_data.shape}")
+
+    all_data.to_csv(OUTPUT_FILE, index=False)
+    print(f"[SUCCESS] Combined dataset saved to: {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    main()

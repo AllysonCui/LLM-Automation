@@ -1,0 +1,50 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution4/analysis_data/step1_combined_appointments.csv")
+output_dir = Path("scripts/gpt4o/version2/execution4/analysis_data")
+output_file = output_dir / "step2_key_columns_data.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    # Load combined data
+    df = pd.read_csv(input_file)
+    print(f"Loaded combined data: {df.shape[0]} rows, {df.shape[1]} columns.")
+
+    # Normalize column names for consistency
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Define possible variants for required columns
+    expected_cols = {
+        "reappointed": ["reappointed"],
+        "name": ["name", "full_name", "appointee"],
+        "position": ["position", "title"],
+        "org": ["org", "organization", "department"],
+        "year": ["source_year"]
+    }
+
+    # Identify actual column matches
+    selected_cols = {}
+    for key, variants in expected_cols.items():
+        for variant in variants:
+            if variant in df.columns:
+                selected_cols[key] = variant
+                break
+        if key not in selected_cols:
+            raise KeyError(f"Missing required column for: {key}")
+
+    # Extract and rename to standard column names
+    df_key = df[[selected_cols[k] for k in selected_cols]].copy()
+    df_key.columns = ["reappointed", "name", "position", "org", "year"]
+
+    # Save the cleaned key columns
+    df_key.to_csv(output_file, index=False)
+    print(f"Saved key columns ({df_key.shape[1]} cols, {df_key.shape[0]} rows) to {output_file}")
+
+except FileNotFoundError:
+    print(f"Error: Input file not found at {input_file}")
+except Exception as e:
+    print(f"An error occurred: {e}")

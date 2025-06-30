@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution2/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("steps/gpt4o/version1/execution2/analysis_data/step4_employee_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading file {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if "org" not in df.columns or "year" not in df.columns:
+        print("Missing required columns: 'org' and/or 'year'", file=sys.stderr)
+        sys.exit(1)
+
+    df.dropna(subset=["org", "year"], inplace=True)
+
+    if not pd.api.types.is_numeric_dtype(df["year"]):
+        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+
+    df.dropna(subset=["year"], inplace=True)
+    df["org"] = df["org"].astype(str).str.strip().str.lower()
+    df["year"] = df["year"].astype(int)
+
+    # Group and count
+    grouped = df.groupby(["org", "year"]).size().reset_index(name="appointment_count")
+    summary_table = grouped.pivot(index="org", columns="year", values="appointment_count")
+    summary_table.fillna(0, inplace=True)
+    summary_table = summary_table.astype(int)
+
+    summary_table.to_csv(output_file)
+
+    print("Summary table of appointments by organization and year:")
+    print(summary_table)
+
+    org_totals = summary_table.sum(axis=1).sort_values(ascending=False)
+    print("\nTop organizations by total appointments:")
+    print(org_totals.head())
+
+if __name__ == "__main__":
+    main()

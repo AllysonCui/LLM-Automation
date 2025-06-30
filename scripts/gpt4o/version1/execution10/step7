@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step6_reappointment_rates.csv")
+    csv_output = Path("scripts/gpt4o/version1/execution10/analysis_data/step7_yearly_max_rates.csv")
+    img_output = Path("scripts/gpt4o/version1/execution10/analysis_data/step7_yearly_max_rates.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate required columns
+    required_cols = ["org", "year", "reappointment_rate"]
+    if not all(col in df.columns for col in required_cols):
+        print(f"Error: Missing one or more required columns: {required_cols}", file=sys.stderr)
+        sys.exit(1)
+
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["year", "reappointment_rate"])
+    df["year"] = df["year"].astype(int)
+
+    # Identify top orgs per year
+    top_per_year = (
+        df.sort_values(by=["year", "reappointment_rate", "org"], ascending=[True, False, True])
+          .groupby("year")
+          .first()
+          .reset_index()[["year", "org", "reappointment_rate"]]
+    )
+    top_per_year.columns = ["year", "top_org", "max_rate"]
+
+    csv_output.parent.mkdir(parents=True, exist_ok=True)
+    top_per_year.to_csv(csv_output, index=False)
+
+    print("Top organization per year based on reappointment rate:")
+    print(top_per_year)
+
+    # Visualization
+    plt.figure(figsize=(10, 6))
+    plt.plot(top_per_year["year"], top_per_year["max_rate"], marker='o')
+    for i, row in top_per_year.iterrows():
+        plt.text(row["year"], row["max_rate"] + 0.01, row["top_org"], ha='center', fontsize=8)
+    plt.title("Top Reappointment Rates by Year")
+    plt.xlabel("Year")
+    plt.ylabel("Reappointment Rate")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(img_output)
+    plt.close()
+
+if __name__ == "__main__":
+    main()

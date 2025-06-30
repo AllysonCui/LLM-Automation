@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Script to perform regression analysis on government-wide reappointment proportions.
+Determines if the trend is increasing or decreasing and tests statistical significance.
+"""
+
+import pandas as pd
+import numpy as np
+from scipy import stats
+from statsmodels.stats.stattools import durbin_watson
+import os
+from pathlib import Path
+import sys
+
+def calculate_confidence_intervals(slope, stderr, n, confidence=0.95):
+    """Calculate confidence intervals for the slope."""
+    # Degrees of freedom
+    df = n - 2
+    # t-value for 95% confidence
+    t_val = stats.t.ppf((1 + confidence) / 2, df)
+    # Confidence interval
+    ci_lower = slope - t_val * stderr
+    ci_upper = slope + t_val * stderr
+    return ci_lower, ci_upper
+
+def detect_outliers(residuals, threshold=2.5):
+    """Detect outliers using standardized residuals."""
+    std_residuals = residuals / np.std(residuals)
+    outliers = np.abs(std_residuals) > threshold
+    return outliers, std_residuals
+
+def main():
+    # Define paths
+    base_path = Path.cwd()
+    data_dir = base_path / "scripts" / "claudeopus4" / "version1" / "execution3" / "analysis_data"
+    input_file = data_dir / "step8_annual_proportions.csv"
+    output_file = data_dir / "step9_regression_results.txt"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found at {input_file}")
+        sys.exit(1)
+    
+    print(f"Loading annual proportions from: {input_file}")
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+        
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns exist
+    required_columns = ['year', 'reappointment_proportion', 'total_appointments']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    # Filter out years with no appointments (if any)
+    df_analysis = df[df['total_appointments'] > 0].copy()
+    
+    if len(df_analysis) < 3:
+        print("Error: Insufficient data points for regression analysis (need at least 3)")
+        sys.exit(1)
+    
+    print(f"\nData points for analysis: {len(df_analysis)}")
+    
+    # Prepare data for regression
+    X = df_analysis['year'].values
+    Y = df_analysis['reappointment_proportion'].values
+    
+    # Convert proportions to percentages for easier interpretation
+    Y_pct = Y * 100
+    
+    print("\nPerforming linear regression analysis...")
+    
+    # Fit linear regression using scipy.stats.linregress
+    slope, intercept, r_value, p_value, std_err = stats.linregress(X, Y_pct)
+    
+    # Calculate R-squared
+    r_squared = r_value ** 2
+    
+    # Calculate confidence intervals
+    ci_lower, ci_upper = calculate_confidence_intervals(slope, std_err, len(X))
+    
+    # Calculate predicted values and residuals
+    Y_pred = slope * X + intercept
+    residuals = Y_pct - Y_pred
+    
+    # Perform Durbin-Watson test for autocorrelation
+    dw_statistic = durbin_watson(residuals)
+    
+    # Detect outliers
+    outliers, std_residuals = detect_outliers(residuals)
+    outlier_years = X[outliers]
+    
+    # Calculate annual change and total change
+    annual_change_pct = slope  # This is already in percentage points per year
+    total_change_pct = slope * (X[-1] - X[0])  # Total change over the period
+    
+    # Determine trend direction and significance
+    if p_value < 0.05:
+        significance = "STATISTICALLY SIGNIFICANT"
+        sig_symbol = "**"
+    else:
+        significance = "NOT STATISTICALLY SIGNIFICANT"
+        sig_symbol = ""
+    
+    if slope > 0:
+        trend_direction = "INCREASING"
+    elif slope < 0:
+        trend_direction = "DECREASING"
+    else:
+        trend_direction = "NO CHANGE"
+    
+    # Write results to file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("="*80 + "\n")
+        f.write("REGRESSION ANALYSIS OF GOVERNMENT-WIDE REAPPOINTMENT PROPORTION TREND\n")
+        f.write("="*80 + "\n\n")
+        
+        f.write("DATA SUMMARY\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Period analyzed: {int(X[0])} - {int(X[-1])}\n")
+        f.write(f"Number of data points: {len(X)}\n")
+        f.write(f"Mean reappointment proportion: {np.mean(Y_pct):.2f}%\n")
+        f.write(f"Standard deviation: {np.std(Y_pct):.2f}%\n")
+        f.write(f"Range: {np.min(Y_pct):.2f}% - {np.max(Y_pct):.2f}%\n\n")
+        
+        f.write("REGRESSION EQUATION\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Y = {slope:.4f} * X + {intercept:.4f}\n")
+        f.write(f"Where Y = Reappointment Proportion (%) and X = Year\n\n")
+        
+        f.write("REGRESSION STATISTICS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Slope (annual change): {slope:.4f} percentage points/year {sig_symbol}\n")
+        f.write(f"Intercept: {intercept:.4f}%\n")
+        f.write(f"R-squared: {r_squared:.4f}\n")
+        f.write(f"Correlation coefficient (r): {r_value:.4f}\n")
+        f.write(f"P-value: {p_value:.6f}\n")
+        f.write(f"Standard error: {std_err:.4f}\n")
+        f.write(f"95% Confidence interval for slope: [{ci_lower:.4f}, {ci_upper:.4f}]\n\n")
+        
+        f.write("REGRESSION DIAGNOSTICS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Durbin-Watson statistic: {dw_statistic:.4f}\n")
+        f.write(f"  (Values near 2 indicate no autocorrelation)\n")
+        f.write(f"  Interpretation: ")
+        if 1.5 <= dw_statistic <= 2.5:
+            f.write("No significant autocorrelation detected\n")
+        elif dw_statistic < 1.5:
+            f.write("Positive autocorrelation may be present\n")
+        else:
+            f.write("Negative autocorrelation may be present\n")
+        
+        f.write(f"\nOutliers detected (|standardized residual| > 2.5): {len(outlier_years)}\n")
+        if len(outlier_years) > 0:
+            f.write(f"  Years with outliers: {', '.join(map(str, outlier_years.astype(int)))}\n")
+        f.write("\n")
+        
+        f.write("TREND ANALYSIS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Trend direction: {trend_direction}\n")
+        f.write(f"Statistical significance: {significance} (p = {p_value:.6f})\n")
+        f.write(f"Annual change: {annual_change_pct:.4f} percentage points per year\n")
+        f.write(f"Total change over {int(X[-1] - X[0])} years: {total_change_pct:.2f} percentage points\n")
+        f.write(f"Predicted proportion in {int(X[0])}: {Y_pred[0]:.2f}%\n")
+        f.write(f"Predicted proportion in {int(X[-1])}: {Y_pred[-1]:.2f}%\n\n")
+        
+        f.write("YEAR-BY-YEAR DATA AND PREDICTIONS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"{'Year':>6} {'Actual':>10} {'Predicted':>10} {'Residual':>10}\n")
+        for i in range(len(X)):
+            f.write(f"{int(X[i]):>6} {Y_pct[i]:>9.2f}% {Y_pred[i]:>9.2f}% {residuals[i]:>9.2f}%\n")
+        f.write("\n")
+        
+        f.write("="*80 + "\n")
+        f.write("CONCLUSIONS\n")
+        f.write("="*80 + "\n\n")
+        
+        if p_value < 0.05:
+            f.write(f"The government-wide reappointment proportion shows a STATISTICALLY SIGNIFICANT\n")
+            f.write(f"{trend_direction} trend over the 12-year period (2013-2024).\n\n")
+            f.write(f"The annual increase is {slope:.4f} percentage points per year (p = {p_value:.6f}).\n")
+            f.write(f"This means that, on average, the reappointment rate has been changing by\n")
+            f.write(f"approximately {slope:.2f} percentage points each year.\n\n")
+            f.write(f"Over the entire 12-year period, the reappointment proportion has changed by\n")
+            f.write(f"{total_change_pct:.2f} percentage points.\n\n")
+            f.write(f"The model explains {r_squared*100:.1f}% of the variance in the data (R² = {r_squared:.4f}).\n")
+        else:
+            f.write(f"The government-wide reappointment proportion shows {trend_direction} trend,\n")
+            f.write(f"but this trend is NOT STATISTICALLY SIGNIFICANT (p = {p_value:.6f}).\n\n")
+            f.write(f"While the data suggests an annual change of {slope:.4f} percentage points per year,\n")
+            f.write(f"we cannot conclude with confidence that there is a real trend in the data.\n\n")
+            f.write(f"The apparent change could be due to random variation.\n")
+    
+    print(f"\nDetailed results saved to: {output_file}")
+    
+    # Print summary to console
+    print("\n" + "="*80)
+    print("REGRESSION ANALYSIS SUMMARY")
+    print("="*80)
+    
+    print(f"\nPeriod analyzed: {int(X[0])} - {int(X[-1])}")
+    print(f"Number of data points: {len(X)}")
+    
+    print(f"\nRegression equation: Y = {slope:.4f} * X + {intercept:.4f}")
+    print(f"R-squared: {r_squared:.4f}")
+    print(f"P-value: {p_value:.6f}")
+    
+    print(f"\nTrend direction: {trend_direction}")
+    print(f"Statistical significance: {significance}")
+    print(f"Annual change: {annual_change_pct:.4f} percentage points per year")
+    print(f"Total change over period: {total_change_pct:.2f} percentage points")
+    
+    print("\n" + "="*80)
+    print("FINAL ANSWER")
+    print("="*80)
+    
+    if p_value < 0.05:
+        print(f"\nThe government-wide reappointment proportion trend is {trend_direction}")
+        print(f"over the 12-year period (2013-2024), and this trend is STATISTICALLY SIGNIFICANT")
+        print(f"(p = {p_value:.6f} < 0.05).")
+        print(f"\nThe reappointment rate changes by {slope:.4f} percentage points per year on average.")
+    else:
+        print(f"\nThe government-wide reappointment proportion shows a slight {trend_direction} trend")
+        print(f"over the 12-year period (2013-2024), but this trend is NOT STATISTICALLY SIGNIFICANT")
+        print(f"(p = {p_value:.6f} > 0.05).")
+        print(f"\nWe cannot conclude that there is a meaningful trend in the data.")
+    
+    print("\n" + "="*80)
+    print("Script completed successfully!")
+
+if __name__ == "__main__":
+    main()

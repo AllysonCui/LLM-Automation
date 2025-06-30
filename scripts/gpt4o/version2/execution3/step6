@@ -1,0 +1,46 @@
+import pandas as pd
+from pathlib import Path
+
+# File paths
+employee_counts_file = Path("scripts/gpt4o/version2/execution3/analysis_data/step4_employee_counts.csv")
+reappointment_counts_file = Path("scripts/gpt4o/version2/execution3/analysis_data/step5_reappointment_counts.csv")
+output_dir = Path("scripts/gpt4o/version2/execution3/analysis_data")
+output_dir.mkdir(parents=True, exist_ok=True)
+output_file = output_dir / "step6_reappointment_rates.csv"
+
+print("Starting Step 6: Calculating reappointment rates per organization per year...\n")
+
+# Check existence of required files
+if not employee_counts_file.exists() or not reappointment_counts_file.exists():
+    print(f"❌ Required input file(s) missing:")
+    if not employee_counts_file.exists():
+        print(f"  - Missing: {employee_counts_file}")
+    if not reappointment_counts_file.exists():
+        print(f"  - Missing: {reappointment_counts_file}")
+    exit(1)
+
+try:
+    # Load input data
+    df_total = pd.read_csv(employee_counts_file)
+    df_reappointed = pd.read_csv(reappointment_counts_file)
+
+    # Normalize organization names to lowercase
+    df_total['org'] = df_total['org'].str.strip().str.lower()
+    df_reappointed['org'] = df_reappointed['org'].str.strip().str.lower()
+
+    # Merge on org and year
+    merged_df = pd.merge(df_total, df_reappointed, on=['org', 'year'], how='left')
+
+    # Fill missing reappointment counts with 0
+    merged_df['reappointment_count'] = merged_df['reappointment_count'].fillna(0).astype(int)
+
+    # Calculate rate
+    merged_df['reappointment_rate'] = merged_df['reappointment_count'] / merged_df['total_appointments']
+
+    # Save result
+    merged_df.to_csv(output_file, index=False)
+    print(f"✅ Reappointment rates calculated and saved to: {output_file}")
+    print(f"📊 Records: {merged_df.shape[0]} (org-year combinations)")
+
+except Exception as e:
+    print(f"❌ Failed to compute reappointment rates: {e}")

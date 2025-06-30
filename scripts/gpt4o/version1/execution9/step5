@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Ensure expected columns exist
+    if 'reappointed' not in df.columns or 'org' not in df.columns or 'year' not in df.columns:
+        print("Error: Required columns are missing.", file=sys.stderr)
+        sys.exit(1)
+
+    # Normalize and filter reappointments
+    df['reappointed'] = df['reappointed'].fillna('').astype(str).str.strip().str.lower()
+    reappointed_df = df[df['reappointed'].isin(['yes', 'y', 'true'])].copy()
+
+    # Drop rows with missing year/org
+    reappointed_df = reappointed_df.dropna(subset=['org', 'year'])
+
+    # Ensure year is integer
+    reappointed_df['year'] = pd.to_numeric(reappointed_df['year'], errors='coerce')
+    reappointed_df = reappointed_df.dropna(subset=['year'])
+    reappointed_df['year'] = reappointed_df['year'].astype(int)
+
+    # Group and count
+    count_df = reappointed_df.groupby(['org', 'year'], dropna=False).size().reset_index(name='reappointment_count')
+
+    print("Sample grouped data before pivot:")
+    print(count_df.head())
+
+    # Pivot to create summary table
+    pivot_table = count_df.pivot(index='org', columns='year', values='reappointment_count').fillna(0).astype(int)
+
+    # Validate table has non-zero values
+    if (pivot_table.sum().sum() == 0):
+        print("Warning: All values in the pivot table are zero.", file=sys.stderr)
+
+    # Save to CSV
+    pivot_table.to_csv(output_file)
+
+    # Summary statistics
+    print("\nSummary table (first 10 rows):")
+    print(pivot_table.head(10))
+
+    print("\nOrganizations with most reappointments (top 5):")
+    pivot_table['total'] = pivot_table.sum(axis=1)
+    print(pivot_table['total'].sort_values(ascending=False).head(5))
+
+if __name__ == "__main__":
+    main()

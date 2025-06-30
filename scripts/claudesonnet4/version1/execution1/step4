@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+
+"""
+New Brunswick Government Appointments Organization Counts
+Creates summary table of appointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def create_appointment_counts():
+    """
+    Create summary table of appointment counts by organization and year.
+    
+    Returns:
+        pd.DataFrame: Summary table with organizations as rows, years as columns
+    """
+    
+    # Define file paths
+    analysis_data_dir = Path("scripts/claudesonnet4/version1/execution1/analysis_data")
+    input_file = analysis_data_dir / "step3_repeats_marked.csv"
+    output_file = analysis_data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print("CREATING ORGANIZATION APPOINTMENT COUNTS BY YEAR")
+    print("=" * 50)
+    
+    # Load the dataset
+    print(f"Loading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    except Exception as e:
+        raise Exception(f"Error loading dataset: {str(e)}")
+    
+    # Validate required columns
+    required_cols = ['org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    print(f"\nData validation and preprocessing...")
+    
+    # Create working copy
+    df_work = df.copy()
+    
+    # Handle missing values in org column
+    org_nulls = df_work['org'].isnull().sum()
+    if org_nulls > 0:
+        print(f"⚠ Warning: {org_nulls:,} rows have missing organization data")
+        df_work.loc[:, 'org'] = df_work['org'].fillna('UNKNOWN_ORGANIZATION')
+    
+    # Validate and clean year column
+    df_work.loc[:, 'year'] = pd.to_numeric(df_work['year'], errors='coerce')
+    year_nulls = df_work['year'].isnull().sum()
+    
+    if year_nulls > 0:
+        print(f"⚠ Warning: {year_nulls:,} rows have invalid/missing year data")
+        print(f"  These rows will be excluded from year-based analysis")
+        # Create a separate count for unknown years
+        unknown_year_counts = df_work[df_work['year'].isnull()]['org'].value_counts()
+        if len(unknown_year_counts) > 0:
+            print(f"  Organizations with unknown year appointments:")
+            for org, count in unknown_year_counts.head(10).items():
+                print(f"    {org}: {count:,} appointments")
+    
+    # Remove rows with missing years for the main analysis
+    df_valid = df_work.dropna(subset=['year']).copy()
+    print(f"✓ Working with {len(df_valid):,} rows with valid year data")
+    
+    # Convert year to integer
+    df_valid.loc[:, 'year'] = df_valid['year'].astype(int)
+    
+    # Data quality checks
+    year_range = (df_valid['year'].min(), df_valid['year'].max())
+    print(f"✓ Year range: {year_range[0]} to {year_range[1]}")
+    
+    # Check for unreasonable years
+    current_year = 2024
+    future_years = df_valid[df_valid['year'] > current_year]['year'].nunique()
+    very_old_years = df_valid[df_valid['year'] < 1990]['year'].nunique()
+    
+    if future_years > 0:
+        print(f"⚠ Warning: Found appointments in {future_years} future year(s)")
+    if very_old_years > 0:
+        print(f"⚠ Warning: Found appointments in {very_old_years} year(s) before 1990")
+    
+    # Count unique organizations
+    num_orgs = df_valid['org'].nunique()
+    print(f"✓ Found {num_orgs:,} unique organizations")
+    
+    print(f"\nCreating appointment counts by organization and year...")
+    
+    # Group by organization and year, count appointments
+    counts = df_valid.groupby(['org', 'year']).size().reset_index(name='appointment_count')
+    print(f"✓ Created {len(counts):,} organization-year combinations")
+    
+    # Create pivot table with organizations as rows, years as columns
+    pivot_table = counts.pivot(index='org', columns='year', values='appointment_count')
+    
+    # Fill NaN values with 0 (organizations with no appointments in certain years)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    print(f"✓ Created summary table: {pivot_table.shape[0]:,} organizations × {pivot_table.shape[1]} years")
+    
+    # Add row totals and column totals
+    pivot_table.loc[:, 'Total'] = pivot_table.sum(axis=1)
+    
+    # Create a totals row
+    totals_row = pivot_table.sum(axis=0)
+    totals_row.name = 'TOTAL_ALL_ORGS'
+    
+    # Add totals row to the table
+    pivot_table_with_totals = pd.concat([pivot_table, totals_row.to_frame().T])
+    
+    # Save the counts table
+    pivot_table_with_totals.to_csv(output_file)
+    print(f"✓ Summary table saved to: {output_file}")
+    
+    return pivot_table, df_valid
+
+def analyze_appointment_patterns(pivot_table, df_valid):
+    """
+    Analyze appointment patterns and identify key insights.
+    
+    Args:
+        pivot_table (pd.DataFrame): Pivot table with org-year counts
+        df_valid (pd.DataFrame): Original data with valid years
+    """
+    print(f"\nAPPOINTMENT PATTERNS ANALYSIS")
+    print("=" * 50)
+    
+    # Overall statistics
+    total_appointments = pivot_table['Total'].sum()
+    avg_per_org = pivot_table['Total'].mean()
+    median_per_org = pivot_table['Total'].median()
+    
+    print(f"Total appointments across all organizations: {total_appointments:,}")
+    print(f"Average appointments per organization: {avg_per_org:.1f}")
+    print(f"Median appointments per organization: {median_per_org:.1f}")
+    
+    # Top organizations by total appointments
+    print(f"\nTOP 15 ORGANIZATIONS BY TOTAL APPOINTMENTS:")
+    print("-" * 50)
+    top_orgs = pivot_table['Total'].sort_values(ascending=False).head(15)
+    for i, (org, count) in enumerate(top_orgs.items(), 1):
+        pct = (count / total_appointments) * 100
+        print(f"{i:2d}. {org[:60]:<60} {count:>6,} ({pct:>5.1f}%)")
+    
+    # Yearly trends
+    year_columns = [col for col in pivot_table.columns if isinstance(col, int)]
+    if year_columns:
+        yearly_totals = pivot_table[year_columns].sum()
+        print(f"\nAPPOINTMENTS BY YEAR:")
+        print("-" * 30)
+        for year in sorted(yearly_totals.index):
+            count = yearly_totals[year]
+            print(f"{year}: {count:,} appointments")
+        
+        # Identify peak years
+        peak_year = yearly_totals.idxmax()
+        peak_count = yearly_totals.max()
+        low_year = yearly_totals.idxmin()
+        low_count = yearly_totals.min()
+        
+        print(f"\nPeak appointment year: {peak_year} ({peak_count:,} appointments)")
+        print(f"Lowest appointment year: {low_year} ({low_count:,} appointments)")
+    
+    # Organizations with most consistent activity (present in multiple years)
+    if year_columns:
+        years_active = (pivot_table[year_columns] > 0).sum(axis=1)
+        most_consistent = years_active.sort_values(ascending=False).head(10)
+        
+        print(f"\nMOST CONSISTENTLY ACTIVE ORGANIZATIONS:")
+        print("-" * 45)
+        for org, num_years in most_consistent.items():
+            total_appts = pivot_table.loc[org, 'Total']
+            print(f"{org[:50]:<50} {num_years:>2}/{len(year_columns)} years ({total_appts:,} total)")
+    
+    # Distribution analysis
+    print(f"\nAPPOINTMENT COUNT DISTRIBUTION:")
+    print("-" * 35)
+    
+    # Create bins for appointment counts
+    total_counts = pivot_table['Total']
+    bins = [0, 1, 2, 6, 11, 26, 51, 101, float('inf')]
+    labels = ['0', '1', '2-5', '6-10', '11-25', '26-50', '51-100', '100+']
+    
+    distribution = pd.cut(total_counts, bins=bins, labels=labels, right=False).value_counts().sort_index()
+    
+    for range_label, count in distribution.items():
+        pct = (count / len(total_counts)) * 100
+        print(f"Organizations with {range_label:<6} appointments: {count:>3} ({pct:>5.1f}%)")
+
+def display_summary_table(pivot_table):
+    """
+    Display a formatted version of the summary table.
+    
+    Args:
+        pivot_table (pd.DataFrame): Pivot table to display
+    """
+    print(f"\nSUMMARY TABLE (Top 10 organizations by total appointments)")
+    print("=" * 80)
+    
+    # Get year columns (exclude 'Total')
+    year_columns = [col for col in pivot_table.columns if isinstance(col, int)]
+    display_columns = sorted(year_columns) + ['Total']
+    
+    # Get top 10 organizations
+    top_10_orgs = pivot_table.nlargest(10, 'Total')
+    
+    # Create header
+    header = f"{'Organization':<40}"
+    for col in display_columns:
+        header += f"{str(col):>8}"
+    print(header)
+    print("-" * len(header))
+    
+    # Display rows
+    for org in top_10_orgs.index:
+        row = f"{org[:39]:<40}"
+        for col in display_columns:
+            value = top_10_orgs.loc[org, col]
+            row += f"{value:>8}"
+        print(row)
+
+def main():
+    """Main execution function."""
+    try:
+        print("NEW BRUNSWICK APPOINTMENTS ORGANIZATION COUNTS")
+        print("=" * 60)
+        
+        # Create appointment counts
+        pivot_table, df_valid = create_appointment_counts()
+        
+        # Display summary table
+        display_summary_table(pivot_table)
+        
+        # Analyze patterns
+        analyze_appointment_patterns(pivot_table, df_valid)
+        
+        print("\n" + "=" * 60)
+        print("✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Script failed with error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

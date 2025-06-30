@@ -1,0 +1,98 @@
+# File: scripts/gpt4o/version3/execution7/analyze_reappointments.py
+
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Define directories
+raw_data_dir = "raw_data"
+output_dir = "scripts/gpt4o/version3/execution7/analysis_data"
+os.makedirs(output_dir, exist_ok=True)
+
+# Step 1: Combine datasets
+all_years = []
+for year in range(2013, 2025):
+    file_path = os.path.join(raw_data_dir, f"appointments_{year}.csv")
+    df = pd.read_csv(file_path)
+    df["year"] = year
+    all_years.append(df)
+combined_df = pd.concat(all_years, ignore_index=True)
+combined_df.to_csv(os.path.join(output_dir, "step1_combined_appointments.csv"), index=False)
+
+# Step 2: Retain key columns
+df_key = combined_df[["name", "position", "org", "year"]].copy()
+df_key["reappointed"] = False
+df_key.to_csv(os.path.join(output_dir, "step2_key_columns_data.csv"), index=False)
+
+# Step 3: Mark repeated appointments
+df_key.sort_values(by=["name", "position", "org", "year"], inplace=True)
+df_key["reappointed"] = df_key.duplicated(subset=["name", "position", "org"], keep="first")
+df_key.to_csv(os.path.join(output_dir, "step3_repeats_marked.csv"), index=False)
+
+# Step 4: Count total employees per org-year
+employee_counts = df_key.groupby(["org", "year"]).size().reset_index(name="total_appointments")
+employee_counts.to_csv(os.path.join(output_dir, "step4_employee_counts.csv"), index=False)
+
+# Step 5: Count reappointments per org-year
+reappointments = df_key[df_key["reappointed"]].groupby(["org", "year"]).size().reset_index(name="reappointments")
+reappointments.to_csv(os.path.join(output_dir, "step5_reappointment_counts.csv"), index=False)
+
+# Step 6: Calculate reappointment rates
+rates = pd.merge(employee_counts, reappointments, on=["org", "year"], how="left")
+rates["reappointments"] = rates["reappointments"].fillna(0)
+rates["reappointment_rate"] = rates["reappointments"] / rates["total_appointments"]
+rates.to_csv(os.path.join(output_dir, "step6_reappointment_rates.csv"), index=False)
+
+# Step 7: Org with highest reappointment rate per year
+yearly_max = rates.loc[rates.groupby("year")["reappointment_rate"].idxmax()]
+yearly_max.to_csv(os.path.join(output_dir, "step7_yearly_max_rates.csv"), index=False)
+
+# Plot Step 7
+plt.figure(figsize=(10, 6))
+plt.plot(yearly_max["year"], yearly_max["reappointment_rate"], marker='o')
+plt.title("Highest Annual Reappointment Rate by Organization")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Rate")
+plt.grid(True)
+plt.savefig(os.path.join(output_dir, "step7_yearly_max_reappointment_rates.png"))
+plt.close()
+
+# Step 8: Annual reappointment proportions government-wide
+annual_props = df_key.groupby("year").agg(
+    total_appointments=("name", "count"),
+    reappointments=("reappointed", "sum")
+).reset_index()
+annual_props["proportion"] = annual_props["reappointments"] / annual_props["total_appointments"]
+annual_props.to_csv(os.path.join(output_dir, "step8_annual_proportions.csv"), index=False)
+
+# Plot Step 8
+plt.figure(figsize=(10, 6))
+plt.plot(annual_props["year"], annual_props["proportion"], marker='o')
+plt.title("Government-Wide Annual Reappointment Proportion")
+plt.xlabel("Year")
+plt.ylabel("Proportion")
+plt.grid(True)
+plt.savefig(os.path.join(output_dir, "step8_annual_reappointment_proportions.png"))
+plt.close()
+
+# Step 9: Linear regression on reappointment proportions
+X = annual_props["year"].values.reshape(-1, 1)
+y = annual_props["proportion"].values
+model = LinearRegression().fit(X, y)
+slope = model.coef_[0]
+intercept = model.intercept_
+r_squared = model.score(X, y)
+
+with open(os.path.join(output_dir, "step9_regression_results.txt"), "w") as f:
+    f.write(f"Slope: {slope:.5f}\n")
+    f.write(f"Intercept: {intercept:.5f}\n")
+    f.write(f"R-squared: {r_squared:.5f}\n")
+    f.write("Interpretation: " + (
+        "Reappointment proportion is increasing over time." if slope > 0
+        else "Reappointment proportion is decreasing over time." if slope < 0
+        else "No trend in reappointment proportion."
+    ))
+
+print("Analysis complete. Results saved in:", output_dir)

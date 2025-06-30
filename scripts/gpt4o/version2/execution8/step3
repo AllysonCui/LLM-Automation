@@ -1,0 +1,37 @@
+import pandas as pd
+from pathlib import Path
+
+# Define input/output paths
+input_file = Path("scripts/gpt4o/version2/execution8/analysis_data/step2_key_columns_data.csv")
+output_file = Path("scripts/gpt4o/version2/execution8/analysis_data/step3_repeats_marked.csv")
+
+print("Starting Step 3: Mark reappointments based on repeated name-position-org combinations...\n")
+
+# Validate input file
+if not input_file.exists():
+    raise FileNotFoundError(f"Input file not found: {input_file}")
+
+# Load data
+df = pd.read_csv(input_file)
+print(f"Loaded {len(df)} rows from {input_file.name}")
+
+# Normalize column names for consistency
+df.columns = [col.lower().strip() for col in df.columns]
+
+# Replace 'reappointed' column based on logic: repeat of (name, position, org)
+group_cols = ["name", "position", "org"]
+df[group_cols] = df[group_cols].fillna("MISSING")  # Handle NaNs to avoid groupby errors
+
+# Create a sort order to ensure chronological assignment if source_year is present
+sort_cols = group_cols + (["source_year"] if "source_year" in df.columns else [])
+df.sort_values(by=sort_cols, inplace=True)
+
+# Mark the first occurrence as False and others as True for each name-position-org combination
+df["reappointed"] = df.duplicated(subset=group_cols, keep='first')
+
+# Convert boolean to string if desired format is originally text
+print(f"Marked {df['reappointed'].sum()} reappointments out of {len(df)} total rows.")
+
+# Save result
+df.to_csv(output_file, index=False)
+print(f"Saved reappointment markings to: {output_file.name}")

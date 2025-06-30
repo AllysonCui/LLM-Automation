@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""
+Script to calculate annual government-wide reappointment proportions.
+Analyzes overall reappointment trends across all New Brunswick government organizations.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from pathlib import Path
+import sys
+
+def load_appointments_data():
+    """
+    Load the dataset from step 3 with reappointment flags.
+    """
+    input_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    
+    try:
+        df = pd.read_csv(input_path)
+        print(f"Successfully loaded appointments data from: {input_path}")
+        print(f"Dataset shape: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: Could not find file at {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+
+def calculate_annual_proportions(df):
+    """
+    Calculate reappointment proportions for each year across all organizations.
+    """
+    print("\nCalculating annual reappointment proportions...")
+    print("-" * 60)
+    
+    # Ensure year is numeric
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['year'])
+    df['year'] = df['year'].astype(int)
+    
+    # Ensure reappointed is boolean
+    if df['reappointed'].dtype != bool:
+        df['reappointed'] = df['reappointed'].fillna(False)
+        df['reappointed'] = df['reappointed'].astype(bool)
+    
+    # Group by year and calculate totals
+    annual_stats = df.groupby('year').agg({
+        'reappointed': ['count', 'sum']
+    }).reset_index()
+    
+    # Flatten column names
+    annual_stats.columns = ['year', 'total_appointments', 'total_reappointments']
+    
+    # Calculate proportion
+    annual_stats['reappointment_proportion'] = (
+        annual_stats['total_reappointments'] / annual_stats['total_appointments']
+    )
+    
+    # Sort by year
+    annual_stats = annual_stats.sort_values('year')
+    
+    # Validate years (2013-2024)
+    expected_years = set(range(2013, 2025))
+    actual_years = set(annual_stats['year'].values)
+    missing_years = expected_years - actual_years
+    
+    if missing_years:
+        print(f"Warning: Missing data for years: {sorted(missing_years)}")
+    
+    return annual_stats
+
+def print_annual_proportions(annual_stats):
+    """
+    Print the year-by-year proportions with detailed statistics.
+    """
+    print("\n" + "=" * 60)
+    print("ANNUAL GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS")
+    print("=" * 60)
+    
+    print("\nYear-by-Year Results:")
+    print("-" * 70)
+    print(f"{'Year':>4} | {'Total Appts':>11} | {'Reappts':>8} | {'Proportion':>10} | {'Change':>8}")
+    print("-" * 70)
+    
+    prev_proportion = None
+    for idx, row in annual_stats.iterrows():
+        # Calculate year-over-year change
+        if prev_proportion is not None:
+            change = row['reappointment_proportion'] - prev_proportion
+            change_str = f"{change:+.1%}"
+        else:
+            change_str = "    -"
+        
+        print(f"{int(row['year']):>4} | "
+              f"{int(row['total_appointments']):>11,} | "
+              f"{int(row['total_reappointments']):>8,} | "
+              f"{row['reappointment_proportion']:>10.2%} | "
+              f"{change_str:>8}")
+        
+        prev_proportion = row['reappointment_proportion']
+    
+    # Summary statistics
+    print("\nSummary Statistics:")
+    print("-" * 60)
+    
+    total_appointments_all = annual_stats['total_appointments'].sum()
+    total_reappointments_all = annual_stats['total_reappointments'].sum()
+    overall_proportion = total_reappointments_all / total_appointments_all
+    
+    print(f"Total appointments (2013-2024): {total_appointments_all:,}")
+    print(f"Total reappointments (2013-2024): {total_reappointments_all:,}")
+    print(f"Overall reappointment proportion: {overall_proportion:.2%}")
+    print(f"Average annual proportion: {annual_stats['reappointment_proportion'].mean():.2%}")
+    print(f"Minimum proportion: {annual_stats['reappointment_proportion'].min():.2%} "
+          f"(Year {annual_stats.loc[annual_stats['reappointment_proportion'].idxmin(), 'year']})")
+    print(f"Maximum proportion: {annual_stats['reappointment_proportion'].max():.2%} "
+          f"(Year {annual_stats.loc[annual_stats['reappointment_proportion'].idxmax(), 'year']})")
+    
+    # Trend analysis
+    years = annual_stats['year'].values
+    proportions = annual_stats['reappointment_proportion'].values
+    
+    # Simple linear regression for trend
+    z = np.polyfit(years, proportions, 1)
+    trend_slope = z[0]
+    
+    print(f"\nTrend Analysis:")
+    print(f"  Trend direction: {'Increasing' if trend_slope > 0 else 'Decreasing'}")
+    print(f"  Average change per year: {trend_slope:.3%}")
+    print(f"  Total change (2013-2024): {(proportions[-1] - proportions[0]):.1%}")
+
+def create_visualization(annual_stats):
+    """
+    Create a visualization showing the government-wide reappointment proportion trend.
+    """
+    print("\nCreating visualization...")
+    
+    # Set up the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Extract data
+    years = annual_stats['year'].values
+    proportions = annual_stats['reappointment_proportion'].values * 100  # Convert to percentage
+    
+    # Main line plot
+    plt.plot(years, proportions, 'b-', linewidth=3, marker='o', markersize=10, 
+             label='Annual Reappointment Proportion', zorder=3)
+    
+    # Add data labels
+    for year, prop in zip(years, proportions):
+        plt.text(year, prop + 0.3, f'{prop:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    # Add trend line
+    z = np.polyfit(years, proportions, 1)
+    p = np.poly1d(z)
+    plt.plot(years, p(years), 'r--', linewidth=2, alpha=0.7, 
+             label=f'Trend ({z[0]:.3f}% per year)', zorder=2)
+    
+    # Add average line
+    avg_proportion = proportions.mean()
+    plt.axhline(y=avg_proportion, color='green', linestyle=':', linewidth=2, alpha=0.7,
+                label=f'Average ({avg_proportion:.1f}%)', zorder=1)
+    
+    # Highlight min and max
+    max_idx = proportions.argmax()
+    min_idx = proportions.argmin()
+    
+    plt.scatter(years[max_idx], proportions[max_idx], color='red', s=200, 
+                edgecolors='darkred', linewidth=2, zorder=4)
+    plt.scatter(years[min_idx], proportions[min_idx], color='blue', s=200, 
+                edgecolors='darkblue', linewidth=2, zorder=4)
+    
+    # Formatting
+    plt.xlabel('Year', fontsize=14, fontweight='bold')
+    plt.ylabel('Reappointment Proportion (%)', fontsize=14, fontweight='bold')
+    plt.title('Annual Government-wide Reappointment Proportions\nNew Brunswick Government (2013-2024)', 
+              fontsize=16, fontweight='bold', pad=20)
+    
+    # Grid
+    plt.grid(True, alpha=0.3, linestyle='--', zorder=0)
+    
+    # Set axis limits
+    plt.xlim(years.min() - 0.5, years.max() + 0.5)
+    plt.ylim(0, max(proportions) * 1.15)
+    
+    # X-axis formatting
+    plt.xticks(years, rotation=45)
+    
+    # Add text box with summary stats
+    textstr = f'Total Appointments: {annual_stats["total_appointments"].sum():,}\n'
+    textstr += f'Total Reappointments: {annual_stats["total_reappointments"].sum():,}\n'
+    textstr += f'Average Rate: {proportions.mean():.1f}%\n'
+    textstr += f'Trend: {z[0]:.3f}% per year'
+    
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    plt.text(0.02, 0.98, textstr, transform=plt.gca().transAxes, fontsize=10,
+             verticalalignment='top', bbox=props)
+    
+    # Legend
+    plt.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    
+    # Tight layout
+    plt.tight_layout()
+    
+    # Save the figure
+    output_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step8_annual_reappointment_proportions.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to: {output_path}")
+    
+    # Close the plot
+    plt.close()
+
+def save_annual_proportions(annual_stats):
+    """
+    Save the annual proportions data to CSV.
+    """
+    output_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step8_annual_proportions.csv")
+    
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save to CSV
+    annual_stats.to_csv(output_path, index=False)
+    print(f"\nAnnual proportions saved to: {output_path}")
+    
+    return output_path
+
+def main():
+    """
+    Main function to execute the annual proportions analysis.
+    """
+    print("Starting Annual Government-wide Reappointment Proportions Analysis...")
+    print("=" * 60)
+    
+    # Load appointments data
+    df = load_appointments_data()
+    
+    # Data validation
+    print("\nData validation:")
+    print(f"  Total records: {len(df)}")
+    print(f"  Records with 'reappointed' = True: {df['reappointed'].sum()}")
+    print(f"  Unique years: {sorted(df['year'].dropna().unique())}")
+    
+    # Calculate annual proportions
+    annual_stats = calculate_annual_proportions(df)
+    
+    # Print year-by-year results
+    print_annual_proportions(annual_stats)
+    
+    # Create visualization
+    create_visualization(annual_stats)
+    
+    # Save results
+    output_path = save_annual_proportions(annual_stats)
+    
+    # Final summary
+    print("\n" + "=" * 60)
+    print("ANALYSIS COMPLETE")
+    print("=" * 60)
+    print(f"Years analyzed: {len(annual_stats)}")
+    print(f"Data saved to: {output_path}")
+    print("Visualization saved as: step8_annual_reappointment_proportions.png")
+    
+    # Key finding
+    first_year_prop = annual_stats.iloc[0]['reappointment_proportion']
+    last_year_prop = annual_stats.iloc[-1]['reappointment_proportion']
+    
+    print(f"\nKey Finding:")
+    print(f"  2013 proportion: {first_year_prop:.2%}")
+    print(f"  2024 proportion: {last_year_prop:.2%}")
+    print(f"  Overall change: {(last_year_prop - first_year_prop):.1%}")
+    
+    if last_year_prop > first_year_prop:
+        print("  ✓ The reappointment trend is INCREASING over the 12-year period")
+    else:
+        print("  ✓ The reappointment trend is DECREASING over the 12-year period")
+
+if __name__ == "__main__":
+    main()

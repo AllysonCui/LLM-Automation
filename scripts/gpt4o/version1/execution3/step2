@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def standardize_column_names(columns):
+    """Map variations of expected column names to standard names."""
+    mapping = {
+        'reappointed': ['reappointed'],
+        'name': ['name', 'full_name'],
+        'position': ['position', 'appointment', 'role'],
+        'org': ['org', 'organization', 'department'],
+        'year': ['year']
+    }
+    
+    standardized = {}
+    for standard, variants in mapping.items():
+        for variant in variants:
+            for col in columns:
+                if col.strip().lower() == variant:
+                    standardized[standard] = col
+                    break
+            if standard in standardized:
+                break
+    return standardized
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step1_combined_appointments.csv")
+    output_dir = Path("scripts/gpt4o/version1/execution3/analysis_data")
+    output_file = output_dir / "step2_key_columns_data.csv"
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input file: {e}", file=sys.stderr)
+        return
+
+    col_map = standardize_column_names(df.columns)
+    required_cols = ['reappointed', 'name', 'position', 'org', 'year']
+
+    missing_cols = [col for col in required_cols if col not in col_map]
+    if missing_cols:
+        print(f"Missing expected columns: {missing_cols}", file=sys.stderr)
+        return
+
+    filtered_df = df[[col_map[col] for col in required_cols]].copy()
+    filtered_df.columns = required_cols  # Rename to standard
+
+    try:
+        filtered_df.to_csv(output_file, index=False)
+        print(f"Filtered dataset saved to: {output_file}")
+    except Exception as e:
+        print(f"Failed to save filtered dataset: {e}", file=sys.stderr)
+        return
+
+    print("\nFiltered DataFrame Info:")
+    print(filtered_df.info())
+    print("\nMissing Values by Column:")
+    print(filtered_df.isnull().sum())
+
+if __name__ == "__main__":
+    main()

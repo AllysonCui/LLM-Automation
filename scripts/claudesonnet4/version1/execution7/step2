@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Key Columns Extractor
+
+This script loads the combined appointment dataset, identifies and extracts
+key columns with robust column name matching, and saves the filtered dataset.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_column_match(df_columns, target_column, possible_variations):
+    """
+    Find the best matching column name from a list of possible variations.
+    
+    Args:
+        df_columns (list): List of actual column names in the DataFrame
+        target_column (str): The target column name we're looking for
+        possible_variations (list): List of possible variations of the column name
+    
+    Returns:
+        str or None: The matching column name, or None if no match found
+    """
+    
+    # Convert to lowercase for case-insensitive matching
+    df_columns_lower = [col.lower().strip() for col in df_columns]
+    variations_lower = [var.lower().strip() for var in possible_variations]
+    
+    # Look for exact matches first
+    for variation in variations_lower:
+        if variation in df_columns_lower:
+            # Return the original column name (preserving case)
+            original_index = df_columns_lower.index(variation)
+            return df_columns[original_index]
+    
+    # Look for partial matches
+    for variation in variations_lower:
+        for i, col in enumerate(df_columns_lower):
+            if variation in col or col in variation:
+                return df_columns[i]
+    
+    return None
+
+def extract_key_columns(df):
+    """
+    Extract key columns from the DataFrame with robust column name matching.
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame
+    
+    Returns:
+        pd.DataFrame: DataFrame with only key columns
+        dict: Mapping of target columns to actual column names found
+    """
+    
+    # Define target columns and their possible variations
+    column_mappings = {
+        'reappointed': ['reappointed', 'reappoint', 're-appointed', 're_appointed'],
+        'name': ['name', 'full_name', 'person_name', 'appointee_name', 'individual'],
+        'position': ['position', 'appointment', 'role', 'title', 'job_title', 'post'],
+        'org': ['org', 'organization', 'organisation', 'agency', 'department', 'entity', 'body'],
+        'year': ['year', 'appointment_year', 'yr']
+    }
+    
+    # Find matching columns
+    found_columns = {}
+    
+    print("Searching for key columns...")
+    print(f"Available columns in dataset: {list(df.columns)}")
+    print()
+    
+    for target_col, variations in column_mappings.items():
+        matched_col = find_column_match(df.columns, target_col, variations)
+        
+        if matched_col:
+            found_columns[target_col] = matched_col
+            print(f"✓ Found '{target_col}': using column '{matched_col}'")
+        else:
+            print(f"✗ Missing '{target_col}': tried variations {variations}")
+    
+    # Check if we found all required columns
+    missing_columns = set(column_mappings.keys()) - set(found_columns.keys())
+    if missing_columns:
+        raise ValueError(f"Could not find required columns: {missing_columns}")
+    
+    # Extract the key columns
+    key_df = df[list(found_columns.values())].copy()
+    
+    # Rename columns to standard names
+    rename_mapping = {v: k for k, v in found_columns.items()}
+    key_df = key_df.rename(columns=rename_mapping)
+    
+    return key_df, found_columns
+
+def analyze_extracted_data(df):
+    """
+    Analyze the extracted key columns dataset.
+    
+    Args:
+        df (pd.DataFrame): Dataset with key columns
+    """
+    
+    print("\n" + "="*50)
+    print("EXTRACTED KEY COLUMNS ANALYSIS")
+    print("="*50)
+    
+    print(f"Dataset shape: {df.shape}")
+    print(f"Total records: {df.shape[0]:,}")
+    print(f"Key columns: {df.shape[1]}")
+    
+    print(f"\nColumn information:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i}. {col}")
+    
+    print(f"\nData types:")
+    for col, dtype in df.dtypes.items():
+        print(f"  {col}: {dtype}")
+    
+    print(f"\nMissing values analysis:")
+    missing_counts = df.isnull().sum()
+    total_rows = len(df)
+    
+    has_missing = False
+    for col, count in missing_counts.items():
+        if count > 0:
+            percentage = (count / total_rows) * 100
+            print(f"  {col}: {count:,} missing ({percentage:.1f}%)")
+            has_missing = True
+    
+    if not has_missing:
+        print("  No missing values found in key columns!")
+    
+    # Analyze reappointed column if it exists
+    if 'reappointed' in df.columns:
+        print(f"\nReappointment status distribution:")
+        reappointed_counts = df['reappointed'].value_counts(dropna=False)
+        for status, count in reappointed_counts.items():
+            percentage = (count / total_rows) * 100
+            print(f"  {status}: {count:,} ({percentage:.1f}%)")
+    
+    # Analyze year distribution
+    if 'year' in df.columns:
+        print(f"\nRecords by year:")
+        year_counts = df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,}")
+
+def load_combined_dataset(file_path):
+    """
+    Load the combined dataset from CSV file.
+    
+    Args:
+        file_path (str): Path to the combined dataset CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Combined dataset not found at: {file_path}")
+        
+        df = pd.read_csv(file_path)
+        print(f"Loaded combined dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error loading combined dataset: {str(e)}")
+        raise
+
+def save_key_columns_data(df, output_dir, filename="step2_key_columns_data.csv"):
+    """
+    Save the key columns dataset to CSV file.
+    
+    Args:
+        df (pd.DataFrame): Dataset with key columns to save
+        output_dir (str): Directory to save the output file
+        filename (str): Name of the output file
+    """
+    
+    # Ensure output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, filename)
+    
+    try:
+        df.to_csv(output_path, index=False)
+        print(f"\nKey columns dataset saved to: {output_path}")
+        
+    except Exception as e:
+        print(f"Error saving file: {str(e)}")
+        raise
+
+def main():
+    """
+    Main execution function.
+    """
+    
+    print("New Brunswick Government Appointments Key Columns Extractor")
+    print("="*60)
+    
+    # Define file paths
+    data_dir = "scripts/claudesonnet4/version1/execution7/analysis_data"
+    input_file = os.path.join(data_dir, "step1_combined_appointments.csv")
+    
+    try:
+        # Load the combined dataset
+        combined_df = load_combined_dataset(input_file)
+        
+        # Extract key columns
+        key_df, column_mappings = extract_key_columns(combined_df)
+        
+        # Save the key columns dataset
+        save_key_columns_data(key_df, data_dir)
+        
+        # Analyze the extracted data
+        analyze_extracted_data(key_df)
+        
+        print("\n" + "="*50)
+        print("Key columns extraction completed successfully!")
+        print("="*50)
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

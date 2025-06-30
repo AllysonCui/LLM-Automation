@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Reappointment Count Generator
+
+This script analyzes reappointment patterns by creating a summary table showing
+reappointment counts by organization and year.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def validate_reappointment_data(df):
+    """
+    Validate the reappointment data and provide debugging information.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        dict: Validation report
+    """
+    
+    print("Validating reappointment data...")
+    
+    validation_report = {
+        'total_records': len(df),
+        'reappointed_true': 0,
+        'reappointed_false': 0,
+        'reappointed_missing': 0,
+        'missing_org': 0,
+        'missing_year': 0,
+        'reappointed_data_type': str(df['reappointed'].dtype) if 'reappointed' in df.columns else 'Column not found'
+    }
+    
+    if 'reappointed' in df.columns:
+        # Count reappointment values
+        reappointed_counts = df['reappointed'].value_counts(dropna=False)
+        validation_report['reappointed_true'] = reappointed_counts.get(True, 0)
+        validation_report['reappointed_false'] = reappointed_counts.get(False, 0)
+        validation_report['reappointed_missing'] = df['reappointed'].isna().sum()
+        
+        # Show sample values for debugging
+        print(f"\nReappointment column unique values: {df['reappointed'].unique()}")
+        print(f"Reappointment value counts:")
+        print(reappointed_counts)
+    
+    # Check for missing org and year
+    validation_report['missing_org'] = df['org'].isna().sum() if 'org' in df.columns else 0
+    validation_report['missing_year'] = df['year'].isna().sum() if 'year' in df.columns else 0
+    
+    return validation_report
+
+def print_validation_report(validation_report):
+    """
+    Print the validation report.
+    
+    Args:
+        validation_report (dict): Validation metrics
+    """
+    
+    print("\n" + "="*50)
+    print("REAPPOINTMENT DATA VALIDATION REPORT")
+    print("="*50)
+    
+    print(f"Total records: {validation_report['total_records']:,}")
+    print(f"Reappointment data type: {validation_report['reappointed_data_type']}")
+    print()
+    
+    print("Reappointment Status:")
+    print(f"  True (reappointed): {validation_report['reappointed_true']:,}")
+    print(f"  False (not reappointed): {validation_report['reappointed_false']:,}")
+    print(f"  Missing values: {validation_report['reappointed_missing']:,}")
+    print()
+    
+    print("Missing Data:")
+    print(f"  Missing organization: {validation_report['missing_org']:,}")
+    print(f"  Missing year: {validation_report['missing_year']:,}")
+    
+    # Calculate reappointment rate
+    total_valid = validation_report['reappointed_true'] + validation_report['reappointed_false']
+    if total_valid > 0:
+        reappointment_rate = (validation_report['reappointed_true'] / total_valid) * 100
+        print(f"\nOverall reappointment rate: {reappointment_rate:.1f}%")
+
+def filter_and_clean_reappointment_data(df):
+    """
+    Filter for reappointments and clean the data.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Filtered and cleaned dataset
+        dict: Filtering statistics
+    """
+    
+    print("\nFiltering and cleaning reappointment data...")
+    
+    filtering_stats = {
+        'original_records': len(df),
+        'reappointed_records': 0,
+        'removed_missing_org': 0,
+        'removed_missing_year': 0,
+        'final_records': 0
+    }
+    
+    # Filter for reappointments only
+    reappointed_df = df[df['reappointed'] == True].copy()
+    filtering_stats['reappointed_records'] = len(reappointed_df)
+    
+    print(f"  Records with reappointed=True: {filtering_stats['reappointed_records']:,}")
+    
+    if len(reappointed_df) == 0:
+        print("  Warning: No reappointment records found!")
+        return reappointed_df, filtering_stats
+    
+    # Remove records with missing organization
+    missing_org_mask = reappointed_df['org'].isna() | (reappointed_df['org'] == '')
+    filtering_stats['removed_missing_org'] = missing_org_mask.sum()
+    reappointed_df = reappointed_df[~missing_org_mask]
+    
+    # Remove records with missing year
+    missing_year_mask = reappointed_df['year'].isna()
+    filtering_stats['removed_missing_year'] = missing_year_mask.sum()
+    reappointed_df = reappointed_df[~missing_year_mask]
+    
+    # Ensure year is integer
+    reappointed_df['year'] = reappointed_df['year'].astype(int)
+    
+    filtering_stats['final_records'] = len(reappointed_df)
+    
+    print(f"  Removed missing org: {filtering_stats['removed_missing_org']:,}")
+    print(f"  Removed missing year: {filtering_stats['removed_missing_year']:,}")
+    print(f"  Final reappointment records: {filtering_stats['final_records']:,}")
+    
+    return reappointed_df, filtering_stats
+
+def debug_grouped_data(df, sample_size=10):
+    """
+    Print debugging information about grouped data before pivot table creation.
+    
+    Args:
+        df (pd.DataFrame): Cleaned reappointment dataset
+        sample_size (int): Number of sample groups to display
+    """
+    
+    print("\n" + "="*60)
+    print("DEBUGGING: GROUPED DATA SAMPLE")
+    print("="*60)
+    
+    if len(df) == 0:
+        print("No data to group - dataset is empty")
+        return
+    
+    # Group by org and year and count
+    grouped = df.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    
+    print(f"Total org-year combinations with reappointments: {len(grouped):,}")
+    print(f"Sample of {min(sample_size, len(grouped))} groups:")
+    print()
+    
+    sample_groups = grouped.head(sample_size)
+    for _, row in sample_groups.iterrows():
+        print(f"  {row['org']} ({row['year']}): {row['reappointment_count']} reappointments")
+    
+    # Show summary statistics
+    print(f"\nReappointment count statistics:")
+    print(f"  Min: {grouped['reappointment_count'].min()}")
+    print(f"  Max: {grouped['reappointment_count'].max()}")
+    print(f"  Mean: {grouped['reappointment_count'].mean():.1f}")
+    print(f"  Median: {grouped['reappointment_count'].median():.1f}")
+    
+    # Show organizations with most reappointments
+    org_totals = grouped.groupby('org')['reappointment_count'].sum().sort_values(ascending=False)
+    print(f"\nTop 5 organizations by total reappointments:")
+    for i, (org, count) in enumerate(org_totals.head(5).items(), 1):
+        print(f"  {i}. {org}: {count} reappointments")
+
+def create_reappointment_counts_table(df):
+    """
+    Create a pivot table with reappointment counts by organization and year.
+    
+    Args:
+        df (pd.DataFrame): Cleaned reappointment dataset
+    
+    Returns:
+        pd.DataFrame: Pivot table with reappointment counts
+        dict: Summary statistics
+    """
+    
+    print("\n" + "="*50)
+    print("CREATING REAPPOINTMENT COUNTS TABLE")
+    print("="*50)
+    
+    if len(df) == 0:
+        print("No reappointment data to process")
+        # Return empty DataFrame with proper structure
+        empty_df = pd.DataFrame(columns=['org'])
+        return empty_df, {'total_organizations': 0, 'total_reappointments': 0}
+    
+    # Create pivot table
+    reappointment_table = df.pivot_table(
+        index='org',
+        columns='year',
+        values='name',  # Use any column for counting
+        aggfunc='count',
+        fill_value=0
+    )
+    
+    # Ensure column names are integers
+    reappointment_table.columns = reappointment_table.columns.astype(int)
+    
+    # Sort columns (years) in ascending order
+    reappointment_table = reappointment_table.reindex(sorted(reappointment_table.columns), axis=1)
+    
+    # Add row totals
+    reappointment_table['Total'] = reappointment_table.sum(axis=1)
+    
+    # Sort by total reappointments (descending)
+    reappointment_table = reappointment_table.sort_values('Total', ascending=False)
+    
+    # Add column totals
+    column_totals = reappointment_table.sum(axis=0)
+    column_totals.name = 'Total'
+    reappointment_table = pd.concat([reappointment_table, column_totals.to_frame().T])
+    
+    # Validate that the table contains actual counts
+    non_zero_cells = (reappointment_table > 0).sum().sum()
+    total_cells = reappointment_table.size
+    
+    print(f"Pivot table validation:")
+    print(f"  Dimensions: {reappointment_table.shape}")
+    print(f"  Non-zero cells: {non_zero_cells}")
+    print(f"  Total cells: {total_cells}")
+    print(f"  Percentage non-zero: {(non_zero_cells/total_cells)*100:.1f}%")
+    
+    # Calculate summary statistics
+    summary_stats = {
+        'total_organizations': len(reappointment_table) - 1,  # Subtract 1 for total row
+        'total_reappointments': int(reappointment_table.loc['Total', 'Total']),
+        'years_covered': len([col for col in reappointment_table.columns if col != 'Total']),
+        'organizations_with_reappointments': (reappointment_table['Total'][:-1] > 0).sum()
+    }
+    
+    if summary_stats['total_organizations'] > 0:
+        org_totals = reappointment_table['Total'][:-1]  # Exclude total row
+        summary_stats['avg_reappointments_per_org'] = org_totals.mean()
+        summary_stats['median_reappointments_per_org'] = org_totals.median()
+        summary_stats['max_reappointments_per_org'] = org_totals.max()
+    
+    return reappointment_table, summary_stats
+
+def print_reappointment_summary_table(reappointment_table, max_display_rows=15):
+    """
+    Print the reappointment counts summary table.
+    
+    Args:
+        reappointment_table (pd.DataFrame): Pivot table with reappointment counts
+        max_display_rows (int): Maximum number of rows to display
+    """
+    
+    print("\n" + "="*80)
+    print("REAPPOINTMENT COUNTS BY ORGANIZATION AND YEAR")
+    print("="*80)
+    
+    if len(reappointment_table) <= 1:  # Only total row or empty
+        print("No reappointment data to display")
+        return
+    
+    # Display the table (excluding total row for main display)
+    display_table = reappointment_table.iloc[:-1]  # Exclude total row
+    
+    if len(display_table) > max_display_rows:
+        print(f"Displaying top {max_display_rows} organizations by total reappointments:")
+        print(display_table.head(max_display_rows).to_string())
+        print(f"\n... and {len(display_table) - max_display_rows} more organizations")
+    else:
+        print("All organizations with reappointments:")
+        print(display_table.to_string())
+    
+    # Always show the totals row
+    print("\n" + "-"*80)
+    print("TOTALS:")
+    print(reappointment_table.iloc[-1:].to_string())
+
+def print_reappointment_statistics(summary_stats):
+    """
+    Print summary statistics about reappointment patterns.
+    
+    Args:
+        summary_stats (dict): Summary statistics
+    """
+    
+    print("\n" + "="*50)
+    print("REAPPOINTMENT PATTERN STATISTICS")
+    print("="*50)
+    
+    print(f"Total organizations: {summary_stats['total_organizations']:,}")
+    print(f"Organizations with reappointments: {summary_stats.get('organizations_with_reappointments', 0):,}")
+    print(f"Total reappointments: {summary_stats['total_reappointments']:,}")
+    
+    if summary_stats['total_organizations'] > 0:
+        org_with_reapp = summary_stats.get('organizations_with_reappointments', 0)
+        percentage = (org_with_reapp / summary_stats['total_organizations']) * 100
+        print(f"Percentage of orgs with reappointments: {percentage:.1f}%")
+    
+    if summary_stats.get('years_covered', 0) > 0:
+        print(f"Years covered: {summary_stats['years_covered']}")
+    
+    if summary_stats.get('avg_reappointments_per_org') is not None:
+        print(f"Average reappointments per organization: {summary_stats['avg_reappointments_per_org']:.1f}")
+        print(f"Median reappointments per organization: {summary_stats['median_reappointments_per_org']:.1f}")
+        print(f"Maximum reappointments per organization: {summary_stats['max_reappointments_per_org']:.0f}")
+
+def load_repeats_marked_dataset(file_path):
+    """
+    Load the dataset with marked repeats from CSV file.
+    
+    Args:
+        file_path (str): Path to the dataset CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Repeats marked dataset not found at: {file_path}")
+        
+        df = pd.read_csv(file_path)
+        print(f"Loaded repeats marked dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error loading repeats marked dataset: {str(e)}")
+        raise
+
+def save_reappointment_counts(reappointment_table, output_dir, filename="step5_reappointment_counts.csv"):
+    """
+    Save the reappointment counts table to CSV file.
+    
+    Args:
+        reappointment_table (pd.DataFrame): Reappointment counts table to save
+        output_dir (str): Directory to save the output file
+        filename (str): Name of the output file
+    """
+    
+    # Ensure output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, filename)
+    
+    try:
+        # Reset index to include organization names as a column
+        output_table = reappointment_table.reset_index()
+        output_table.to_csv(output_path, index=False)
+        print(f"\nReappointment counts table saved to: {output_path}")
+        
+    except Exception as e:
+        print(f"Error saving file: {str(e)}")
+        raise
+
+def main():
+    """
+    Main execution function.
+    """
+    
+    print("New Brunswick Government Reappointment Count Generator")
+    print("="*65)
+    
+    # Define file paths
+    data_dir = "scripts/claudesonnet4/version1/execution7/analysis_data"
+    input_file = os.path.join(data_dir, "step3_repeats_marked.csv")
+    
+    try:
+        # Load the dataset
+        df_original = load_repeats_marked_dataset(input_file)
+        
+        # Validate reappointment data
+        validation_report = validate_reappointment_data(df_original)
+        print_validation_report(validation_report)
+        
+        # Filter and clean reappointment data
+        df_reappointments, filtering_stats = filter_and_clean_reappointment_data(df_original)
+        
+        # Debug grouped data
+        debug_grouped_data(df_reappointments)
+        
+        # Create reappointment counts table
+        reappointment_table, summary_stats = create_reappointment_counts_table(df_reappointments)
+        
+        # Save the reappointment counts table
+        save_reappointment_counts(reappointment_table, data_dir)
+        
+        # Print results
+        print_reappointment_summary_table(reappointment_table)
+        print_reappointment_statistics(summary_stats)
+        
+        print("\n" + "="*65)
+        print("Reappointment counts generation completed successfully!")
+        print("="*65)
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

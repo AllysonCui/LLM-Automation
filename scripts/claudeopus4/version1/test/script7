@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+step to identify organizations with highest reappointment rates each year
+Creates time series data and visualization of yearly maximum rates
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from pathlib import Path
+import sys
+
+def find_yearly_max_rates():
+    """
+    Load reappointment rates and find organization with highest rate each year
+    """
+    # Define paths
+    data_dir = Path("steps/claudeopus4/version1/analysis_data")
+    input_file = data_dir / "step6_reappointment_rates.csv"
+    output_csv = data_dir / "step7_yearly_max_rates.csv"
+    output_png = data_dir / "step7_yearly_max_rates.png"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file {input_file} not found!")
+        sys.exit(1)
+    
+    # Load the reappointment rates
+    print(f"Loading reappointment rates from {input_file}...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df)} records")
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_columns = ['org', 'year', 'total_employees', 'reappointments', 'reappointment_rate']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    # Convert year to integer
+    df['year'] = df['year'].astype(int)
+    
+    # Filter out records with very few employees (less than 5) to avoid noise
+    print("\nFiltering out organizations with fewer than 5 employees in a year...")
+    df_filtered = df[df['total_employees'] >= 5].copy()
+    print(f"Filtered from {len(df)} to {len(df_filtered)} records")
+    
+    # Find maximum rate for each year
+    print("\nFinding organization with highest reappointment rate each year...")
+    
+    # Approach for handling ties: 
+    # When multiple organizations have the same maximum rate in a year:
+    # 1. First, select the organization with more total employees (more significant)
+    # 2. If still tied, select alphabetically first organization (consistent selection)
+    
+    yearly_max_rates = []
+    
+    for year in sorted(df_filtered['year'].unique()):
+        year_data = df_filtered[df_filtered['year'] == year]
+        
+        if len(year_data) == 0:
+            print(f"WARNING: No data for year {year}")
+            continue
+        
+        # Find maximum rate
+        max_rate = year_data['reappointment_rate'].max()
+        
+        # Get all organizations with the maximum rate
+        max_rate_orgs = year_data[year_data['reappointment_rate'] == max_rate]
+        
+        # Handle ties
+        if len(max_rate_orgs) > 1:
+            # Sort by total_employees (descending) then by org name (ascending)
+            max_rate_orgs = max_rate_orgs.sort_values(
+                ['total_employees', 'org'], 
+                ascending=[False, True]
+            )
+            print(f"  Year {year}: {len(max_rate_orgs)} organizations tied at {max_rate:.1%}")
+        
+        # Select the first organization after sorting
+        top_org = max_rate_orgs.iloc[0]
+        
+        yearly_max_rates.append({
+            'year': year,
+            'top_org': top_org['org'],
+            'max_rate': max_rate,
+            'total_employees': top_org['total_employees'],
+            'reappointments': top_org['reappointments']
+        })
+    
+    # Create DataFrame from results
+    results_df = pd.DataFrame(yearly_max_rates)
+    
+    # Save results to CSV
+    print(f"\nSaving yearly maximum rates to {output_csv}...")
+    results_df[['year', 'top_org', 'max_rate']].to_csv(output_csv, index=False, encoding='utf-8')
+    
+    # Print year-by-year results
+    print("\n" + "="*80)
+    print("YEARLY MAXIMUM REAPPOINTMENT RATES")
+    print("="*80)
+    print(f"{'Year':<6} {'Organization':<40} {'Rate':<8} {'Appointments':<12}")
+    print("-"*80)
+    
+    for _, row in results_df.iterrows():
+        print(f"{row['year']:<6} {row['top_org'][:40]:<40} {row['max_rate']:>6.1%} "
+              f"{row['reappointments']:>4}/{row['total_employees']:<4}")
+    
+    # Create visualization
+    print(f"\nCreating visualization...")
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Plot the maximum rate trend
+    plt.plot(results_df['year'], results_df['max_rate'] * 100, 
+             marker='o', linewidth=2, markersize=8, color='darkblue')
+    
+    # Add organization labels
+    for idx, row in results_df.iterrows():
+        # Alternate label positions to avoid overlap
+        y_offset = 2 if idx % 2 == 0 else -2
+        plt.annotate(
+            row['top_org'][:20] + '...' if len(row['top_org']) > 20 else row['top_org'],
+            xy=(row['year'], row['max_rate'] * 100),
+            xytext=(0, y_offset),
+            textcoords='offset points',
+            ha='center',
+            fontsize=8,
+            rotation=45 if y_offset > 0 else -45
+        )
+    
+    plt.title('Highest Reappointment Rate by Year', fontsize=16, fontweight='bold')
+    plt.xlabel('Year', fontsize=12)
+    plt.ylabel('Maximum Reappointment Rate (%)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # Set y-axis to percentage
+    plt.ylim(0, 105)
+    
+    # Format x-axis to show all years
+    plt.xticks(results_df['year'], rotation=45)
+    
+    # Add a horizontal line at 100%
+    plt.axhline(y=100, color='red', linestyle='--', alpha=0.5, label='100%')
+    
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to {output_png}")
+    
+    # Summary statistics
+    print("\n" + "="*80)
+    print("SUMMARY STATISTICS")
+    print("="*80)
+    print(f"Years analyzed: {results_df['year'].min()} to {results_df['year'].max()}")
+    print(f"Average maximum rate across years: {results_df['max_rate'].mean():.1%}")
+    print(f"Highest rate overall: {results_df['max_rate'].max():.1%} in {results_df.loc[results_df['max_rate'].idxmax(), 'year']}")
+    print(f"Lowest maximum rate: {results_df['max_rate'].min():.1%} in {results_df.loc[results_df['max_rate'].idxmin(), 'year']}")
+    
+    # Organizations appearing multiple times
+    org_counts = results_df['top_org'].value_counts()
+    repeat_leaders = org_counts[org_counts > 1]
+    if len(repeat_leaders) > 0:
+        print("\nOrganizations with highest rate in multiple years:")
+        for org, count in repeat_leaders.items():
+            years = results_df[results_df['top_org'] == org]['year'].tolist()
+            print(f"  {org}: {count} years ({', '.join(map(str, years))})")
+    
+    print(f"\nResults saved successfully to: {output_csv}")
+    print(f"Visualization saved to: {output_png}")
+    
+    return results_df
+
+if __name__ == "__main__":
+    # Run the main function
+    try:
+        max_rates_df = find_yearly_max_rates()
+        print("\nstep completed successfully!")
+    except Exception as e:
+        print(f"\nERROR: step failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

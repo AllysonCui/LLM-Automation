@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""
+Script to identify organizations with highest reappointment rates each year.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def load_reappointment_rates():
+    """
+    Load reappointment rates from step 6.
+    """
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    input_file = data_dir / "step6_reappointment_rates.csv"
+    
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    print("Loading reappointment rates...")
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded {len(df):,} rows of data")
+        
+        # Validate columns
+        required_cols = ['org', 'year', 'total_employees', 'reappointments', 'reappointment_rate']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            print(f"Error: Missing required columns: {missing_cols}")
+            sys.exit(1)
+        
+        return df
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        sys.exit(1)
+
+def find_yearly_maximums(df):
+    """
+    Find organization with highest reappointment rate for each year.
+    Handles ties by selecting the organization with more total employees.
+    """
+    print("\nFinding yearly maximum reappointment rates...")
+    
+    # Remove rows with invalid rates (NaN or negative)
+    valid_df = df[df['reappointment_rate'].notna() & (df['reappointment_rate'] >= 0)].copy()
+    
+    if len(valid_df) == 0:
+        print("Error: No valid reappointment rates found!")
+        sys.exit(1)
+    
+    print(f"✓ Processing {len(valid_df):,} valid rate records")
+    
+    # Group by year and find maximum rate
+    yearly_max = []
+    
+    for year in sorted(valid_df['year'].unique()):
+        year_data = valid_df[valid_df['year'] == year]
+        
+        if len(year_data) == 0:
+            continue
+        
+        # Find maximum rate for this year
+        max_rate = year_data['reappointment_rate'].max()
+        
+        # Find all organizations with this maximum rate (handles ties)
+        max_orgs = year_data[year_data['reappointment_rate'] == max_rate]
+        
+        if len(max_orgs) > 1:
+            # Tie-breaking: Choose organization with most total employees
+            # This gives preference to larger organizations when rates are equal
+            chosen = max_orgs.loc[max_orgs['total_employees'].idxmax()]
+            print(f"  Year {year}: Tie between {len(max_orgs)} organizations, "
+                  f"selected '{chosen['org']}' with {chosen['total_employees']} employees")
+        else:
+            chosen = max_orgs.iloc[0]
+        
+        yearly_max.append({
+            'year': int(year),
+            'top_org': chosen['org'],
+            'max_rate': chosen['reappointment_rate']
+        })
+    
+    # Convert to DataFrame
+    result_df = pd.DataFrame(yearly_max)
+    result_df = result_df.sort_values('year')
+    
+    print(f"\n✓ Found maximum rates for {len(result_df)} years")
+    
+    return result_df
+
+def save_results(result_df, output_path):
+    """
+    Save the yearly maximum rates to CSV.
+    """
+    result_df.to_csv(output_path, index=False)
+    print(f"\n✓ Saved yearly maximum rates to: {output_path}")
+
+def create_visualization(result_df, output_path):
+    """
+    Create a visualization showing the trend of maximum reappointment rates over time.
+    """
+    print("\nCreating visualization...")
+    
+    # Set up the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Plot the maximum rates
+    plt.plot(result_df['year'], result_df['max_rate'] * 100, 
+             marker='o', linewidth=2, markersize=8, color='darkblue')
+    
+    # Add labels for each point
+    for idx, row in result_df.iterrows():
+        # Truncate org name if too long
+        org_label = row['top_org'][:30] + '...' if len(row['top_org']) > 30 else row['top_org']
+        
+        # Alternate label positions to avoid overlap
+        y_offset = 1.5 if idx % 2 == 0 else -2.5
+        
+        plt.annotate(f"{org_label}\n{row['max_rate']*100:.1f}%", 
+                    xy=(row['year'], row['max_rate'] * 100),
+                    xytext=(0, y_offset), 
+                    textcoords='offset points',
+                    ha='center', 
+                    fontsize=8,
+                    bbox=dict(boxstyle='round,pad=0.3', fc='yellow', alpha=0.7))
+    
+    # Customize the plot
+    plt.title('Highest Reappointment Rate by Year', fontsize=16, fontweight='bold')
+    plt.xlabel('Year', fontsize=12)
+    plt.ylabel('Maximum Reappointment Rate (%)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # Set y-axis to percentage
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
+    
+    # Set x-axis to show all years
+    plt.xticks(result_df['year'])
+    
+    # Add average line
+    avg_rate = result_df['max_rate'].mean() * 100
+    plt.axhline(y=avg_rate, color='red', linestyle='--', alpha=0.5, 
+                label=f'Average: {avg_rate:.1f}%')
+    plt.legend()
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved visualization to: {output_path}")
+    plt.close()
+
+def print_yearly_results(result_df):
+    """
+    Print the year-by-year results.
+    """
+    print("\n" + "="*70)
+    print("YEAR-BY-YEAR MAXIMUM REAPPOINTMENT RATES")
+    print("="*70)
+    
+    print(f"\n{'Year':>6} {'Organization':<45} {'Max Rate':>12}")
+    print("-" * 65)
+    
+    for _, row in result_df.iterrows():
+        org_display = row['top_org'][:42] + '...' if len(row['top_org']) > 45 else row['top_org']
+        print(f"{row['year']:>6} {org_display:<45} {row['max_rate']*100:>11.2f}%")
+    
+    # Summary statistics
+    print("\nSummary Statistics:")
+    print(f"  Years analyzed: {len(result_df)}")
+    print(f"  Average maximum rate: {result_df['max_rate'].mean()*100:.2f}%")
+    print(f"  Highest rate overall: {result_df['max_rate'].max()*100:.2f}% "
+          f"({result_df.loc[result_df['max_rate'].idxmax(), 'top_org']} "
+          f"in {result_df.loc[result_df['max_rate'].idxmax(), 'year']})")
+    print(f"  Lowest maximum rate: {result_df['max_rate'].min()*100:.2f}% "
+          f"in {result_df.loc[result_df['max_rate'].idxmin(), 'year']}")
+    
+    # Most frequent top organizations
+    top_org_counts = result_df['top_org'].value_counts()
+    if len(top_org_counts) > 0:
+        print("\nOrganizations appearing most frequently as yearly maximum:")
+        for org, count in top_org_counts.head(5).items():
+            if count > 1:
+                org_display = org[:50] + '...' if len(org) > 53 else org
+                print(f"  {org_display}: {count} years")
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Yearly Maximum Reappointment Rates Analysis")
+    print("Identifying organizations with highest rates each year")
+    print("-" * 50)
+    
+    try:
+        # Define paths
+        output_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+        csv_output = output_dir / "step7_yearly_max_rates.csv"
+        png_output = output_dir / "step7_yearly_max_rates.png"
+        
+        # Load data
+        df = load_reappointment_rates()
+        
+        # Find yearly maximums
+        result_df = find_yearly_maximums(df)
+        
+        if len(result_df) == 0:
+            print("Error: No yearly maximum rates found!")
+            sys.exit(1)
+        
+        # Save results
+        save_results(result_df, csv_output)
+        
+        # Create visualization
+        create_visualization(result_df, png_output)
+        
+        # Print results
+        print_yearly_results(result_df)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

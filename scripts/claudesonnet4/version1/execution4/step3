@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments in New Brunswick government appointment data.
+Marks repeat appointments for the same person in the same position at the same organization.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import re
+
+def normalize_name(name):
+    """
+    Normalize name for comparison by handling common variations.
+    
+    Args:
+        name (str): Original name
+    
+    Returns:
+        str: Normalized name
+    """
+    if pd.isna(name) or name == '':
+        return ''
+    
+    # Convert to string and strip whitespace
+    name = str(name).strip()
+    
+    # Convert to lowercase for comparison
+    name = name.lower()
+    
+    # Remove extra whitespace
+    name = re.sub(r'\s+', ' ', name)
+    
+    # Handle common abbreviations and variations
+    # Remove periods from initials
+    name = re.sub(r'\.', '', name)
+    
+    # Standardize common name variations
+    replacements = {
+        r'\bdr\b': 'doctor',
+        r'\bmr\b': 'mister',
+        r'\bms\b': 'miss',
+        r'\bmrs\b': 'missus',
+        r'\bprof\b': 'professor',
+        r'\bjr\b': 'junior',
+        r'\bsr\b': 'senior',
+    }
+    
+    for pattern, replacement in replacements.items():
+        name = re.sub(pattern, replacement, name)
+    
+    return name.strip()
+
+def normalize_text_field(text):
+    """
+    Normalize text fields (position, organization) for comparison.
+    
+    Args:
+        text (str): Original text
+    
+    Returns:
+        str: Normalized text
+    """
+    if pd.isna(text) or text == '':
+        return ''
+    
+    # Convert to string and strip whitespace
+    text = str(text).strip()
+    
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove common punctuation that might vary
+    text = re.sub(r'[.,;:!?]', '', text)
+    
+    return text.strip()
+
+def load_step2_data(input_file):
+    """
+    Load the dataset from step 2.
+    
+    Args:
+        input_file (str): Path to the input CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    print(f"Loading data from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+        return df
+        
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    except Exception as e:
+        raise Exception(f"Error loading data: {str(e)}")
+
+def analyze_original_reappointments(df):
+    """
+    Analyze original reappointment data before processing.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        dict: Statistics about original reappointments
+    """
+    stats = {}
+    
+    if 'reappointed' in df.columns:
+        # Count original reappointments
+        reappointed_counts = df['reappointed'].value_counts()
+        stats['original_true'] = reappointed_counts.get(True, 0)
+        stats['original_false'] = reappointed_counts.get(False, 0)
+        stats['original_missing'] = df['reappointed'].isna().sum()
+    else:
+        stats['original_true'] = 0
+        stats['original_false'] = 0
+        stats['original_missing'] = len(df)
+    
+    return stats
+
+def identify_reappointments(df):
+    """
+    Identify and mark reappointments based on name, position, and organization.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Dataset with updated reappointment markings
+    """
+    print("\nIdentifying reappointments...")
+    
+    # Create a copy to avoid modifying the original
+    df_updated = df.copy()
+    
+    # Ensure required columns exist
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df_updated.columns]
+    
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Initialize reappointed column if it doesn't exist
+    if 'reappointed' not in df_updated.columns:
+        df_updated['reappointed'] = False
+        print("Created new 'reappointed' column")
+    
+    # Create normalized versions for comparison
+    df_updated['name_normalized'] = df_updated['name'].apply(normalize_name)
+    df_updated['position_normalized'] = df_updated['position'].apply(normalize_text_field)
+    df_updated['org_normalized'] = df_updated['org'].apply(normalize_text_field)
+    
+    # Handle missing years by assigning a default value for sorting
+    df_updated['year_for_sorting'] = df_updated['year'].fillna(9999)
+    
+    # Group by normalized name, position, and organization
+    grouping_cols = ['name_normalized', 'position_normalized', 'org_normalized']
+    
+    # Track statistics
+    groups_processed = 0
+    appointments_marked = 0
+    
+    print("Processing appointment groups...")
+    
+    for group_key, group_df in df_updated.groupby(grouping_cols):
+        name_norm, position_norm, org_norm = group_key
+        
+        # Skip groups with empty normalized values
+        if not name_norm or not position_norm or not org_norm:
+            continue
+        
+        # Skip single-appointment groups
+        if len(group_df) <= 1:
+            continue
+        
+        groups_processed += 1
+        
+        # Sort by year (earliest first)
+        group_sorted = group_df.sort_values('year_for_sorting')
+        
+        # Mark all except the first as reappointments
+        indices_to_mark = group_sorted.index[1:].tolist()
+        
+        for idx in indices_to_mark:
+            # Only mark as reappointment if not already marked
+            if not df_updated.loc[idx, 'reappointed']:
+                df_updated.loc[idx, 'reappointed'] = True
+                appointments_marked += 1
+        
+        # Print sample of groups being processed
+        if groups_processed <= 5:
+            original_name = group_df['name'].iloc[0]
+            original_position = group_df['position'].iloc[0]
+            original_org = group_df['org'].iloc[0]
+            years = sorted(group_df['year'].dropna().astype(int).tolist())
+            
+            print(f"  Group {groups_processed}: {original_name} | {original_position} | {original_org}")
+            print(f"    Years: {years} ({len(group_df)} appointments)")
+    
+    # Clean up temporary columns
+    df_updated.drop(['name_normalized', 'position_normalized', 'org_normalized', 'year_for_sorting'], 
+                   axis=1, inplace=True)
+    
+    print(f"\nProcessed {groups_processed} groups with multiple appointments")
+    print(f"Marked {appointments_marked} additional appointments as reappointments")
+    
+    return df_updated, appointments_marked
+
+def analyze_updated_reappointments(df, original_stats, new_markings):
+    """
+    Analyze reappointment data after processing.
+    
+    Args:
+        df (pd.DataFrame): Updated dataset
+        original_stats (dict): Original reappointment statistics
+        new_markings (int): Number of newly marked reappointments
+    """
+    print("\n" + "="*50)
+    print("REAPPOINTMENT ANALYSIS")
+    print("="*50)
+    
+    # Current reappointment counts
+    current_counts = df['reappointed'].value_counts()
+    current_true = current_counts.get(True, 0)
+    current_false = current_counts.get(False, 0)
+    current_missing = df['reappointed'].isna().sum()
+    
+    print("Original reappointment data:")
+    print(f"  True (reappointed):     {original_stats['original_true']:,}")
+    print(f"  False (not reappointed): {original_stats['original_false']:,}")
+    print(f"  Missing/null:           {original_stats['original_missing']:,}")
+    
+    print("\nUpdated reappointment data:")
+    print(f"  True (reappointed):     {current_true:,}")
+    print(f"  False (not reappointed): {current_false:,}")
+    print(f"  Missing/null:           {current_missing:,}")
+    
+    print(f"\nChanges made:")
+    print(f"  Additional reappointments identified: {new_markings:,}")
+    print(f"  Total increase in reappointments: {current_true - original_stats['original_true']:,}")
+    
+    # Percentage calculations
+    total_records = len(df)
+    reappointment_rate = (current_true / total_records) * 100
+    print(f"  Final reappointment rate: {reappointment_rate:.1f}%")
+
+def save_updated_data(df, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
+    """
+    Save updated DataFrame to CSV file.
+    
+    Args:
+        df (pd.DataFrame): Updated dataset
+        output_dir (str): Output directory path
+    
+    Returns:
+        str: Path to saved file
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Define output file path
+    output_file = os.path.join(output_dir, "step3_repeats_marked.csv")
+    
+    # Save to CSV
+    df.to_csv(output_file, index=False)
+    print(f"\n✓ Updated dataset saved to: {output_file}")
+    
+    return output_file
+
+def main():
+    """Main execution function."""
+    try:
+        print("New Brunswick Appointments Data - Reappointment Marker")
+        print("="*57)
+        
+        # Define input file path
+        input_file = "scripts/claudesonnet4/version1/execution4/analysis_data/step2_key_columns_data.csv"
+        
+        # Load data from step 2
+        df = load_step2_data(input_file)
+        
+        # Analyze original reappointments
+        original_stats = analyze_original_reappointments(df)
+        
+        # Identify and mark reappointments
+        df_updated, new_markings = identify_reappointments(df)
+        
+        # Analyze updated reappointments
+        analyze_updated_reappointments(df_updated, original_stats, new_markings)
+        
+        # Save updated data
+        output_file = save_updated_data(df_updated)
+        
+        print(f"\n✓ Process completed successfully!")
+        print(f"Updated dataset with reappointment markings available at: {output_file}")
+        
+    except Exception as e:
+        print(f"\n✗ Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

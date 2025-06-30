@@ -1,0 +1,86 @@
+import os
+import pandas as pd
+
+# Load correct answer from human reference
+human_file = "scripts/human/version1/analysis_data/step4_employee_counts.csv"
+try:
+    correct_df = pd.read_csv(human_file)
+    correct_df[correct_df["org"] != "nan"]
+    correct_df = correct_df.set_index("org").sort_index(axis=0).sort_index(axis=1)
+except Exception as e:
+    print(f"Failed to load human reference file: {e}")
+    exit(1)
+
+base_paths = [
+    "scripts/gpt4o/version1",
+    "scripts/gpt4o/version2",
+    "scripts/gpt4o/version3",
+    "scripts/claudeopus4/version1",
+    "scripts/claudesonnet4/version1"
+]
+
+everything_correct = True
+
+for base_path in base_paths:
+    if not os.path.exists(base_path):
+        print(f"Warning: {base_path} does not exist.")
+        continue
+
+    for folder in sorted(os.listdir(base_path), key=lambda x: int(x.replace("execution", "")) if x.startswith("execution") else float('inf')):
+        exec_path = os.path.join(base_path, folder)
+        if os.path.isdir(exec_path) and folder.startswith("execution"):
+            csv_path = os.path.join(exec_path, "analysis_data", "step4_employee_counts.csv")
+            if not os.path.exists(csv_path):
+                print(f"Missing file: {csv_path}")
+                everything_correct = False
+                continue
+
+            try:
+                df = pd.read_csv(csv_path)
+                df = df.set_index("org").sort_index(axis=0).sort_index(axis=1)
+
+                # Check for column mismatches
+                missing_columns = set(correct_df.columns) - set(df.columns)
+                extra_columns = set(df.columns) - set(correct_df.columns)
+                if missing_columns or extra_columns:
+                    print(f"\nColumn mismatch in {csv_path}:")
+                    if missing_columns:
+                        print(f"  Missing columns: {sorted(missing_columns)}")
+                    if extra_columns:
+                        print(f"  Extra columns: {sorted(extra_columns)}")
+                    everything_correct = False
+                    continue
+
+                # Align columns
+                df = df[correct_df.columns]
+
+                # Check for row mismatches (orgs)
+                missing_orgs = set(correct_df.index) - set(df.index)
+                extra_orgs = set(df.index) - set(correct_df.index)
+                if missing_orgs or extra_orgs:
+                    print(f"\nOrganization mismatch in {csv_path}:")
+                    if missing_orgs:
+                        print(f"  Missing orgs: {sorted(missing_orgs)}")
+                    if extra_orgs:
+                        print(f"  Extra orgs: {sorted(extra_orgs)}")
+                    everything_correct = False
+                    continue
+
+                # Now we are safe to compare
+                mismatches = (df != correct_df) & ~(df.isna() & correct_df.isna())
+                if mismatches.any().any():
+                    print(f"\nValue mismatch in {csv_path}:")
+                    diff_rows = mismatches.any(axis=1)
+                    for org in df.index[diff_rows]:
+                        for year in df.columns[mismatches.loc[org]]:
+                            model_val = df.loc[org, year]
+                            correct_val = correct_df.loc[org, year]
+                            print(f"  Org: {org}, Year: {year}, Model = {model_val}, Expected = {correct_val}")
+                    everything_correct = False
+
+            except Exception as e:
+                print(f"Unexpected error processing {csv_path}: {e}")
+                everything_correct = False
+
+if everything_correct:
+    print("Everything is correct.")

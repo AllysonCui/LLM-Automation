@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""
+step to combine New Brunswick government appointment data from 2013-2024
+Loads 12 CSV files, adds year column, combines them, and saves the result
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024, combine them into a single DataFrame
+    """
+    # Define paths
+    raw_data_dir = Path("raw_data")
+    output_dir = Path("steps/claudeopus4/version1/analysis_data")
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # List to store all dataframes
+    all_dfs = []
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        filename = f"appointments_{year}.csv"
+        filepath = raw_data_dir / filename
+        
+        try:
+            # Load the CSV file
+            print(f"Loading {filename}...")
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            all_dfs.append(df)
+            print(f"  Successfully loaded {len(df)} records from {year}")
+            
+        except FileNotFoundError:
+            print(f"  WARNING: File {filepath} not found, skipping...")
+            continue
+        except Exception as e:
+            print(f"  ERROR loading {filename}: {str(e)}")
+            continue
+    
+    # Check if we loaded any data
+    if not all_dfs:
+        print("ERROR: No data files were successfully loaded!")
+        sys.exit(1)
+    
+    print(f"\nSuccessfully loaded {len(all_dfs)} files")
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Save the combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    print(f"\nSaving combined dataset to {output_file}...")
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Print summary information
+    print("\n" + "="*50)
+    print("COMBINED DATASET SUMMARY")
+    print("="*50)
+    print(f"Shape: {combined_df.shape} (rows: {combined_df.shape[0]}, columns: {combined_df.shape[1]})")
+    print(f"\nYears included: {sorted(combined_df['year'].unique())}")
+    print(f"Date range: {combined_df['year'].min()} - {combined_df['year'].max()}")
+    
+    print("\nColumn information:")
+    print(combined_df.info())
+    
+    print("\nNull values per column:")
+    null_counts = combined_df.isnull().sum()
+    for col, count in null_counts.items():
+        if count > 0:
+            print(f"  {col}: {count} ({count/len(combined_df)*100:.1f}%)")
+    
+    print("\nRecords per year:")
+    year_counts = combined_df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count} appointments")
+    
+    print(f"\nCombined dataset saved successfully to: {output_file}")
+    
+    return combined_df
+
+if __name__ == "__main__":
+    # Run the main function
+    try:
+        combined_df = load_and_combine_appointments()
+        print("\nstep completed successfully!")
+    except Exception as e:
+        print(f"\nERROR: step failed with error: {str(e)}")
+        sys.exit(1)

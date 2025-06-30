@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize name for better matching:
+    - Convert to lowercase
+    - Remove extra spaces
+    - Handle common variations
+    """
+    if pd.isna(name):
+        return ""
+    
+    # Convert to string and lowercase
+    name = str(name).lower().strip()
+    
+    # Remove multiple spaces
+    name = ' '.join(name.split())
+    
+    # Remove common titles and suffixes
+    titles = ['mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'hon.']
+    suffixes = ['jr.', 'sr.', 'ii', 'iii', 'iv']
+    
+    for title in titles:
+        if name.startswith(title + ' '):
+            name = name[len(title)+1:]
+    
+    for suffix in suffixes:
+        if name.endswith(' ' + suffix):
+            name = name[:-len(suffix)-1]
+    
+    return name
+
+def normalize_text(text):
+    """
+    Normalize text fields for better matching:
+    - Convert to lowercase
+    - Remove extra spaces
+    """
+    if pd.isna(text):
+        return ""
+    
+    # Convert to string and lowercase
+    text = str(text).lower().strip()
+    
+    # Remove multiple spaces
+    text = ' '.join(text.split())
+    
+    return text
+
+def main():
+    """
+    Identify and mark reappointments based on repeated appointments.
+    """
+    
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution10/analysis_data")
+    input_file = data_dir / "step2_key_columns_data.csv"
+    output_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"Error: Required columns missing: {missing_cols}")
+        sys.exit(1)
+    
+    # Create normalized columns for matching
+    print("\nNormalizing data for matching...")
+    df['name_normalized'] = df['name'].apply(normalize_name)
+    df['position_normalized'] = df['position'].apply(normalize_text)
+    df['org_normalized'] = df['org'].apply(normalize_text)
+    
+    # Initialize reappointed column if it doesn't exist
+    if 'reappointed' not in df.columns:
+        df['reappointed'] = False
+        print("Created new 'reappointed' column")
+    else:
+        # Convert to boolean if needed
+        if df['reappointed'].dtype != 'bool':
+            df['reappointed'] = df['reappointed'].fillna(False).astype(bool)
+    
+    # Count initial reappointments
+    initial_reappointments = df['reappointed'].sum()
+    print(f"\nInitial reappointments in dataset: {initial_reappointments:,}")
+    
+    # Sort by year to ensure chronological order
+    df = df.sort_values('year').reset_index(drop=True)
+    
+    # Create a copy to track newly identified reappointments
+    newly_marked = 0
+    
+    # Group by normalized name, position, and org
+    print("\nIdentifying repeat appointments...")
+    grouped = df.groupby(['name_normalized', 'position_normalized', 'org_normalized'])
+    
+    # Process each group
+    for (name_norm, pos_norm, org_norm), group in grouped:
+        # Skip if empty normalized values
+        if not name_norm or not pos_norm or not org_norm:
+            continue
+        
+        # Skip single occurrences
+        if len(group) <= 1:
+            continue
+        
+        # Get indices sorted by year
+        group_sorted = group.sort_values('year')
+        indices = group_sorted.index.tolist()
+        
+        # Mark all except the first as reappointments
+        for idx in indices[1:]:
+            if not df.loc[idx, 'reappointed']:
+                df.loc[idx, 'reappointed'] = True
+                newly_marked += 1
+    
+    # Handle edge cases: Check for very similar names (typos, middle initials)
+    print("\nChecking for potential name variations...")
+    
+    # Group by position and org to find potential name variations
+    name_variations_found = 0
+    
+    for (pos_norm, org_norm), group in df.groupby(['position_normalized', 'org_normalized']):
+        if not pos_norm or not org_norm:
+            continue
+        
+        # Get unique normalized names in this position/org
+        unique_names = group['name_normalized'].unique()
+        
+        # Skip if only one unique name
+        if len(unique_names) <= 1:
+            continue
+        
+        # Check for very similar names (e.g., "john smith" vs "john a smith")
+        for i, name1 in enumerate(unique_names):
+            for name2 in unique_names[i+1:]:
+                # Check if one name contains the other (potential middle initial)
+                if name1 in name2 or name2 in name1:
+                    # Get all entries for both names
+                    entries1 = group[group['name_normalized'] == name1]
+                    entries2 = group[group['name_normalized'] == name2]
+                    
+                    # Combine and sort by year
+                    all_entries = pd.concat([entries1, entries2]).sort_values('year')
+                    
+                    # Mark all except the first as reappointments
+                    for idx in all_entries.index[1:]:
+                        if not df.loc[idx, 'reappointed']:
+                            df.loc[idx, 'reappointed'] = True
+                            name_variations_found += 1
+    
+    # Remove temporary normalized columns before saving
+    df = df.drop(columns=['name_normalized', 'position_normalized', 'org_normalized'])
+    
+    # Save the updated dataset
+    df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nUpdated dataset saved to: {output_file}")
+    
+    # Print statistics
+    final_reappointments = df['reappointed'].sum()
+    total_newly_identified = final_reappointments - initial_reappointments
+    
+    print("\n" + "="*50)
+    print("REAPPOINTMENT IDENTIFICATION RESULTS")
+    print("="*50)
+    
+    print(f"\nInitial reappointments: {initial_reappointments:,}")
+    print(f"Final reappointments: {final_reappointments:,}")
+    print(f"Newly identified reappointments: {total_newly_identified:,}")
+    print(f"  - From exact matches: {newly_marked:,}")
+    print(f"  - From name variations: {name_variations_found:,}")
+    
+    # Calculate percentage increase
+    if initial_reappointments > 0:
+        pct_increase = ((final_reappointments - initial_reappointments) / initial_reappointments) * 100
+        print(f"\nPercentage increase: {pct_increase:.1f}%")
+    
+    # Show breakdown by year
+    print("\nReappointments by year:")
+    print("-" * 30)
+    year_stats = df.groupby('year')['reappointed'].agg(['sum', 'count'])
+    year_stats['percentage'] = (year_stats['sum'] / year_stats['count']) * 100
+    
+    for year, row in year_stats.iterrows():
+        print(f"{year}: {int(row['sum']):,} reappointments out of {int(row['count']):,} " +
+              f"({row['percentage']:.1f}%)")
+    
+    # Overall statistics
+    print(f"\nOverall reappointment rate: {(final_reappointments / len(df)) * 100:.2f}%")
+    
+    print("\n" + "="*50)
+    print("Script completed successfully!")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+# Define input and output paths
+input_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step1_combined_appointments.csv")
+output_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step2_key_columns_data.csv")
+
+# Load the combined dataset
+try:
+    df = pd.read_csv(input_file)
+except FileNotFoundError:
+    print(f"Error: Input file not found at {input_file}")
+    sys.exit(1)
+except pd.errors.EmptyDataError:
+    print(f"Error: Input file {input_file} is empty.")
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error while loading {input_file}: {e}")
+    sys.exit(1)
+
+# Standardize column name mapping (handle slight variations)
+column_mapping = {
+    'reappointed': 'reappointed',
+    're-appointment': 'reappointed',
+    're_appointed': 'reappointed',
+    
+    'name': 'name',
+    'full_name': 'name',
+    
+    'position': 'position',
+    'appointment': 'position',
+    'role': 'position',
+    
+    'org': 'org',
+    'organization': 'org',
+    'agency': 'org',
+    
+    'year': 'year'
+}
+
+# Create a reverse mapping for use in renaming
+reverse_mapping = {}
+for k, v in column_mapping.items():
+    reverse_mapping.setdefault(v, []).append(k)
+
+# Find and rename matched columns
+new_columns = {}
+for standard_name, possible_names in reverse_mapping.items():
+    for col in df.columns:
+        if col.lower() in possible_names:
+            new_columns[col] = standard_name
+            break
+
+# Check required columns are present
+required = ['reappointed', 'name', 'position', 'org', 'year']
+missing = [col for col in required if col not in new_columns.values()]
+if missing:
+    print(f"Error: Missing required columns after standardization: {missing}")
+    sys.exit(1)
+
+# Rename columns
+df_renamed = df.rename(columns=new_columns)
+
+# Select only the standardized key columns
+df_filtered = df_renamed[required]
+
+# Save the filtered dataset
+try:
+    df_filtered.to_csv(output_file, index=False)
+    print(f"Filtered dataset saved to: {output_file}")
+except Exception as e:
+    print(f"Error while saving filtered dataset: {e}")
+    sys.exit(1)
+
+# Print extracted column info and missing values
+print("Extracted columns:")
+print(df_filtered.columns.tolist())
+print("\nMissing values per column:")
+print(df_filtered.isnull().sum())

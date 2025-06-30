@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+import warnings
+
+def normalize_text(text):
+    """Lowercase and strip surrounding whitespace for consistent comparison."""
+    if pd.isna(text):
+        return ""
+    return str(text).strip().lower()
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step3_repeats_marked.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: Empty file - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error loading {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate necessary columns
+    required_columns = ["name", "position", "org", "year", "reappointed"]
+    for col in required_columns:
+        if col not in df.columns:
+            print(f"Error: Required column '{col}' not found in data.", file=sys.stderr)
+            sys.exit(1)
+
+    # Ensure year is numeric
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    if df["year"].isnull().any():
+        warnings.warn("Missing or invalid years detected. These rows will be ignored in sorting.")
+
+    # Normalize text for deduplication
+    df["_norm_name"] = df["name"].apply(normalize_text)
+    df["_norm_position"] = df["position"].apply(normalize_text)
+    df["_norm_org"] = df["org"].apply(normalize_text)
+
+    df.sort_values(by=["_norm_name", "_norm_position", "_norm_org", "year"], kind="stable", inplace=True)
+
+    df["_reappointed_flag"] = False
+
+    # Group and identify reappointments
+    group_cols = ["_norm_name", "_norm_position", "_norm_org"]
+    grouped = df.groupby(group_cols, sort=False)
+
+    for group_keys, group_df in grouped:
+        if group_df.empty or group_df.shape[0] <= 1:
+            continue  # Only one appointment, skip
+
+        indices = group_df.index.tolist()
+        first_idx = indices[0]  # First chronological appointment
+        rest_indices = indices[1:]  # Reappointments
+        df.loc[rest_indices, "_reappointed_flag"] = True
+
+    # Fill reappointed column (overwrite only where identified by logic)
+    reappointed_original = df["reappointed"].fillna(False).astype(bool)
+    reappointed_updated = reappointed_original | df["_reappointed_flag"]
+
+    additional_marked = (reappointed_updated & ~reappointed_original).sum()
+
+    df.loc[:, "reappointed"] = reappointed_updated
+    df.drop(columns=["_norm_name", "_norm_position", "_norm_org", "_reappointed_flag"], inplace=True)
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_file, index=False)
+
+    print("Updated dataset with reappointments saved to:", output_file)
+    print("Additional reappointments identified:", additional_marked)
+    print("Total records marked as reappointed:", df["reappointed"].sum())
+
+if __name__ == "__main__":
+    main()

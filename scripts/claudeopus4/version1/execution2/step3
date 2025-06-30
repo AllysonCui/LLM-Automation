@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark repeat appointments (reappointments) based on 
+name, position, and organization combinations.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize a name for comparison by handling common variations.
+    """
+    if pd.isna(name):
+        return ''
+    
+    # Convert to string and strip whitespace
+    name = str(name).strip()
+    
+    # Convert to lowercase for comparison
+    name = name.lower()
+    
+    # Remove common titles
+    titles = ['dr.', 'dr', 'mr.', 'mr', 'mrs.', 'mrs', 'ms.', 'ms', 'prof.', 'prof']
+    for title in titles:
+        if name.startswith(title + ' '):
+            name = name[len(title)+1:].strip()
+    
+    # Remove extra spaces
+    name = ' '.join(name.split())
+    
+    return name
+
+def create_group_key(row):
+    """
+    Create a normalized group key for identifying same person/position/org combinations.
+    """
+    name = normalize_name(row.get('name', ''))
+    position = str(row.get('position', '')).lower().strip() if pd.notna(row.get('position')) else ''
+    org = str(row.get('org', '')).lower().strip() if pd.notna(row.get('org')) else ''
+    
+    return f"{name}|{position}|{org}"
+
+def load_and_process_data():
+    """
+    Load the dataset and identify repeat appointments.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    input_file = data_dir / "step2_key_columns_data.csv"
+    output_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    print("Loading filtered dataset...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset with {len(df):,} rows")
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_columns = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    # Ensure year is numeric
+    if df['year'].dtype == 'object':
+        try:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        except Exception as e:
+            print(f"Error converting year to numeric: {str(e)}")
+    
+    # Handle reappointed column
+    if 'reappointed' not in df.columns:
+        print("Warning: 'reappointed' column not found. Creating new column.")
+        df['reappointed'] = False
+    
+    # Store original reappointed values for comparison
+    original_reappointed_count = df['reappointed'].sum() if df['reappointed'].dtype == bool else df['reappointed'].value_counts().get(True, 0)
+    
+    # Create a copy to work with
+    df_work = df.copy()
+    
+    # Create group key for each row
+    print("\nCreating normalized group keys...")
+    df_work['group_key'] = df_work.apply(create_group_key, axis=1)
+    
+    # Remove rows with empty group keys (missing all key fields)
+    empty_keys = df_work['group_key'] == '||'
+    if empty_keys.sum() > 0:
+        print(f"Warning: {empty_keys.sum()} rows have empty name/position/org. Excluding from analysis.")
+        df_work = df_work[~empty_keys].copy()
+    
+    # Sort by group key and year for chronological ordering
+    print("Sorting data chronologically...")
+    df_work = df_work.sort_values(['group_key', 'year'], kind='stable')
+    
+    # Reset index to ensure proper indexing
+    df_work = df_work.reset_index(drop=True)
+    
+    # Initialize new reappointed column
+    df_work['reappointed_new'] = False
+    
+    # Process each group
+    print("\nIdentifying repeat appointments...")
+    groups_processed = 0
+    total_groups = df_work['group_key'].nunique()
+    
+    for group_key, group_data in df_work.groupby('group_key'):
+        if len(group_data) > 1:  # Only process groups with multiple occurrences
+            # Get indices of all occurrences except the first
+            group_indices = group_data.index.tolist()
+            if len(group_indices) > 1:
+                # Mark all except the first as reappointments
+                df_work.loc[group_indices[1:], 'reappointed_new'] = True
+                groups_processed += 1
+    
+    print(f"✓ Processed {groups_processed:,} groups with multiple appointments")
+    
+    # Merge the new reappointed values back to original dataframe
+    # First, add the group_key to original df
+    df['group_key'] = df.apply(create_group_key, axis=1)
+    
+    # Create a mapping of group_key + year to reappointed_new
+    reappoint_map = df_work.set_index(['group_key', 'year'])['reappointed_new'].to_dict()
+    
+    # Apply the mapping to original dataframe
+    df['reappointed_updated'] = df.apply(
+        lambda row: reappoint_map.get((row['group_key'], row['year']), False),
+        axis=1
+    )
+    
+    # Combine with original reappointed column (preserve True values from original)
+    if df['reappointed'].dtype == bool:
+        df['reappointed'] = df['reappointed'] | df['reappointed_updated']
+    else:
+        # Handle non-boolean reappointed column
+        df['reappointed'] = df.apply(
+            lambda row: True if (row['reappointed'] == True or row['reappointed'] == 'True' or 
+                               row['reappointed'] == 1 or row['reappointed_updated']) else False,
+            axis=1
+        )
+    
+    # Drop temporary columns
+    df = df.drop(columns=['group_key', 'reappointed_updated'])
+    
+    # Save updated dataset
+    df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\n✓ Updated dataset saved to: {output_file}")
+    
+    return df, original_reappointed_count, df_work
+
+def print_statistics(df, original_count, df_work):
+    """
+    Print statistics about the reappointment identification process.
+    """
+    print("\n" + "="*50)
+    print("REAPPOINTMENT IDENTIFICATION STATISTICS")
+    print("="*50)
+    
+    # Calculate new statistics
+    new_reappointed_count = df['reappointed'].sum()
+    additional_identified = new_reappointed_count - original_count
+    
+    print(f"\nOriginal reappointments: {original_count:,}")
+    print(f"Total reappointments after processing: {new_reappointed_count:,}")
+    print(f"Additional reappointments identified: {additional_identified:,}")
+    
+    if new_reappointed_count > 0:
+        pct_increase = (additional_identified / original_count * 100) if original_count > 0 else float('inf')
+        print(f"Percentage increase: {pct_increase:.1f}%")
+    
+    # Group statistics
+    print(f"\nTotal unique name/position/org combinations: {df_work['group_key'].nunique():,}")
+    
+    # Find groups with most appointments
+    group_counts = df_work.groupby('group_key').size().sort_values(ascending=False)
+    groups_with_multiple = (group_counts > 1).sum()
+    print(f"Combinations with multiple appointments: {groups_with_multiple:,}")
+    
+    print("\nTop 10 most frequent appointments (same person/position/org):")
+    for i, (group_key, count) in enumerate(group_counts.head(10).items(), 1):
+        parts = group_key.split('|')
+        name = parts[0].title() if len(parts) > 0 else 'Unknown'
+        position = parts[1].title() if len(parts) > 1 else 'Unknown'
+        org = parts[2].title() if len(parts) > 2 else 'Unknown'
+        print(f"  {i}. {name} - {position} at {org}: {count} appointments")
+    
+    # Year distribution of newly identified reappointments
+    print("\nNewly identified reappointments by year:")
+    newly_identified = df_work[df_work['reappointed_new'] == True]
+    if len(newly_identified) > 0:
+        year_dist = newly_identified['year'].value_counts().sort_index()
+        for year, count in year_dist.items():
+            print(f"  {year}: {count:,}")
+    
+    # Data quality check
+    print("\nData quality metrics:")
+    missing_names = df['name'].isna().sum()
+    missing_positions = df['position'].isna().sum()
+    missing_orgs = df['org'].isna().sum()
+    print(f"  Missing names: {missing_names:,}")
+    print(f"  Missing positions: {missing_positions:,}")
+    print(f"  Missing organizations: {missing_orgs:,}")
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Repeat Appointment Identification Script")
+    print("Marking repeat appointments based on name/position/org combinations")
+    print("-" * 50)
+    
+    try:
+        # Process data
+        df, original_count, df_work = load_and_process_data()
+        
+        # Print statistics
+        print_statistics(df, original_count, df_work)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

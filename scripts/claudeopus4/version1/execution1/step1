@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+
+"""
+Script to combine New Brunswick government appointment data from 2013-2024.
+Loads 12 CSV files, adds year column, combines them, and saves the result.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+def main():
+    """Main function to combine appointment CSV files."""
+    
+    # Define years to process
+    years = range(2013, 2025)  # 2013-2024 inclusive
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("scripts/claudeopus4/version1/execution1/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # List to store DataFrames
+    dfs = []
+    
+    # Load each CSV file
+    for year in years:
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            print(f"Loading {filename}...")
+            df = pd.read_csv(filename)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            dfs.append(df)
+            print(f"  - Loaded {len(df)} rows from {year}")
+            
+        except FileNotFoundError:
+            print(f"  - ERROR: File {filename} not found, skipping...")
+        except Exception as e:
+            print(f"  - ERROR loading {filename}: {str(e)}")
+            sys.exit(1)
+    
+    # Check if any files were loaded
+    if not dfs:
+        print("ERROR: No CSV files were successfully loaded!")
+        sys.exit(1)
+    
+    # Combine all DataFrames
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(dfs, ignore_index=True)
+    
+    # Save combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_file, index=False)
+    print(f"\nCombined dataset saved to: {output_file}")
+    
+    # Print shape and basic info
+    print("\n=== Combined Dataset Information ===")
+    print(f"Shape: {combined_df.shape} (rows, columns)")
+    print(f"Total appointments: {len(combined_df)}")
+    print(f"Years covered: {combined_df['year'].min()} - {combined_df['year'].max()}")
+    print(f"Number of unique years: {combined_df['year'].nunique()}")
+    
+    print("\nColumn names and types:")
+    print(combined_df.dtypes)
+    
+    print("\nMemory usage:")
+    print(combined_df.memory_usage(deep=True))
+    
+    # Print summary by year
+    print("\nAppointments by year:")
+    year_counts = combined_df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count} appointments")
+    
+    print("\nScript completed successfully!")
+
+if __name__ == "__main__":
+    main()

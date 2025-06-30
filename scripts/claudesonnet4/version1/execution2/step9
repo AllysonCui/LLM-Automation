@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Reappointment Trend Regression Analysis
+
+This script performs comprehensive linear regression analysis on government-wide
+reappointment proportions to determine statistical significance of trends.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+from scipy import stats
+from scipy.stats import linregress, t
+import warnings
+
+def load_and_prepare_data(file_path):
+    """
+    Load and prepare data for regression analysis.
+    
+    Args:
+        file_path (Path): Path to the annual proportions CSV file
+    
+    Returns:
+        tuple: (years, proportions, original_data)
+    """
+    print(f"Loading annual proportions from: {file_path}")
+    
+    if not file_path.exists():
+        raise FileNotFoundError(f"Input file not found: {file_path}")
+    
+    # Load the data
+    df = pd.read_csv(file_path)
+    print(f"Loaded dataset with shape: {df.shape}")
+    
+    # Check for required columns
+    required_columns = ['year', 'reappointment_proportion']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Filter for years with actual data (non-zero appointments)
+    valid_data = df[(df['total_appointments'] > 0) & (df['reappointment_proportion'].notna())].copy()
+    
+    if len(valid_data) < 2:
+        raise ValueError("Insufficient data for regression analysis (need at least 2 data points)")
+    
+    print(f"Valid data points for analysis: {len(valid_data)}")
+    print(f"Year range: {valid_data['year'].min()}-{valid_data['year'].max()}")
+    
+    # Prepare variables for regression
+    years = valid_data['year'].values
+    proportions = valid_data['reappointment_proportion'].values
+    
+    return years, proportions, valid_data
+
+def perform_regression_analysis(years, proportions):
+    """
+    Perform comprehensive linear regression analysis.
+    
+    Args:
+        years (np.array): Year values (X variable)
+        proportions (np.array): Reappointment proportions (Y variable)
+    
+    Returns:
+        dict: Comprehensive regression results
+    """
+    print("\nPerforming linear regression analysis...")
+    
+    # Perform linear regression
+    slope, intercept, r_value, p_value, std_err = linregress(years, proportions)
+    
+    # Calculate additional statistics
+    n = len(years)
+    r_squared = r_value ** 2
+    
+    # Calculate degrees of freedom
+    df = n - 2
+    
+    # Calculate t-statistic for slope
+    t_stat = slope / std_err
+    
+    # Calculate 95% confidence intervals for slope
+    t_critical = t.ppf(0.975, df)  # Two-tailed, 95% confidence
+    slope_ci_lower = slope - t_critical * std_err
+    slope_ci_upper = slope + t_critical * std_err
+    
+    # Calculate confidence intervals for intercept
+    x_mean = np.mean(years)
+    ss_x = np.sum((years - x_mean) ** 2)
+    
+    # Standard error of intercept
+    y_pred = slope * years + intercept
+    residuals = proportions - y_pred
+    mse = np.sum(residuals ** 2) / df
+    se_intercept = np.sqrt(mse * (1/n + x_mean**2 / ss_x))
+    
+    intercept_ci_lower = intercept - t_critical * se_intercept
+    intercept_ci_upper = intercept + t_critical * se_intercept
+    
+    # Calculate predicted values and residuals
+    predicted = slope * years + intercept
+    residuals = proportions - predicted
+    
+    # Calculate additional fit statistics
+    ss_total = np.sum((proportions - np.mean(proportions)) ** 2)
+    ss_residual = np.sum(residuals ** 2)
+    
+    results = {
+        'n_observations': n,
+        'degrees_freedom': df,
+        'slope': slope,
+        'intercept': intercept,
+        'r_value': r_value,
+        'r_squared': r_squared,
+        'p_value': p_value,
+        'std_err_slope': std_err,
+        'std_err_intercept': se_intercept,
+        't_statistic': t_stat,
+        'slope_ci_lower': slope_ci_lower,
+        'slope_ci_upper': slope_ci_upper,
+        'intercept_ci_lower': intercept_ci_lower,
+        'intercept_ci_upper': intercept_ci_upper,
+        'predicted_values': predicted,
+        'residuals': residuals,
+        'mse': mse,
+        'rmse': np.sqrt(mse),
+        'ss_total': ss_total,
+        'ss_residual': ss_residual
+    }
+    
+    return results
+
+def perform_diagnostics(years, proportions, results):
+    """
+    Perform regression diagnostics.
+    
+    Args:
+        years (np.array): Year values
+        proportions (np.array): Reappointment proportions
+        results (dict): Regression results
+    
+    Returns:
+        dict: Diagnostic results
+    """
+    print("Performing regression diagnostics...")
+    
+    residuals = results['residuals']
+    n = len(residuals)
+    
+    # Durbin-Watson test for autocorrelation
+    dw_stat = np.sum(np.diff(residuals) ** 2) / np.sum(residuals ** 2)
+    
+    # Outlier detection using standardized residuals
+    standardized_residuals = residuals / results['rmse']
+    outliers = np.abs(standardized_residuals) > 2.0  # Points beyond ±2 standard deviations
+    
+    # Calculate leverage (hat values)
+    x_mean = np.mean(years)
+    ss_x = np.sum((years - x_mean) ** 2)
+    leverage = 1/n + (years - x_mean)**2 / ss_x
+    
+    # Cook's distance for influential points
+    p = 2  # Number of parameters (slope + intercept)
+    cooks_d = (standardized_residuals**2 / p) * (leverage / (1 - leverage))
+    
+    # Normality test on residuals (Shapiro-Wilk if n <= 50, else Kolmogorov-Smirnov)
+    if n <= 50:
+        normality_stat, normality_p = stats.shapiro(residuals)
+        normality_test = "Shapiro-Wilk"
+    else:
+        # For larger samples, use Kolmogorov-Smirnov test against normal distribution
+        normality_stat, normality_p = stats.kstest(stats.zscore(residuals), 'norm')
+        normality_test = "Kolmogorov-Smirnov"
+    
+    diagnostics = {
+        'durbin_watson': dw_stat,
+        'outlier_count': np.sum(outliers),
+        'outlier_indices': np.where(outliers)[0],
+        'max_standardized_residual': np.max(np.abs(standardized_residuals)),
+        'leverage': leverage,
+        'cooks_distance': cooks_d,
+        'max_cooks_d': np.max(cooks_d),
+        'normality_test': normality_test,
+        'normality_statistic': normality_stat,
+        'normality_p_value': normality_p,
+        'standardized_residuals': standardized_residuals
+    }
+    
+    return diagnostics
+
+def calculate_trend_metrics(years, results):
+    """
+    Calculate trend-specific metrics.
+    
+    Args:
+        years (np.array): Year values
+        results (dict): Regression results
+    
+    Returns:
+        dict: Trend metrics
+    """
+    print("Calculating trend metrics...")
+    
+    slope = results['slope']
+    
+    # Annual change in percentage points
+    annual_change_pp = slope * 100  # Convert to percentage points
+    
+    # Total change over the period
+    year_span = years.max() - years.min()
+    total_change_pp = slope * year_span * 100
+    
+    # Determine trend direction
+    if slope > 0:
+        trend_direction = "increasing"
+    elif slope < 0:
+        trend_direction = "decreasing"
+    else:
+        trend_direction = "stable"
+    
+    # Statistical significance
+    is_significant = results['p_value'] < 0.05
+    
+    # Calculate percentage change relative to starting value
+    start_value = results['intercept'] + slope * years.min()
+    end_value = results['intercept'] + slope * years.max()
+    
+    if start_value != 0:
+        relative_change_percent = ((end_value - start_value) / start_value) * 100
+    else:
+        relative_change_percent = np.inf if end_value > 0 else -np.inf if end_value < 0 else 0
+    
+    trend_metrics = {
+        'trend_direction': trend_direction,
+        'is_significant': is_significant,
+        'annual_change_pp': annual_change_pp,
+        'total_change_pp': total_change_pp,
+        'year_span': year_span,
+        'start_value': start_value,
+        'end_value': end_value,
+        'relative_change_percent': relative_change_percent
+    }
+    
+    return trend_metrics
+
+def generate_comprehensive_report(years, proportions, data, results, diagnostics, trend_metrics, output_path):
+    """
+    Generate comprehensive statistical report.
+    
+    Args:
+        years (np.array): Year values
+        proportions (np.array): Reappointment proportions
+        data (pd.DataFrame): Original data
+        results (dict): Regression results
+        diagnostics (dict): Diagnostic results
+        trend_metrics (dict): Trend metrics
+        output_path (Path): Path to save the report
+    """
+    print(f"\nGenerating comprehensive report: {output_path}")
+    
+    with open(output_path, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("NEW BRUNSWICK GOVERNMENT REAPPOINTMENT TREND ANALYSIS\n")
+        f.write("Linear Regression Analysis Report\n")
+        f.write(f"Generated: June 30, 2025\n")
+        f.write("="*80 + "\n\n")
+        
+        # Data Summary
+        f.write("DATA SUMMARY\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Analysis Period: {years.min()}-{years.max()}\n")
+        f.write(f"Number of Observations: {results['n_observations']}\n")
+        f.write(f"Years Analyzed: {', '.join(map(str, years))}\n")
+        f.write(f"Reappointment Proportions Range: {proportions.min():.4f} - {proportions.max():.4f}\n")
+        f.write(f"Mean Reappointment Proportion: {np.mean(proportions):.4f} ({np.mean(proportions)*100:.2f}%)\n")
+        f.write(f"Standard Deviation: {np.std(proportions):.4f}\n\n")
+        
+        # Raw Data
+        f.write("YEAR-BY-YEAR DATA\n")
+        f.write("-"*40 + "\n")
+        for year, prop in zip(years, proportions):
+            f.write(f"{year}: {prop:.4f} ({prop*100:.2f}%)\n")
+        f.write("\n")
+        
+        # Regression Results
+        f.write("LINEAR REGRESSION RESULTS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Regression Equation: Y = {results['slope']:.6f} * X + {results['intercept']:.6f}\n")
+        f.write(f"Where Y = reappointment proportion, X = year\n\n")
+        
+        f.write("Coefficient Estimates:\n")
+        f.write(f"  Slope (β₁): {results['slope']:.6f}\n")
+        f.write(f"  Intercept (β₀): {results['intercept']:.6f}\n")
+        f.write(f"  Standard Error of Slope: {results['std_err_slope']:.6f}\n")
+        f.write(f"  Standard Error of Intercept: {results['std_err_intercept']:.6f}\n\n")
+        
+        f.write("Statistical Significance:\n")
+        f.write(f"  t-statistic: {results['t_statistic']:.4f}\n")
+        f.write(f"  p-value: {results['p_value']:.6f}\n")
+        f.write(f"  Significant at α = 0.05: {'Yes' if trend_metrics['is_significant'] else 'No'}\n\n")
+        
+        f.write("Model Fit:\n")
+        f.write(f"  R-squared: {results['r_squared']:.4f}\n")
+        f.write(f"  Correlation coefficient (r): {results['r_value']:.4f}\n")
+        f.write(f"  Root Mean Square Error: {results['rmse']:.6f}\n")
+        f.write(f"  Degrees of Freedom: {results['degrees_freedom']}\n\n")
+        
+        f.write("95% Confidence Intervals:\n")
+        f.write(f"  Slope: [{results['slope_ci_lower']:.6f}, {results['slope_ci_upper']:.6f}]\n")
+        f.write(f"  Intercept: [{results['intercept_ci_lower']:.6f}, {results['intercept_ci_upper']:.6f}]\n\n")
+        
+        # Trend Analysis
+        f.write("TREND ANALYSIS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Trend Direction: {trend_metrics['trend_direction'].upper()}\n")
+        f.write(f"Annual Change: {trend_metrics['annual_change_pp']:.4f} percentage points per year\n")
+        f.write(f"Total Change ({trend_metrics['year_span']:.0f} years): {trend_metrics['total_change_pp']:.4f} percentage points\n")
+        f.write(f"Starting Value ({years.min()}): {trend_metrics['start_value']:.4f} ({trend_metrics['start_value']*100:.2f}%)\n")
+        f.write(f"Ending Value ({years.max()}): {trend_metrics['end_value']:.4f} ({trend_metrics['end_value']*100:.2f}%)\n")
+        
+        if abs(trend_metrics['relative_change_percent']) != np.inf:
+            f.write(f"Relative Change: {trend_metrics['relative_change_percent']:.2f}%\n")
+        f.write("\n")
+        
+        # Diagnostics
+        f.write("REGRESSION DIAGNOSTICS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Durbin-Watson Statistic: {diagnostics['durbin_watson']:.4f}\n")
+        
+        # Interpret Durbin-Watson
+        if 1.5 <= diagnostics['durbin_watson'] <= 2.5:
+            dw_interpretation = "No strong evidence of autocorrelation"
+        elif diagnostics['durbin_watson'] < 1.5:
+            dw_interpretation = "Possible positive autocorrelation"
+        else:
+            dw_interpretation = "Possible negative autocorrelation"
+        f.write(f"  Interpretation: {dw_interpretation}\n\n")
+        
+        f.write(f"Outlier Analysis:\n")
+        f.write(f"  Outliers (|standardized residual| > 2): {diagnostics['outlier_count']}\n")
+        if diagnostics['outlier_count'] > 0:
+            for idx in diagnostics['outlier_indices']:
+                f.write(f"    Year {years[idx]}: standardized residual = {diagnostics['standardized_residuals'][idx]:.3f}\n")
+        f.write(f"  Maximum Standardized Residual: {diagnostics['max_standardized_residual']:.4f}\n")
+        f.write(f"  Maximum Cook's Distance: {diagnostics['max_cooks_d']:.4f}\n\n")
+        
+        f.write(f"Normality of Residuals ({diagnostics['normality_test']}):\n")
+        f.write(f"  Test Statistic: {diagnostics['normality_statistic']:.4f}\n")
+        f.write(f"  p-value: {diagnostics['normality_p_value']:.4f}\n")
+        f.write(f"  Normality Assumption: {'Satisfied' if diagnostics['normality_p_value'] > 0.05 else 'Questionable'}\n\n")
+        
+        # Conclusions
+        f.write("CONCLUSIONS\n")
+        f.write("-"*40 + "\n")
+        
+        if trend_metrics['is_significant']:
+            significance_text = "statistically significant"
+        else:
+            significance_text = "not statistically significant"
+        
+        f.write(f"1. TREND DIRECTION: The government-wide reappointment proportion shows a ")
+        f.write(f"{trend_metrics['trend_direction']} trend over the {trend_metrics['year_span']:.0f}-year period.\n\n")
+        
+        f.write(f"2. STATISTICAL SIGNIFICANCE: The trend is {significance_text} ")
+        f.write(f"(p = {results['p_value']:.4f}, α = 0.05).\n\n")
+        
+        f.write(f"3. MAGNITUDE: The reappointment proportion changes by approximately ")
+        f.write(f"{abs(trend_metrics['annual_change_pp']):.4f} percentage points per year")
+        if trend_metrics['trend_direction'] == 'increasing':
+            f.write(f", representing an increase")
+        elif trend_metrics['trend_direction'] == 'decreasing':
+            f.write(f", representing a decrease")
+        f.write(f".\n\n")
+        
+        f.write(f"4. MODEL FIT: The linear model explains {results['r_squared']*100:.1f}% ")
+        f.write(f"of the variance in reappointment proportions (R² = {results['r_squared']:.4f}).\n\n")
+        
+        # Overall conclusion
+        if trend_metrics['is_significant']:
+            f.write("FINAL ANSWER: ")
+            if trend_metrics['trend_direction'] == 'increasing':
+                f.write("The government-wide reappointment proportion trend is INCREASING ")
+            else:
+                f.write("The government-wide reappointment proportion trend is DECLINING ")
+            f.write("over the 12-year period, and this trend IS statistically significant.\n")
+        else:
+            f.write("FINAL ANSWER: While the data suggests a ")
+            f.write(f"{trend_metrics['trend_direction']} trend in government-wide ")
+            f.write("reappointment proportions, this trend is NOT statistically significant ")
+            f.write("over the 12-year period.\n")
+
+def main():
+    """Main execution function."""
+    
+    try:
+        # Define input file path
+        input_file = Path("scripts/claudesonnet4/version1/execution2/analysis_data/step8_annual_proportions.csv")
+        
+        # Load and prepare data
+        years, proportions, data = load_and_prepare_data(input_file)
+        
+        # Perform regression analysis
+        results = perform_regression_analysis(years, proportions)
+        
+        # Perform diagnostics
+        diagnostics = perform_diagnostics(years, proportions, results)
+        
+        # Calculate trend metrics
+        trend_metrics = calculate_trend_metrics(years, results)
+        
+        # Define output path
+        output_dir = Path("scripts/claudesonnet4/version1/execution2/analysis_data")
+        output_file = output_dir / "step9_regression_results.txt"
+        
+        # Generate comprehensive report
+        generate_comprehensive_report(years, proportions, data, results, diagnostics, trend_metrics, output_file)
+        
+        # Print summary results
+        print("\n" + "="*80)
+        print("REGRESSION ANALYSIS SUMMARY")
+        print("="*80)
+        
+        print(f"Data: {len(years)} observations from {years.min()}-{years.max()}")
+        print(f"Regression Equation: Y = {results['slope']:.6f} * X + {results['intercept']:.6f}")
+        print(f"R-squared: {results['r_squared']:.4f}")
+        print(f"p-value: {results['p_value']:.6f}")
+        print(f"Trend Direction: {trend_metrics['trend_direction'].upper()}")
+        print(f"Statistical Significance: {'YES' if trend_metrics['is_significant'] else 'NO'} (α = 0.05)")
+        print(f"Annual Change: {trend_metrics['annual_change_pp']:.4f} percentage points/year")
+        print(f"Total Change: {trend_metrics['total_change_pp']:.4f} percentage points")
+        
+        print(f"\n" + "="*80)
+        print("FINAL ANSWER")
+        print("="*80)
+        
+        if trend_metrics['is_significant']:
+            if trend_metrics['trend_direction'] == 'increasing':
+                conclusion = "The government-wide reappointment proportion trend is INCREASING over the 12-year period, and this trend IS statistically significant."
+            else:
+                conclusion = "The government-wide reappointment proportion trend is DECLINING over the 12-year period, and this trend IS statistically significant."
+        else:
+            conclusion = f"While the data suggests a {trend_metrics['trend_direction']} trend in government-wide reappointment proportions, this trend is NOT statistically significant over the 12-year period."
+        
+        print(conclusion)
+        
+        print(f"\nDetailed results saved to: {output_file}")
+        
+    except Exception as e:
+        print(f"Error in main execution: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Document assumptions and approach
+    print("REGRESSION ANALYSIS ASSUMPTIONS:")
+    print("1. Linear relationship between year and reappointment proportion")
+    print("2. Independence of observations (checked via Durbin-Watson test)")
+    print("3. Homoscedasticity (constant variance of residuals)")
+    print("4. Normality of residuals (tested via Shapiro-Wilk or K-S test)")
+    print("5. Statistical significance threshold: α = 0.05")
+    print("6. Analysis includes only years with valid appointment data")
+    print("-" * 80)
+    
+    main()

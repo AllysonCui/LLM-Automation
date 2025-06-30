@@ -1,0 +1,77 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+
+RAW_DATA_DIR = 'raw_data'
+OUTPUT_DIR = 'scripts/gpt4o/version3/execution3/analysis_data'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Step 1: Combine all appointment files
+df_list = []
+for year in range(2013, 2025):
+    file_path = os.path.join(RAW_DATA_DIR, f'appointments_{year}.csv')
+    df = pd.read_csv(file_path)
+    df['year'] = year
+    df_list.append(df)
+combined_df = pd.concat(df_list, ignore_index=True)
+combined_df.to_csv(os.path.join(OUTPUT_DIR, 'step1_combined_appointments.csv'), index=False)
+
+# Step 2: Extract key columns
+key_cols = ['name', 'position', 'org', 'year']
+df_keys = combined_df[key_cols].dropna()
+df_keys['reappointed'] = False
+df_keys.to_csv(os.path.join(OUTPUT_DIR, 'step2_key_columns_data.csv'), index=False)
+
+# Step 3: Mark reappointments
+df_keys.sort_values(by=['name', 'position', 'org', 'year'], inplace=True)
+df_keys['reappointed'] = df_keys.duplicated(subset=['name', 'position', 'org'], keep='first')
+df_keys.to_csv(os.path.join(OUTPUT_DIR, 'step3_repeats_marked.csv'), index=False)
+
+# Step 4: Count total employees per org per year
+total_counts = df_keys.groupby(['org', 'year']).size().reset_index(name='total_employees')
+total_counts.to_csv(os.path.join(OUTPUT_DIR, 'step4_employee_counts.csv'), index=False)
+
+# Step 5: Count reappointments per org per year
+reappointed_counts = df_keys[df_keys['reappointed']].groupby(['org', 'year']).size().reset_index(name='reappointments')
+reappointed_counts.to_csv(os.path.join(OUTPUT_DIR, 'step5_reappointment_counts.csv'), index=False)
+
+# Step 6: Merge and calculate reappointment rates
+rates = pd.merge(total_counts, reappointed_counts, on=['org', 'year'], how='left')
+rates['reappointments'] = rates['reappointments'].fillna(0)
+rates['reappointment_rate'] = rates['reappointments'] / rates['total_employees']
+rates.to_csv(os.path.join(OUTPUT_DIR, 'step6_reappointment_rates.csv'), index=False)
+
+# Step 7: Identify org with highest rate per year
+yearly_max = rates.loc[rates.groupby('year')['reappointment_rate'].idxmax()]
+yearly_max.to_csv(os.path.join(OUTPUT_DIR, 'step7_yearly_max_rates.csv'), index=False)
+
+plt.figure(figsize=(10, 6))
+plt.plot(yearly_max['year'], yearly_max['reappointment_rate'], marker='o')
+plt.title('Yearly Max Reappointment Rates by Org')
+plt.xlabel('Year')
+plt.ylabel('Max Reappointment Rate')
+plt.grid(True)
+plt.savefig(os.path.join(OUTPUT_DIR, 'step7_yearly_max_reappointment_rates.png'))
+plt.close()
+
+# Step 8: Government-wide reappointment proportions
+gov_wide = df_keys.groupby('year').agg(total=('name', 'count'), reappointed=('reappointed', 'sum')).reset_index()
+gov_wide['proportion'] = gov_wide['reappointed'] / gov_wide['total']
+gov_wide.to_csv(os.path.join(OUTPUT_DIR, 'step8_annual_proportions.csv'), index=False)
+
+plt.figure(figsize=(10, 6))
+plt.plot(gov_wide['year'], gov_wide['proportion'], marker='o', color='orange')
+plt.title('Government-wide Annual Reappointment Proportions')
+plt.xlabel('Year')
+plt.ylabel('Proportion Reappointed')
+plt.grid(True)
+plt.savefig(os.path.join(OUTPUT_DIR, 'step8_annual_reappointment_proportions.png'))
+plt.close()
+
+# Step 9: Linear regression on proportions
+X = sm.add_constant(gov_wide['year'])
+y = gov_wide['proportion']
+model = sm.OLS(y, X).fit()
+with open(os.path.join(OUTPUT_DIR, 'step9_regression_results.txt'), 'w') as f:
+    f.write(model.summary().as_text())

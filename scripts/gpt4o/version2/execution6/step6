@@ -1,0 +1,41 @@
+# File: scripts/gpt4o/version2/execution6/step6_calculate_reappointment_rates.py
+
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+EMPLOYEE_FILE = Path("scripts/gpt4o/version2/execution6/analysis_data/step4_employee_counts.csv")
+REAPPOINT_FILE = Path("scripts/gpt4o/version2/execution6/analysis_data/step5_reappointment_counts.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution6/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step6_reappointment_rates.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+print("Starting Step 6: Calculating reappointment rates...")
+
+# Load inputs
+try:
+    emp_df = pd.read_csv(EMPLOYEE_FILE)
+    reappt_df = pd.read_csv(REAPPOINT_FILE)
+    print(f"Employee count records: {emp_df.shape}")
+    print(f"Reappointment count records: {reappt_df.shape}")
+except Exception as e:
+    raise RuntimeError(f"Failed to load one of the input files: {e}")
+
+# Merge on org and source_year
+merged_df = pd.merge(emp_df, reappt_df, on=['org', 'source_year'], how='left')
+merged_df['reappointment_count'] = merged_df['reappointment_count'].fillna(0).astype(int)
+
+# Compute rate safely
+merged_df['reappointment_rate'] = merged_df.apply(
+    lambda row: row['reappointment_count'] / row['employee_count']
+    if row['employee_count'] > 0 else 0,
+    axis=1
+)
+
+print(f"Reappointment rates calculated. Final shape: {merged_df.shape}")
+
+# Save result
+merged_df.to_csv(OUTPUT_FILE, index=False)
+print(f"Step 6 complete: Reappointment rates saved to {OUTPUT_FILE}")

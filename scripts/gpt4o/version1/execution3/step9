@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from scipy import stats
+from statsmodels.stats.stattools import durbin_watson
+from pathlib import Path
+import sys
+
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step8_annual_proportions.csv")
+    output_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step9_regression_results.txt")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input CSV: {e}", file=sys.stderr)
+        return
+
+    # Check required columns
+    if 'year' not in df.columns or 'reappointment_proportion' not in df.columns:
+        print("Missing required columns in input CSV.", file=sys.stderr)
+        return
+
+    df = df.dropna(subset=['year', 'reappointment_proportion'])
+    x = df['year'].astype(float).values
+    y = df['reappointment_proportion'].astype(float).values
+
+    if len(x) < 3:
+        print("Insufficient data for regression analysis.", file=sys.stderr)
+        return
+
+    try:
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    except Exception as e:
+        print(f"Regression failed: {e}", file=sys.stderr)
+        return
+
+    # Calculate confidence interval (95%)
+    t_crit = stats.t.ppf(1 - 0.025, df=len(x) - 2)
+    ci_margin = t_crit * std_err
+    ci_lower = slope - ci_margin
+    ci_upper = slope + ci_margin
+
+    # Residuals and diagnostics
+    y_pred = intercept + slope * x
+    residuals = y - y_pred
+    dw_stat = durbin_watson(residuals)
+    
+    # Outlier detection (simple threshold: standardized residual > 2)
+    std_resid = (residuals - residuals.mean()) / residuals.std()
+    outliers = df[np.abs(std_resid) > 2]
+
+    # Statistical interpretation
+    is_significant = p_value < 0.05
+    direction = 'increasing' if slope > 0 else 'decreasing'
+    total_change = slope * (x.max() - x.min())
+    annual_change_pct_points = slope * 100
+
+    # Write results
+    try:
+        with open(output_file, 'w') as f:
+            f.write("Government-wide Reappointment Trend Analysis (2013-2024)\n")
+            f.write("=======================================================\n\n")
+            f.write(f"Regression Equation: reappointment_proportion = {intercept:.6f} + {slope:.6f} * year\n")
+            f.write(f"R-squared: {r_value**2:.4f}\n")
+            f.write(f"p-value: {p_value:.6f}\n")
+            f.write(f"Standard Error: {std_err:.6f}\n")
+            f.write(f"95% Confidence Interval for Slope: ({ci_lower:.6f}, {ci_upper:.6f})\n")
+            f.write(f"Durbin-Watson Statistic: {dw_stat:.4f}\n")
+            f.write(f"Outliers Detected: {len(outliers)}\n")
+            f.write("\nOutlier Years: " + ", ".join(map(str, outliers['year'].tolist())) + "\n")
+            f.write("\n")
+            f.write(f"Trend Direction: {direction}\n")
+            f.write(f"Statistically Significant Trend (p < 0.05): {is_significant}\n")
+            f.write(f"Annual Change: {annual_change_pct_points:.4f} percentage points\n")
+            f.write(f"Total Change Over 12 Years: {total_change*100:.4f} percentage points\n")
+        print(f"Regression results saved to: {output_file}")
+    except Exception as e:
+        print(f"Failed to write output file: {e}", file=sys.stderr)
+        return
+
+    # Final answer printout
+    trend_statement = (
+        f"The government-wide reappointment proportion trend is {direction} and "
+        f"{'statistically significant' if is_significant else 'not statistically significant'}."
+    )
+    print("\n" + trend_statement)
+
+if __name__ == "__main__":
+    main()

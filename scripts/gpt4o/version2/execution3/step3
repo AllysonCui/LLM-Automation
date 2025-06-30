@@ -1,0 +1,43 @@
+import pandas as pd
+from pathlib import Path
+
+# Paths
+input_file = Path("scripts/gpt4o/version2/execution3/analysis_data/step2_key_columns_data.csv")
+output_dir = Path("scripts/gpt4o/version2/execution3/analysis_data")
+output_dir.mkdir(parents=True, exist_ok=True)
+output_file = output_dir / "step3_repeats_marked.csv"
+
+print("Starting Step 3: Marking reappointments based on repeated name-position-org combinations...\n")
+
+if not input_file.exists():
+    print(f"❌ Input file not found: {input_file}")
+    exit(1)
+
+try:
+    df = pd.read_csv(input_file)
+
+    # Normalize name, position, org to help identify duplicates
+    df['name_norm'] = df['name'].str.strip().str.lower()
+    df['position_norm'] = df['position'].str.strip().str.lower()
+    df['org_norm'] = df['org'].str.strip().str.lower()
+
+    # Sort to ensure earliest appearance is retained first
+    df = df.sort_values(by=["name_norm", "position_norm", "org_norm", "year"])
+
+    # Mark repeated combinations (first occurrence is not reappointed)
+    df['reappointed_flag'] = df.duplicated(subset=["name_norm", "position_norm", "org_norm"], keep='first')
+
+    # Replace original reappointed column with computed flag
+    df['reappointed'] = df['reappointed_flag']
+
+    # Drop intermediate normalization columns
+    df.drop(columns=["name_norm", "position_norm", "org_norm", "reappointed_flag"], inplace=True)
+
+    # Save result
+    df.to_csv(output_file, index=False)
+    print(f"✅ Successfully marked reappointments.")
+    print(f"📁 Output saved to: {output_file}")
+    print(f"🔁 Reappointments flagged: {df['reappointed'].sum()} out of {len(df)} total records.")
+
+except Exception as e:
+    print(f"❌ Failed to mark reappointments: {e}")

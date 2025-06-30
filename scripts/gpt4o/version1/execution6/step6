@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+# File paths
+counts_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step4_employee_counts.csv")
+reapps_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step5_reappointment_counts.csv")
+output_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step6_reappointment_rates.csv")
+
+# Load both datasets
+try:
+    df_counts = pd.read_csv(counts_file, index_col=0)
+    df_reapps = pd.read_csv(reapps_file, index_col=0)
+except FileNotFoundError as e:
+    print(f"Error: Missing input file: {e.filename}")
+    sys.exit(1)
+except pd.errors.EmptyDataError as e:
+    print("Error: One of the input files is empty.")
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error during file loading: {e}")
+    sys.exit(1)
+
+# Melt both DataFrames to long format
+df_counts_long = df_counts.reset_index().melt(id_vars="org", var_name="year", value_name="total_employees")
+df_reapps_long = df_reapps.reset_index().melt(id_vars="org", var_name="year", value_name="reappointments")
+
+# Convert 'year' to integer
+for df in [df_counts_long, df_reapps_long]:
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+# Merge datasets
+df_merged = pd.merge(df_counts_long, df_reapps_long, on=["org", "year"], how="outer")
+
+# Fill missing values with 0
+df_merged["total_employees"] = df_merged["total_employees"].fillna(0).astype(int)
+df_merged["reappointments"] = df_merged["reappointments"].fillna(0).astype(int)
+
+# Calculate reappointment rate safely
+df_merged["reappointment_rate"] = np.where(
+    df_merged["total_employees"] > 0,
+    df_merged["reappointments"] / df_merged["total_employees"],
+    np.nan
+)
+
+# Reorder columns
+df_final = df_merged[["org", "year", "total_employees", "reappointments", "reappointment_rate"]]
+
+# Save final table
+try:
+    df_final.to_csv(output_file, index=False)
+    print(f"Reappointment rates saved to: {output_file}")
+except Exception as e:
+    print(f"Error saving output file: {e}")
+    sys.exit(1)
+
+# Identify orgs with highest average reappointment rates
+rate_summary = df_final.groupby("org")["reappointment_rate"].mean()
+rate_summary = rate_summary.dropna().sort_values(ascending=False)
+
+print("\nTop organizations by average reappointment rate:")
+print(rate_summary.head(10))

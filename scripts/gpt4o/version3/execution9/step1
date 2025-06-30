@@ -1,0 +1,111 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Step 1: Combine all datasets
+input_folder = "raw_data"
+output_folder = "scripts/gpt4o/version3/execution9/analysis_data"
+os.makedirs(output_folder, exist_ok=True)
+
+all_years = []
+for year in range(2013, 2025):
+    df = pd.read_csv(f"{input_folder}/appointments_{year}.csv")
+    df["year"] = year
+    all_years.append(df)
+combined_df = pd.concat(all_years, ignore_index=True)
+combined_df.to_csv(f"{output_folder}/step1_combined_appointments.csv", index=False)
+
+# Step 2: Extract key columns
+key_columns = ["reappointed", "name", "position", "org", "year"]
+df_key = combined_df[key_columns].copy()
+df_key.to_csv(f"{output_folder}/step2_key_columns_data.csv", index=False)
+
+# Step 3: Mark reappointments
+df_key["reappointed"] = False
+df_key.sort_values(by=["name", "position", "org", "year"], inplace=True)
+df_key["repeat_key"] = df_key["name"] + "|" + df_key["position"] + "|" + df_key["org"]
+seen = set()
+reappointed_flags = []
+
+for i, row in df_key.iterrows():
+    key = row["repeat_key"]
+    if key in seen:
+        reappointed_flags.append(True)
+    else:
+        reappointed_flags.append(False)
+        seen.add(key)
+df_key["reappointed"] = reappointed_flags
+df_key.to_csv(f"{output_folder}/step3_repeats_marked.csv", index=False)
+
+# Step 4: Count total employees by org-year
+employee_counts = df_key.groupby(["org", "year"]).size().reset_index(name="total_appointments")
+employee_counts.to_csv(f"{output_folder}/step4_employee_counts.csv", index=False)
+
+# Step 5: Count reappointments by org-year
+reappointment_counts = df_key[df_key["reappointed"]].groupby(["org", "year"]).size().reset_index(name="reappointments")
+reappointment_counts.to_csv(f"{output_folder}/step5_reappointment_counts.csv", index=False)
+
+# Step 6: Merge and calculate reappointment rates
+merged = pd.merge(employee_counts, reappointment_counts, on=["org", "year"], how="left")
+merged["reappointments"] = merged["reappointments"].fillna(0)
+merged["reappointment_rate"] = merged["reappointments"] / merged["total_appointments"]
+merged.to_csv(f"{output_folder}/step6_reappointment_rates.csv", index=False)
+
+# Step 7: Identify org with max reappointment rate per year
+yearly_max = merged.loc[merged.groupby("year")["reappointment_rate"].idxmax()]
+yearly_max.to_csv(f"{output_folder}/step7_yearly_max_rates.csv", index=False)
+
+# Plot Step 7
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=yearly_max, x="year", y="reappointment_rate", marker="o")
+plt.title("Max Reappointment Rate by Org per Year")
+plt.ylabel("Reappointment Rate")
+plt.xlabel("Year")
+plt.grid(True)
+plt.savefig(f"{output_folder}/step7_yearly_max_reappointment_rates.png")
+plt.close()
+
+# Step 8: Compute government-wide reappointment proportions
+annual_totals = df_key.groupby("year").size()
+annual_reappointments = df_key[df_key["reappointed"]].groupby("year").size()
+proportion_df = pd.DataFrame({
+    "year": annual_totals.index,
+    "total_appointments": annual_totals.values,
+    "reappointments": annual_reappointments.reindex(annual_totals.index, fill_value=0).values
+})
+proportion_df["reappointment_proportion"] = proportion_df["reappointments"] / proportion_df["total_appointments"]
+proportion_df.to_csv(f"{output_folder}/step8_annual_proportions.csv", index=False)
+
+# Plot Step 8
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=proportion_df, x="year", y="reappointment_proportion", marker="o")
+plt.title("Government-wide Reappointment Proportion by Year")
+plt.ylabel("Reappointment Proportion")
+plt.xlabel("Year")
+plt.grid(True)
+plt.savefig(f"{output_folder}/step8_annual_reappointment_proportions.png")
+plt.close()
+
+# Step 9: Linear regression on reappointment proportions
+X = proportion_df["year"].values.reshape(-1, 1)
+y = proportion_df["reappointment_proportion"].values
+reg = LinearRegression().fit(X, y)
+slope = reg.coef_[0]
+intercept = reg.intercept_
+r_squared = reg.score(X, y)
+
+with open(f"{output_folder}/step9_regression_results.txt", "w") as f:
+    f.write("Linear Regression Results:\n")
+    f.write(f"Slope: {slope:.6f}\n")
+    f.write(f"Intercept: {intercept:.6f}\n")
+    f.write(f"R-squared: {r_squared:.6f}\n")
+    if slope > 0:
+        trend = "increasing"
+    elif slope < 0:
+        trend = "declining"
+    else:
+        trend = "stable"
+    f.write(f"Interpretation: The trend in reappointments is {trend}.\n")

@@ -1,0 +1,57 @@
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# Define input paths
+employee_counts_file = Path("scripts/gpt4o/version2/execution9/analysis_data/step4_employee_counts.csv")
+reappointments_file = Path("scripts/gpt4o/version2/execution9/analysis_data/step5_reappointment_counts.csv")
+
+# Define output paths
+output_dir = Path("scripts/gpt4o/version2/execution9/analysis_data")
+output_csv = output_dir / "step8_annual_proportions.csv"
+output_png = output_dir / "step8_annual_reappointment_proportions.png"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Step 8: Computing government-wide reappointment proportions per year...\n")
+
+try:
+    # Load input data
+    emp_df = pd.read_csv(employee_counts_file)
+    rep_df = pd.read_csv(reappointments_file)
+    print(f"Loaded {len(emp_df)} employee records and {len(rep_df)} reappointment records.")
+
+    # Normalize column names
+    emp_df.columns = emp_df.columns.str.lower()
+    rep_df.columns = rep_df.columns.str.lower()
+
+    # Aggregate across all organizations per year
+    total_employees = emp_df.groupby('source_year')['employee_count'].sum().reset_index()
+    total_reappointments = rep_df.groupby('source_year')['reappointment_count'].sum().reset_index()
+
+    # Merge and compute proportion
+    merged = pd.merge(total_employees, total_reappointments, on='source_year', how='left')
+    merged['reappointment_count'] = merged['reappointment_count'].fillna(0)
+    merged['gov_reappointment_proportion'] = merged['reappointment_count'] / merged['employee_count']
+
+    # Save CSV
+    merged.to_csv(output_csv, index=False)
+    print(f"Annual reappointment proportions saved to: {output_csv}")
+
+    # Plot
+    plt.figure(figsize=(12, 6))
+    plt.plot(merged['source_year'], merged['gov_reappointment_proportion'], marker='o')
+    plt.title('Government-wide Reappointment Proportion by Year')
+    plt.xlabel('Year')
+    plt.ylabel('Reappointment Proportion')
+    plt.grid(True)
+    plt.xticks(merged['source_year'])
+    plt.tight_layout()
+    plt.savefig(output_png)
+    print(f"Plot saved to: {output_png}")
+
+except FileNotFoundError as fnf:
+    print(f"ERROR: Required file not found: {fnf}")
+except Exception as e:
+    print(f"Unexpected error: {e}")

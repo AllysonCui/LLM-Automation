@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    required_columns = ['org', 'year', 'reappointed']
+    for col in required_columns:
+        if col not in df.columns:
+            print(f"Error: Missing required column '{col}'", file=sys.stderr)
+            sys.exit(1)
+
+    # Clean and validate columns
+    df['org'] = df['org'].astype(str).str.strip()
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['org', 'year'])
+    df['year'] = df['year'].astype(int)
+
+    # Filter for reappointments
+    df_reappointed = df[df['reappointed'] == True]
+
+    if df_reappointed.empty:
+        print("Warning: No reappointment records found.")
+
+    # Group by org and year, count reappointments
+    try:
+        grouped = df_reappointed.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    except Exception as e:
+        print(f"Error during groupby: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print("\nSample grouped reappointment data:")
+    print(grouped.head())
+
+    # Pivot to create summary table
+    try:
+        summary = grouped.pivot(index='org', columns='year', values='reappointment_count').fillna(0).astype(int)
+    except Exception as e:
+        print(f"Error creating summary table: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate that the table has non-zero counts
+    if (summary.sum().sum() == 0):
+        print("Warning: Pivot table contains only zeros.")
+
+    # Save summary table
+    try:
+        summary.to_csv(output_file)
+        print(f"Reappointment summary saved to {output_file}")
+    except Exception as e:
+        print(f"Error saving output file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print("\nReappointment Counts Summary Table:")
+    print(summary)
+
+    top_reappoint_orgs = summary.sum(axis=1).sort_values(ascending=False).head(5)
+    print("\nTop 5 Organizations by Reappointments:")
+    print(top_reappoint_orgs)
+
+if __name__ == "__main__":
+    main()

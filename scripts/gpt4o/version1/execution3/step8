@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step3_repeats_marked.csv")
+    output_csv = Path("scripts/gpt4o/version1/execution3/analysis_data/step8_annual_proportions.csv")
+    output_png = Path("scripts/gpt4o/version1/execution3/analysis_data/step8_annual_reappointment_proportions.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input file: {e}", file=sys.stderr)
+        return
+
+    df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+    df['reappointed'] = df['reappointed'].astype(str).str.lower() == 'true'
+    df = df.dropna(subset=['year'])
+
+    summary = (
+        df.groupby('year')
+          .agg(total_appointments=('reappointed', 'size'),
+               total_reappointments=('reappointed', 'sum'))
+          .reset_index()
+    )
+    summary['reappointment_proportion'] = summary['total_reappointments'] / summary['total_appointments']
+
+    try:
+        summary.to_csv(output_csv, index=False)
+        print(f"Annual reappointment proportions saved to: {output_csv}")
+    except Exception as e:
+        print(f"Failed to save output CSV: {e}", file=sys.stderr)
+        return
+
+    # Visualization
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(summary['year'], summary['reappointment_proportion'], marker='o')
+        plt.title("Annual Government-wide Reappointment Proportions")
+        plt.xlabel("Year")
+        plt.ylabel("Proportion of Reappointments")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_png)
+        print(f"Plot saved to: {output_png}")
+    except Exception as e:
+        print(f"Failed to generate plot: {e}", file=sys.stderr)
+        return
+
+    print("\nYear-by-Year Government-wide Reappointment Proportions:")
+    print(summary)
+
+if __name__ == "__main__":
+    main()

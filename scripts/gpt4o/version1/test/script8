@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+step to compute overall annual reappointment proportions for the New Brunswick government.
+
+Steps:
+1. Load 'step3_repeats_marked.csv'
+2. For each year, calculate:
+   - Total appointments
+   - Total reappointments
+   - Reappointment proportion
+3. Save time series as 'step8_annual_proportions.csv'
+4. Plot trend and save as 'step8_annual_reappointment_proportions.png'
+5. Print year-by-year proportions
+
+Author: GPT-4o
+Date: 2025-06-11
+"""
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_path = Path("steps/gpt4o/version1/analysis_data/step3_repeats_marked.csv")
+    output_csv = Path("steps/gpt4o/version1/analysis_data/step8_annual_proportions.csv")
+    output_png = Path("steps/gpt4o/version1/analysis_data/step8_annual_reappointment_proportions.png")
+
+    try:
+        df = pd.read_csv(input_path)
+    except FileNotFoundError:
+        print(f"✗ File not found: {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"✗ Error loading data: {e}")
+        sys.exit(1)
+
+    if "year" not in df.columns or "reappointed" not in df.columns:
+        print("✗ Required columns ('year', 'reappointed') not found.")
+        sys.exit(1)
+
+    # Ensure correct types
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df["reappointed"] = df["reappointed"].astype(bool)
+    df = df.dropna(subset=["year"])
+
+    # Filter years
+    df = df[df["year"].between(2013, 2024)]
+
+    # Group by year
+    summary = df.groupby("year").agg(
+        total_appointments=("reappointed", "count"),
+        total_reappointments=("reappointed", "sum")
+    ).reset_index()
+
+    summary["reappointment_proportion"] = summary["total_reappointments"] / summary["total_appointments"]
+
+    # Save to CSV
+    summary.to_csv(output_csv, index=False)
+    print(f"✓ Saved annual reappointment proportions to {output_csv}")
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(summary["year"], summary["reappointment_proportion"], marker="o")
+    plt.title("Government-Wide Reappointment Proportion by Year")
+    plt.xlabel("Year")
+    plt.ylabel("Reappointment Proportion")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_png)
+    print(f"✓ Saved plot to {output_png}")
+
+    # Print year-by-year summary
+    print("\n→ Annual reappointment proportions:")
+    for _, row in summary.iterrows():
+        print(f"  {int(row['year'])}: {row['total_reappointments']}/{row['total_appointments']} "
+              f"({row['reappointment_proportion']:.2%})")
+
+if __name__ == "__main__":
+    main()

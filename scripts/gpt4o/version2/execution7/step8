@@ -1,0 +1,53 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution7/analysis_data/step3_repeats_marked.csv")
+output_dir = Path("scripts/gpt4o/version2/execution7/analysis_data")
+output_csv = output_dir / "step8_annual_proportions.csv"
+output_plot = output_dir / "step8_annual_reappointment_proportions.png"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Starting Step 8: Computing government-wide reappointment proportions...")
+
+# Load marked data
+if not input_file.exists():
+    raise FileNotFoundError(f"[ERROR] Input file not found: {input_file}")
+
+df = pd.read_csv(input_file)
+print(f"[INFO] Loaded {len(df)} records.")
+
+# Drop records with missing year
+df = df.dropna(subset=["source_year"])
+
+# Group by year and compute proportions
+annual_summary = (
+    df.groupby("source_year")
+    .agg(
+        total_appointments=("name", "nunique"),
+        total_reappointments=("name", lambda x: x[df.loc[x.index, "reappointed_marked"] == True].nunique())
+    )
+    .reset_index()
+)
+
+# Calculate proportion
+annual_summary["reappointment_proportion"] = annual_summary["total_reappointments"] / annual_summary["total_appointments"]
+
+# Save to CSV
+annual_summary.to_csv(output_csv, index=False)
+print(f"[SUCCESS] Saved government-wide reappointment proportions to {output_csv}")
+
+# Plot
+plt.figure(figsize=(10, 5))
+plt.plot(annual_summary["source_year"], annual_summary["reappointment_proportion"], marker='o')
+plt.title("Government-Wide Reappointment Proportion by Year")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Proportion")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig(output_plot)
+plt.close()
+print(f"[SUCCESS] Plot saved to {output_plot}")

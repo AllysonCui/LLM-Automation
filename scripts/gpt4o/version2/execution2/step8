@@ -1,0 +1,60 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# Define file paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step3_repeats_marked.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_CSV = OUTPUT_DIR / "step8_annual_proportions.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "step8_annual_reappointment_proportions.png"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def main():
+    if not INPUT_FILE.exists():
+        print(f"[ERROR] Input file missing: {INPUT_FILE}")
+        return
+
+    try:
+        df = pd.read_csv(INPUT_FILE)
+    except Exception as e:
+        print(f"[ERROR] Failed to read input file: {e}")
+        return
+
+    if 'reappointed' not in df.columns or 'year' not in df.columns:
+        print("[ERROR] Missing required columns: 'reappointed' and/or 'year'")
+        return
+
+    # Normalize reappointed to boolean
+    df['reappointed'] = df['reappointed'].astype(str).str.lower().isin(['true', '1', 'yes'])
+
+    print("[INFO] Calculating annual reappointment proportions...")
+    annual_summary = (
+        df.groupby('year')
+          .agg(total_appointments=('name', 'count'),
+               total_reappointments=('reappointed', 'sum'))
+          .reset_index()
+    )
+    annual_summary['reappointment_proportion'] = (
+        annual_summary['total_reappointments'] / annual_summary['total_appointments']
+    )
+
+    print("[INFO] Writing summary CSV...")
+    annual_summary.to_csv(OUTPUT_CSV, index=False)
+    print(f"[SUCCESS] Annual reappointment proportions saved to: {OUTPUT_CSV}")
+
+    print("[INFO] Creating line plot of annual proportions...")
+    plt.figure(figsize=(10, 6))
+    plt.plot(annual_summary['year'], annual_summary['reappointment_proportion'], marker='o', linestyle='-')
+    plt.title('Annual Reappointment Proportion (All Organizations)')
+    plt.xlabel('Year')
+    plt.ylabel('Reappointment Proportion')
+    plt.grid(True)
+    plt.xticks(annual_summary['year'])
+    plt.tight_layout()
+    plt.savefig(OUTPUT_PLOT)
+    print(f"[SUCCESS] Plot saved to: {OUTPUT_PLOT}")
+
+if __name__ == "__main__":
+    main()

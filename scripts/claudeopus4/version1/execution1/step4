@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+
+"""
+Script to create a summary table of appointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+def main():
+    """Main function to generate organization appointment counts."""
+    
+    # Define input and output paths
+    data_dir = Path("scripts/claudeopus4/version1/execution1/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file {input_file} not found!")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file)
+        print(f"Loaded {len(df)} rows")
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns exist
+    required_columns = ['org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    # Convert year to numeric if it's not already
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Check for data quality issues
+    print("\nData quality checks:")
+    
+    # Check for missing organizations
+    missing_orgs = df['org'].isna().sum()
+    if missing_orgs > 0:
+        print(f"  - WARNING: {missing_orgs} rows have missing organization values")
+    
+    # Check for missing years
+    missing_years = df['year'].isna().sum()
+    if missing_years > 0:
+        print(f"  - WARNING: {missing_years} rows have missing year values")
+    
+    # Filter out rows with missing org or year
+    valid_df = df.dropna(subset=['org', 'year']).copy()
+    print(f"  - Processing {len(valid_df)} rows with valid org and year values")
+    
+    # Get year range
+    min_year = int(valid_df['year'].min())
+    max_year = int(valid_df['year'].max())
+    print(f"  - Year range: {min_year} to {max_year}")
+    
+    # Group by organization and year, count appointments
+    print("\nGrouping data by organization and year...")
+    counts = valid_df.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Pivot to create the summary table
+    print("Creating summary table...")
+    summary_table = counts.pivot(index='org', columns='year', values='count')
+    
+    # Fill missing values with 0 (no appointments for that org-year combination)
+    summary_table = summary_table.fillna(0).astype(int)
+    
+    # Sort organizations by total appointments (descending)
+    summary_table['Total'] = summary_table.sum(axis=1)
+    summary_table = summary_table.sort_values('Total', ascending=False)
+    
+    # Save the summary table (without the Total column for the CSV)
+    summary_table_for_save = summary_table.drop('Total', axis=1)
+    summary_table_for_save.to_csv(output_file)
+    print(f"\nSummary table saved to: {output_file}")
+    
+    # Print the summary table
+    print("\n=== Summary Table: Appointments by Organization and Year ===")
+    print(f"Organizations: {len(summary_table)}")
+    print(f"Years covered: {min_year} - {max_year}")
+    
+    # Display top organizations
+    print("\nTop 10 Organizations by Total Appointments:")
+    top_10 = summary_table.head(10)
+    
+    # Format for display
+    display_cols = [col for col in top_10.columns if col != 'Total']
+    print("\nOrganization" + " " * 50 + "| " + " | ".join(f"{int(col):4d}" for col in display_cols) + " | Total")
+    print("-" * (65 + len(display_cols) * 7 + 8))
+    
+    for org_name, row in top_10.iterrows():
+        # Truncate long organization names
+        org_display = str(org_name)[:60].ljust(60)
+        values = " | ".join(f"{int(row[col]):4d}" for col in display_cols)
+        print(f"{org_display} | {values} | {int(row['Total']):5d}")
+    
+    # Additional statistics
+    print("\n=== Additional Statistics ===")
+    
+    # Year-over-year statistics
+    print("\nTotal appointments by year:")
+    yearly_totals = summary_table_for_save.sum(axis=0).sort_index()
+    for year, total in yearly_totals.items():
+        print(f"  {int(year)}: {int(total)} appointments")
+    
+    # Organizations with most consistent appointments
+    print("\nOrganizations with appointments in all years:")
+    all_years_orgs = summary_table_for_save[summary_table_for_save.gt(0).all(axis=1)]
+    print(f"  Found {len(all_years_orgs)} organizations with appointments in all {len(yearly_totals)} years")
+    
+    if len(all_years_orgs) > 0 and len(all_years_orgs) <= 10:
+        for org in all_years_orgs.index[:10]:
+            print(f"    - {org}")
+    elif len(all_years_orgs) > 10:
+        print(f"    (Showing first 5 of {len(all_years_orgs)} organizations)")
+        for org in all_years_orgs.index[:5]:
+            print(f"    - {org}")
+    
+    # Validation checks
+    print("\nValidation checks:")
+    
+    # Check for unreasonably high counts
+    max_count = summary_table_for_save.max().max()
+    if max_count > 1000:
+        print(f"  - WARNING: Maximum single-year count is {int(max_count)}, which seems high")
+        high_counts = np.where(summary_table_for_save > 1000)
+        for i in range(len(high_counts[0])):
+            org = summary_table_for_save.index[high_counts[0][i]]
+            year = summary_table_for_save.columns[high_counts[1][i]]
+            count = summary_table_for_save.iloc[high_counts[0][i], high_counts[1][i]]
+            print(f"    - {org} in {int(year)}: {int(count)} appointments")
+    else:
+        print(f"  - Maximum single-year count: {int(max_count)} (reasonable)")
+    
+    # Check total counts match
+    total_from_summary = int(summary_table_for_save.sum().sum())
+    total_from_original = len(valid_df)
+    if total_from_summary == total_from_original:
+        print(f"  - Total count validation: PASSED ({total_from_summary} appointments)")
+    else:
+        print(f"  - Total count validation: FAILED")
+        print(f"    Summary total: {total_from_summary}")
+        print(f"    Original total: {total_from_original}")
+    
+    print("\nScript completed successfully!")
+
+if __name__ == "__main__":
+    main()

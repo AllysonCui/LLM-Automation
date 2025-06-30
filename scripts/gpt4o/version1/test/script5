@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+step to summarize reappointment counts by organization and year.
+
+Steps:
+1. Load 'step3_repeats_marked.csv'
+2. Filter records where 'reappointed' == True
+3. Group by 'org' and 'year' and count reappointments
+4. Pivot to table with orgs as rows, years as columns
+5. Save as 'step5_reappointment_counts.csv'
+6. Print debug info and summary statistics
+
+Author: GPT-4o
+Date: 2025-06-11
+"""
+
+import pandas as pd
+from pathlib import Path
+import sys
+
+def main():
+    input_path = Path("steps/gpt4o/version1/analysis_data/step3_repeats_marked.csv")
+    output_path = Path("steps/gpt4o/version1/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_path)
+    except FileNotFoundError:
+        print(f"✗ File not found: {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"✗ Error loading data: {e}")
+        sys.exit(1)
+
+    # Validate required columns
+    if "reappointed" not in df.columns or "org" not in df.columns or "year" not in df.columns:
+        print("✗ Required columns ('reappointed', 'org', 'year') are missing.")
+        sys.exit(1)
+
+    # Coerce types
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df["org"] = df["org"].astype(str).str.strip()
+    df["reappointed"] = df["reappointed"].astype(bool)
+
+    # Drop missing/invalid rows
+    df = df.dropna(subset=["org", "year"])
+    df = df[df["org"] != ""]
+
+    # Filter reappointments
+    df_re = df[df["reappointed"] == True]
+
+    # Group and count
+    grouped = df_re.groupby(["org", "year"], dropna=False).size().reset_index(name="reappointment_count")
+
+    # Debugging output: sample of grouped data
+    print("\n→ Sample of grouped reappointment counts:")
+    print(grouped.head())
+
+    # Pivot to wide format
+    pivot_table = grouped.pivot(index="org", columns="year", values="reappointment_count")
+    pivot_table = pivot_table.fillna(0).astype(int)
+
+    # Save to CSV
+    pivot_table.to_csv(output_path)
+    print(f"\n✓ Saved reappointment summary to {output_path}")
+
+    # Validate non-zero values exist
+    total_reappointments = pivot_table.values.sum()
+    if total_reappointments == 0:
+        print("✗ Warning: All reappointment counts are zero. Check input data or filters.")
+    else:
+        print(f"→ Total reappointments counted: {total_reappointments:,}")
+
+    # Summary stats
+    org_totals = pivot_table.sum(axis=1).sort_values(ascending=False)
+    print("\n→ Top 5 organizations by total reappointments:")
+    for org, count in org_totals.head(5).items():
+        print(f"  {org}: {count:,} reappointments")
+
+if __name__ == "__main__":
+    main()

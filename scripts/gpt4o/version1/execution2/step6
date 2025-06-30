@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    emp_counts_file = Path("steps/gpt4o/version1/execution2/analysis_data/step4_employee_counts.csv")
+    reapp_counts_file = Path("steps/gpt4o/version1/execution2/analysis_data/step5_reappointment_counts.csv")
+    output_file = Path("steps/gpt4o/version1/execution2/analysis_data/step6_reappointment_rates.csv")
+
+    try:
+        emp_df = pd.read_csv(emp_counts_file, index_col=0)
+        reapp_df = pd.read_csv(reapp_counts_file, index_col=0)
+    except FileNotFoundError as e:
+        print(f"Error: Missing input file - {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading input files: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    emp_df.index.name = "org"
+    reapp_df.index.name = "org"
+
+    years = sorted(set(emp_df.columns.astype(int)).union(reapp_df.columns.astype(int)))
+    orgs = sorted(set(emp_df.index).union(reapp_df.index))
+
+    records = []
+    for org in orgs:
+        for year in years:
+            total = emp_df.loc[org, str(year)] if org in emp_df.index and str(year) in emp_df.columns else 0
+            reapps = reapp_df.loc[org, str(year)] if org in reapp_df.index and str(year) in reapp_df.columns else 0
+
+            try:
+                total = int(total)
+                reapps = int(reapps)
+            except:
+                total = 0
+                reapps = 0
+
+            rate = reapps / total if total > 0 else 0
+            records.append({
+                "org": org,
+                "year": year,
+                "total_employees": total,
+                "reappointments": reapps,
+                "reappointment_rate": round(rate, 4)
+            })
+
+    final_df = pd.DataFrame(records)
+    final_df.to_csv(output_file, index=False)
+
+    avg_rates = final_df.groupby("org")["reappointment_rate"].mean().sort_values(ascending=False)
+
+    print("Top organizations by average reappointment rate:")
+    print(avg_rates.head())
+
+if __name__ == "__main__":
+    main()

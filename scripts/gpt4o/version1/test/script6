@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+step to compute reappointment rates per organization and year.
+
+Steps:
+1. Load 'step4_employee_counts.csv' and 'step5_reappointment_counts.csv'
+2. Merge them on organization and year
+3. Calculate reappointment rate = reappointments / total_employees
+4. Handle missing and zero-division cases
+5. Save output as 'step6_reappointment_rates.csv'
+6. Print organizations with highest average reappointment rates
+
+Author: GPT-4o
+Date: 2025-06-11
+"""
+
+import pandas as pd
+from pathlib import Path
+import sys
+
+def main():
+    emp_path = Path("steps/gpt4o/version1/analysis_data/step4_employee_counts.csv")
+    re_path = Path("steps/gpt4o/version1/analysis_data/step5_reappointment_counts.csv")
+    output_path = Path("steps/gpt4o/version1/analysis_data/step6_reappointment_rates.csv")
+
+    try:
+        emp_df = pd.read_csv(emp_path, index_col="org")
+        re_df = pd.read_csv(re_path, index_col="org")
+    except FileNotFoundError as e:
+        print(f"✗ File not found: {e.filename}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"✗ Error reading input files: {e}")
+        sys.exit(1)
+
+    # Unpivot both datasets to long format for merging
+    emp_long = emp_df.reset_index().melt(id_vars="org", var_name="year", value_name="total_employees")
+    re_long = re_df.reset_index().melt(id_vars="org", var_name="year", value_name="reappointments")
+
+    # Ensure year is integer
+    emp_long["year"] = pd.to_numeric(emp_long["year"], errors="coerce").astype("Int64")
+    re_long["year"] = pd.to_numeric(re_long["year"], errors="coerce").astype("Int64")
+
+    # Merge both datasets on org and year
+    merged = pd.merge(emp_long, re_long, on=["org", "year"], how="outer")
+
+    # Fill missing values with 0
+    merged["total_employees"] = merged["total_employees"].fillna(0).astype(int)
+    merged["reappointments"] = merged["reappointments"].fillna(0).astype(int)
+
+    # Avoid division by zero
+    merged["reappointment_rate"] = merged.apply(
+        lambda row: row["reappointments"] / row["total_employees"]
+        if row["total_employees"] > 0 else 0.0,
+        axis=1
+    )
+
+    # Save result
+    merged = merged[["org", "year", "total_employees", "reappointments", "reappointment_rate"]]
+    merged.sort_values(["org", "year"], inplace=True)
+    merged.to_csv(output_path, index=False)
+    print(f"✓ Saved reappointment rates to {output_path}")
+
+    # Top organizations by average reappointment rate
+    avg_rates = merged.groupby("org")["reappointment_rate"].mean().sort_values(ascending=False)
+    print("\n→ Top 5 organizations by average reappointment rate:")
+    for org, rate in avg_rates.head(5).items():
+        print(f"  {org}: {rate:.2%}")
+
+if __name__ == "__main__":
+    main()

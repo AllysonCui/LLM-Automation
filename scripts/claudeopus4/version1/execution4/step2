@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""
+Script to extract key columns from the combined New Brunswick government appointments dataset.
+Handles variations in column naming and creates a filtered dataset for analysis.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_matching_column(df, possible_names):
+    """
+    Find a column in the dataframe that matches any of the possible names.
+    Case-insensitive matching.
+    
+    Args:
+        df: pandas DataFrame
+        possible_names: list of possible column names
+    
+    Returns:
+        str: The actual column name found in the dataframe, or None if not found
+    """
+    df_columns_lower = [col.lower() for col in df.columns]
+    
+    for name in possible_names:
+        name_lower = name.lower()
+        # Try exact match first
+        if name_lower in df_columns_lower:
+            idx = df_columns_lower.index(name_lower)
+            return df.columns[idx]
+        
+        # Try partial match
+        for idx, col in enumerate(df_columns_lower):
+            if name_lower in col or col in name_lower:
+                return df.columns[idx]
+    
+    return None
+
+def load_combined_data():
+    """
+    Load the combined dataset from step 1.
+    """
+    input_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step1_combined_appointments.csv")
+    
+    try:
+        df = pd.read_csv(input_path)
+        print(f"Successfully loaded combined dataset from: {input_path}")
+        print(f"Dataset shape: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: Could not find file at {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+
+def extract_key_columns(df):
+    """
+    Extract the key columns from the dataframe, handling column name variations.
+    """
+    # Define possible column name variations
+    column_mappings = {
+        'reappointed': ['reappointed', 'reappointment', 're-appointed', 're_appointed'],
+        'name': ['name', 'appointee_name', 'appointee', 'person_name'],
+        'position': ['position', 'appointment', 'role', 'title', 'job_title'],
+        'org': ['org', 'organization', 'organisation', 'department', 'agency', 'board']
+    }
+    
+    # Find actual column names in the dataframe
+    found_columns = {}
+    missing_columns = []
+    
+    print("\nSearching for key columns...")
+    print("-" * 50)
+    
+    for target_col, possible_names in column_mappings.items():
+        actual_col = find_matching_column(df, possible_names)
+        if actual_col:
+            found_columns[target_col] = actual_col
+            print(f"✓ Found '{target_col}' as '{actual_col}'")
+        else:
+            missing_columns.append(target_col)
+            print(f"✗ Could not find '{target_col}' (tried: {', '.join(possible_names)})")
+    
+    # Check for year column
+    if 'year' in df.columns:
+        found_columns['year'] = 'year'
+        print(f"✓ Found 'year' column")
+    else:
+        print(f"✗ Could not find 'year' column")
+        missing_columns.append('year')
+    
+    if missing_columns:
+        print(f"\nWarning: Missing columns: {', '.join(missing_columns)}")
+        print("Available columns in dataset:")
+        for col in df.columns:
+            print(f"  - {col}")
+    
+    # Create filtered dataset with found columns
+    if found_columns:
+        # Create a mapping from actual column names to standardized names
+        rename_mapping = {v: k for k, v in found_columns.items()}
+        filtered_df = df[list(found_columns.values())].copy()
+        filtered_df = filtered_df.rename(columns=rename_mapping)
+        return filtered_df, found_columns
+    else:
+        print("\nError: No key columns found in the dataset.")
+        sys.exit(1)
+
+def analyze_missing_values(df):
+    """
+    Analyze and report missing values in the filtered dataset.
+    """
+    print("\nMissing Values Analysis:")
+    print("-" * 50)
+    
+    total_rows = len(df)
+    
+    for col in df.columns:
+        missing_count = df[col].isnull().sum()
+        missing_pct = (missing_count / total_rows) * 100
+        print(f"{col:15} - Missing: {missing_count:6} ({missing_pct:5.2f}%)")
+    
+    print(f"\nTotal rows: {total_rows}")
+
+def save_filtered_data(df):
+    """
+    Save the filtered dataset to the analysis_data directory.
+    """
+    output_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step2_key_columns_data.csv")
+    
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save the filtered dataset
+    df.to_csv(output_path, index=False)
+    print(f"\nFiltered dataset saved to: {output_path}")
+    
+    return output_path
+
+def main():
+    """
+    Main function to execute the column extraction process.
+    """
+    print("Starting Key Column Extraction Process...")
+    print("=" * 60)
+    
+    # Load the combined dataset
+    df = load_combined_data()
+    
+    # Extract key columns
+    filtered_df, found_columns = extract_key_columns(df)
+    
+    # Analyze the filtered dataset
+    print("\n" + "=" * 60)
+    print("FILTERED DATASET INFORMATION")
+    print("=" * 60)
+    print(f"Shape: {filtered_df.shape} (rows, columns)")
+    print(f"Columns: {', '.join(filtered_df.columns)}")
+    
+    # Analyze missing values
+    analyze_missing_values(filtered_df)
+    
+    # Display data types
+    print("\nData Types:")
+    print("-" * 50)
+    for col in filtered_df.columns:
+        print(f"{col:15} - {filtered_df[col].dtype}")
+    
+    # Display sample data
+    print("\nSample Data (first 5 rows):")
+    print("-" * 50)
+    print(filtered_df.head())
+    
+    # Save the filtered dataset
+    output_path = save_filtered_data(filtered_df)
+    
+    # Summary statistics for reappointed column if present
+    if 'reappointed' in filtered_df.columns:
+        print("\nReappointment Statistics:")
+        print("-" * 50)
+        reappointed_counts = filtered_df['reappointed'].value_counts()
+        print(reappointed_counts)
+        if len(reappointed_counts) > 0:
+            total_valid = reappointed_counts.sum()
+            if True in reappointed_counts.index:
+                reappointed_pct = (reappointed_counts.get(True, 0) / total_valid) * 100
+                print(f"\nReappointment rate: {reappointed_pct:.2f}%")
+    
+    print("\n" + "=" * 60)
+    print("Key column extraction completed successfully!")
+
+if __name__ == "__main__":
+    main()

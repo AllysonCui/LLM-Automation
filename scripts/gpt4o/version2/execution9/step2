@@ -1,0 +1,53 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution9/analysis_data/step1_combined_appointments.csv")
+output_dir = Path("scripts/gpt4o/version2/execution9/analysis_data")
+output_file = output_dir / "step2_key_columns_data.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Step 2: Extracting key columns...\n")
+
+try:
+    # Load combined data
+    df = pd.read_csv(input_file)
+    print(f"Loaded input file with {len(df)} records and {len(df.columns)} columns.")
+
+    # Standardize column names to lowercase and strip whitespace
+    df.columns = [col.strip().lower() for col in df.columns]
+
+    # Identify potential matches for key columns
+    expected_columns = ["reappointed", "name", "position", "org", "source_year"]
+    found_columns = {key: None for key in expected_columns}
+
+    for col in df.columns:
+        for key in expected_columns:
+            if key in col:
+                found_columns[key] = col
+
+    # Check if all required columns are found
+    if None in found_columns.values():
+        missing = [k for k, v in found_columns.items() if v is None]
+        raise KeyError(f"Missing expected columns: {missing}")
+
+    # Extract and rename the key columns
+    key_df = df[[found_columns[key] for key in expected_columns]].copy()
+    key_df.columns = expected_columns  # Standardize column names
+
+    # Drop rows with all key fields missing
+    key_df.dropna(subset=expected_columns, how='all', inplace=True)
+
+    # Save cleaned data
+    key_df.to_csv(output_file, index=False)
+    print(f"Key columns extracted and saved to: {output_file}")
+    print(f"Final dataset has {len(key_df)} records.")
+
+except FileNotFoundError:
+    print(f"ERROR: Input file not found: {input_file}")
+except KeyError as ke:
+    print(f"ERROR: {ke}")
+except Exception as e:
+    print(f"Unexpected error: {e}")

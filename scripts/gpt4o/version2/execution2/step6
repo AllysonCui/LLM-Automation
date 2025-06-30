@@ -1,0 +1,53 @@
+import pandas as pd
+from pathlib import Path
+
+# Define file paths
+EMPLOYEE_COUNTS_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step4_employee_counts.csv")
+REAPPOINTMENT_COUNTS_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step5_reappointment_counts.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step6_reappointment_rates.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def main():
+    # Check for input files
+    if not EMPLOYEE_COUNTS_FILE.exists() or not REAPPOINTMENT_COUNTS_FILE.exists():
+        print("[ERROR] One or both input files are missing.")
+        return
+
+    try:
+        employees_df = pd.read_csv(EMPLOYEE_COUNTS_FILE)
+        reappointments_df = pd.read_csv(REAPPOINTMENT_COUNTS_FILE)
+    except Exception as e:
+        print(f"[ERROR] Failed to read input files: {e}")
+        return
+
+    # Merge data on organization and year
+    print("[INFO] Merging employee and reappointment data...")
+    merged_df = pd.merge(
+        employees_df,
+        reappointments_df,
+        on=['organization', 'year'],
+        how='left'
+    )
+
+    # Fill missing reappointment counts with 0
+    merged_df['reappointment_count'] = merged_df['reappointment_count'].fillna(0)
+
+    # Calculate rate
+    print("[INFO] Calculating reappointment rates...")
+    merged_df['reappointment_rate'] = merged_df['reappointment_count'] / merged_df['employee_count']
+
+    # Clip values to [0,1] just in case
+    merged_df['reappointment_rate'] = merged_df['reappointment_rate'].clip(0, 1)
+
+    print(f"[INFO] Final dataset shape: {merged_df.shape}")
+    print(f"[INFO] Null values in output:\n{merged_df.isnull().sum()}")
+
+    # Save output
+    merged_df.to_csv(OUTPUT_FILE, index=False)
+    print(f"[SUCCESS] Reappointment rates saved to: {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    main()

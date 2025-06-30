@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""
+Script to create a summary table of appointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def load_data():
+    """
+    Load the dataset from step 3.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    print("Loading dataset from step 3...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset with {len(df):,} rows")
+        return df
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        sys.exit(1)
+
+def validate_data(df):
+    """
+    Validate the data and check for required columns.
+    """
+    required_columns = ['org', 'year']
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    # Check data types
+    print("\nValidating data...")
+    
+    # Ensure year is numeric
+    if df['year'].dtype == 'object':
+        try:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+            print("✓ Converted year column to numeric")
+        except Exception as e:
+            print(f"Error converting year to numeric: {str(e)}")
+    
+    # Check for missing values
+    missing_orgs = df['org'].isna().sum()
+    missing_years = df['year'].isna().sum()
+    
+    if missing_orgs > 0:
+        print(f"Warning: {missing_orgs:,} rows have missing organization values")
+    if missing_years > 0:
+        print(f"Warning: {missing_years:,} rows have missing year values")
+    
+    # Remove rows with missing org or year
+    initial_rows = len(df)
+    df = df.dropna(subset=['org', 'year'])
+    removed_rows = initial_rows - len(df)
+    
+    if removed_rows > 0:
+        print(f"✓ Removed {removed_rows:,} rows with missing org/year values")
+    
+    return df
+
+def create_summary_table(df):
+    """
+    Create a pivot table with organizations as rows and years as columns.
+    """
+    print("\nCreating summary table...")
+    
+    # Group by organization and year, count appointments
+    grouped = df.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Create pivot table
+    pivot_table = grouped.pivot(index='org', columns='year', values='count')
+    
+    # Fill NaN values with 0 (no appointments that year)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    # Sort organizations by total appointments (descending)
+    pivot_table['total'] = pivot_table.sum(axis=1)
+    pivot_table = pivot_table.sort_values('total', ascending=False)
+    
+    # Remove the total column for the saved file
+    save_table = pivot_table.drop('total', axis=1)
+    
+    print(f"✓ Created summary table with {len(pivot_table)} organizations and {len(save_table.columns)} years")
+    
+    return save_table, pivot_table
+
+def validate_counts(pivot_table):
+    """
+    Validate that counts are reasonable and identify any anomalies.
+    """
+    print("\nValidating appointment counts...")
+    
+    # Check for unusually high counts
+    all_counts = pivot_table.drop('total', axis=1).values.flatten()
+    all_counts = all_counts[all_counts > 0]  # Exclude zeros
+    
+    if len(all_counts) > 0:
+        mean_count = np.mean(all_counts)
+        std_count = np.std(all_counts)
+        threshold = mean_count + 3 * std_count
+        
+        # Find anomalies
+        anomalies = []
+        for org in pivot_table.index:
+            for year in pivot_table.columns:
+                if year != 'total':
+                    count = pivot_table.loc[org, year]
+                    if count > threshold:
+                        anomalies.append((org, year, count))
+        
+        if anomalies:
+            print(f"\nWarning: Found {len(anomalies)} unusually high counts (> {threshold:.0f}):")
+            for org, year, count in anomalies[:5]:  # Show first 5
+                print(f"  - {org} in {year}: {count} appointments")
+            if len(anomalies) > 5:
+                print(f"  ... and {len(anomalies) - 5} more")
+        else:
+            print("✓ All counts appear reasonable")
+    
+    return True
+
+def save_and_display_results(save_table, pivot_table, output_path):
+    """
+    Save the summary table and display key statistics.
+    """
+    # Save to CSV
+    save_table.to_csv(output_path)
+    print(f"\n✓ Summary table saved to: {output_path}")
+    
+    # Display summary statistics
+    print("\n" + "="*70)
+    print("APPOINTMENT COUNTS BY ORGANIZATION AND YEAR")
+    print("="*70)
+    
+    # Overall statistics
+    total_appointments = pivot_table.drop('total', axis=1).sum().sum()
+    print(f"\nTotal appointments across all organizations and years: {total_appointments:,}")
+    print(f"Number of organizations: {len(pivot_table)}")
+    print(f"Years covered: {sorted(save_table.columns.tolist())}")
+    
+    # Top organizations by total appointments
+    print("\nTop 15 Organizations by Total Appointments:")
+    print("-" * 60)
+    print(f"{'Organization':<40} {'Total':>10} {'Avg/Year':>10}")
+    print("-" * 60)
+    
+    for i, (org, row) in enumerate(pivot_table.head(15).iterrows(), 1):
+        total = row['total']
+        years_active = (row.drop('total') > 0).sum()
+        avg_per_year = total / years_active if years_active > 0 else 0
+        org_display = org[:37] + "..." if len(str(org)) > 40 else str(org)
+        print(f"{i:2d}. {org_display:<37} {int(total):>10,} {avg_per_year:>10.1f}")
+    
+    # Year-over-year statistics
+    print("\nAppointments by Year:")
+    print("-" * 40)
+    yearly_totals = pivot_table.drop('total', axis=1).sum().sort_index()
+    for year, total in yearly_totals.items():
+        print(f"  {int(year)}: {int(total):,} appointments")
+    
+    # Organizations with most consistent appointments
+    print("\nOrganizations with Appointments in Most Years:")
+    years_active_per_org = (pivot_table.drop('total', axis=1) > 0).sum(axis=1)
+    most_consistent = years_active_per_org.nlargest(10)
+    
+    for org, years_count in most_consistent.items():
+        org_display = org[:50] + "..." if len(str(org)) > 53 else str(org)
+        print(f"  {org_display}: {years_count} years")
+    
+    # Sample of the pivot table
+    print("\nSample of Summary Table (Top 5 orgs, recent 5 years):")
+    recent_years = sorted(save_table.columns.tolist())[-5:]
+    if len(recent_years) > 0 and len(save_table) > 0:
+        sample = save_table.head(5)[recent_years]
+        print(sample.to_string())
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Organization Appointment Counts Script")
+    print("Creating summary table of appointments by organization and year")
+    print("-" * 60)
+    
+    try:
+        # Define output path
+        output_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+        output_file = output_dir / "step4_employee_counts.csv"
+        
+        # Load and validate data
+        df = load_data()
+        df = validate_data(df)
+        
+        # Create summary table
+        save_table, display_table = create_summary_table(df)
+        
+        # Validate counts
+        validate_counts(display_table)
+        
+        # Save and display results
+        save_and_display_results(save_table, display_table, output_file)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

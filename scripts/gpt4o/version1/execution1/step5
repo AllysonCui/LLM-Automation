@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution1/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("steps/gpt4o/version1/execution1/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate required columns
+    if 'org' not in df.columns or 'year' not in df.columns or 'reappointed' not in df.columns:
+        print("Error: Required columns 'org', 'year', or 'reappointed' missing.", file=sys.stderr)
+        sys.exit(1)
+
+    df['org'] = df['org'].fillna('Unknown').str.strip()
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['year'])
+    df['year'] = df['year'].astype(int)
+
+    # Filter for reappointments
+    df_reappointed = df[df['reappointed'] == True]
+
+    # Group and count
+    grouped = df_reappointed.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    print("Sample grouped data (first 10 rows):")
+    print(grouped.head(10))
+
+    # Pivot table
+    pivot_table = grouped.pivot(index='org', columns='year', values='reappointment_count').fillna(0).astype(int)
+
+    # Validation: ensure non-zero counts exist
+    if (pivot_table.values == 0).all():
+        print("Warning: All values in the pivot table are zero. This may indicate a data issue.", file=sys.stderr)
+
+    try:
+        pivot_table.to_csv(output_file)
+        print(f"Reappointment counts saved to {output_file}\n")
+        print("Reappointment Summary Table (Organizations x Years):")
+        print(pivot_table)
+
+        total_reappointments = pivot_table.sum().sum()
+        print(f"\nTotal reappointments across all years and organizations: {total_reappointments}")
+        top_orgs = pivot_table.sum(axis=1).sort_values(ascending=False).head(5)
+        print("Top 5 organizations by reappointments:")
+        print(top_orgs)
+
+    except Exception as e:
+        print(f"Error saving pivot table: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

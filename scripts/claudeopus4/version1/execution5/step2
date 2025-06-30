@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""
+Script to extract key columns from the combined appointments dataset.
+Handles variations in column naming and creates a filtered dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_matching_column(df, possible_names):
+    """
+    Find a column in the dataframe that matches one of the possible names.
+    Case-insensitive matching.
+    
+    Args:
+        df: DataFrame to search in
+        possible_names: List of possible column names
+    
+    Returns:
+        The actual column name found, or None if not found
+    """
+    df_columns_lower = [col.lower() for col in df.columns]
+    
+    for name in possible_names:
+        if name.lower() in df_columns_lower:
+            # Return the actual column name (with original case)
+            idx = df_columns_lower.index(name.lower())
+            return df.columns[idx]
+    
+    return None
+
+def load_and_filter_data():
+    """
+    Load the combined dataset and extract key columns.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution5/analysis_data")
+    input_file = data_dir / "step1_combined_appointments.csv"
+    output_file = data_dir / "step2_key_columns_data.csv"
+    
+    print("Loading combined appointments data...")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} records, {len(df.columns)} columns")
+        
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Print all available columns for reference
+    print("\nAvailable columns in dataset:")
+    for col in df.columns:
+        print(f"  - {col}")
+    
+    # Define possible column name variations for each key field
+    column_mappings = {
+        'reappointed': ['reappointed', 'reappointment', 're-appointed', 'is_reappointed'],
+        'name': ['name', 'appointee_name', 'person_name', 'full_name'],
+        'position': ['position', 'appointment', 'role', 'title', 'position_title'],
+        'org': ['org', 'organization', 'organisation', 'department', 'branch', 'agency'],
+        'year': ['year']  # This should already exist from step 1
+    }
+    
+    # Find matching columns
+    print("\nMatching columns:")
+    found_columns = {}
+    missing_columns = []
+    
+    for key, possible_names in column_mappings.items():
+        matched_col = find_matching_column(df, possible_names)
+        if matched_col:
+            found_columns[key] = matched_col
+            print(f"  ✓ {key}: '{matched_col}'")
+        else:
+            missing_columns.append(key)
+            print(f"  ✗ {key}: NOT FOUND (looked for: {', '.join(possible_names)})")
+    
+    # Check if we have all required columns
+    if missing_columns:
+        print(f"\nError: Missing required columns: {', '.join(missing_columns)}")
+        print("Please check the column names in the input file.")
+        sys.exit(1)
+    
+    # Create filtered dataset with key columns
+    print("\nCreating filtered dataset...")
+    filtered_df = pd.DataFrame()
+    
+    # Add columns with standardized names
+    for standard_name, actual_name in found_columns.items():
+        filtered_df[standard_name] = df[actual_name]
+    
+    # Save filtered dataset
+    filtered_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\n✓ Filtered dataset saved to: {output_file}")
+    
+    # Print information about the filtered dataset
+    print("\n" + "="*50)
+    print("FILTERED DATASET INFORMATION")
+    print("="*50)
+    
+    print(f"\nShape: {filtered_df.shape}")
+    print(f"  - Total records: {filtered_df.shape[0]:,}")
+    print(f"  - Total columns: {filtered_df.shape[1]}")
+    
+    print("\nColumn information:")
+    for col in filtered_df.columns:
+        dtype = filtered_df[col].dtype
+        unique_count = filtered_df[col].nunique()
+        print(f"\n  {col}:")
+        print(f"    - Data type: {dtype}")
+        print(f"    - Unique values: {unique_count:,}")
+        
+        # For boolean column, show distribution
+        if col == 'reappointed':
+            if dtype == 'bool' or set(filtered_df[col].dropna().unique()).issubset({True, False, 0, 1}):
+                value_counts = filtered_df[col].value_counts()
+                print(f"    - Distribution:")
+                for val, count in value_counts.items():
+                    print(f"        {val}: {count:,} ({count/len(filtered_df)*100:.1f}%)")
+    
+    print("\nMissing values analysis:")
+    missing_counts = filtered_df.isnull().sum()
+    total_missing = missing_counts.sum()
+    
+    if total_missing == 0:
+        print("  ✓ No missing values found!")
+    else:
+        print(f"  Total missing values: {total_missing:,}")
+        for col, count in missing_counts.items():
+            if count > 0:
+                percentage = (count / len(filtered_df)) * 100
+                print(f"  - {col}: {count:,} missing ({percentage:.1f}%)")
+    
+    # Year range information
+    print(f"\nYear range: {filtered_df['year'].min()} - {filtered_df['year'].max()}")
+    
+    # Sample of data
+    print("\nSample of filtered data (first 5 rows):")
+    print(filtered_df.head())
+    
+    return filtered_df
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Extract Key Columns from Appointments Data")
+    print("=" * 50)
+    
+    # Load and filter the data
+    filtered_df = load_and_filter_data()
+    
+    print("\n✓ Key column extraction complete!")
+    print(f"\nFiltered dataset contains {len(filtered_df):,} records with {len(filtered_df.columns)} key columns")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,44 @@
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# File paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution5/analysis_data/step3_repeats_marked.csv")
+OUTPUT_CSV = Path("scripts/gpt4o/version2/execution5/analysis_data/step8_annual_proportions.csv")
+OUTPUT_PLOT = Path("scripts/gpt4o/version2/execution5/analysis_data/step8_annual_reappointment_proportions.png")
+
+# Load data
+try:
+    df = pd.read_csv(INPUT_FILE)
+    print(f"Loaded {len(df)} records from {INPUT_FILE}")
+except Exception as e:
+    raise RuntimeError(f"Error loading file: {e}")
+
+# Drop duplicate appointments in same year
+deduped_df = df.drop_duplicates(subset=["name", "position", "org", "source_year"])
+
+# Compute counts
+total_by_year = deduped_df.groupby("source_year").size().rename("total_appointments")
+reappointed_by_year = deduped_df[deduped_df["reappointed"] == True].groupby("source_year").size().rename("reappointments")
+
+# Combine and calculate proportion
+summary_df = pd.concat([total_by_year, reappointed_by_year], axis=1).fillna(0)
+summary_df["reappointments"] = summary_df["reappointments"].astype(int)
+summary_df["proportion_reappointed"] = summary_df["reappointments"] / summary_df["total_appointments"]
+summary_df = summary_df.reset_index()
+
+# Save CSV
+summary_df.to_csv(OUTPUT_CSV, index=False)
+print(f"Saved summary to {OUTPUT_CSV}")
+
+# Plot proportions
+plt.figure(figsize=(10, 6))
+plt.plot(summary_df["source_year"], summary_df["proportion_reappointed"], marker="o")
+plt.title("Annual Reappointment Proportions (Gov-Wide)")
+plt.xlabel("Year")
+plt.ylabel("Proportion Reappointed")
+plt.grid(True)
+plt.xticks(summary_df["source_year"])
+plt.tight_layout()
+plt.savefig(OUTPUT_PLOT)
+print(f"Saved plot to {OUTPUT_PLOT}")

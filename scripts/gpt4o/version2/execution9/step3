@@ -1,0 +1,39 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution9/analysis_data/step2_key_columns_data.csv")
+output_dir = Path("scripts/gpt4o/version2/execution9/analysis_data")
+output_file = output_dir / "step3_repeats_marked.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Step 3: Marking reappointments based on repeated name-position-org combinations...\n")
+
+try:
+    # Load input data
+    df = pd.read_csv(input_file)
+    print(f"Loaded data with {len(df)} records.")
+
+    # Standardize 'reappointed' column: make it boolean where possible
+    if df['reappointed'].dtype != bool:
+        df['reappointed'] = df['reappointed'].astype(str).str.lower().isin(['true', 'yes', '1'])
+
+    # Fill NA in relevant columns and strip whitespace for consistency
+    for col in ['name', 'position', 'org']:
+        df[col] = df[col].fillna('').str.strip().str.lower()
+
+    # Mark repeated combinations (excluding the first appearance)
+    repeat_mask = df.duplicated(subset=['name', 'position', 'org'], keep='first')
+    df.loc[repeat_mask, 'reappointed'] = True
+
+    # Save the updated DataFrame
+    df.to_csv(output_file, index=False)
+    print(f"Updated dataset saved to: {output_file}")
+    print(f"Total reappointments marked as True: {df['reappointed'].sum()}")
+
+except FileNotFoundError:
+    print(f"ERROR: Input file not found: {input_file}")
+except Exception as e:
+    print(f"Unexpected error: {e}")

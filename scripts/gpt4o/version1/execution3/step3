@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def normalize_text(text):
+    if pd.isnull(text):
+        return ""
+    return str(text).strip().lower()
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/gpt4o/version1/execution3/analysis_data/step3_repeats_marked.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Failed to load input file: {e}", file=sys.stderr)
+        return
+
+    # Validate data types
+    expected_types = {
+        'reappointed': object,
+        'name': object,
+        'position': object,
+        'org': object,
+        'year': np.integer
+    }
+
+    if 'year' in df.columns:
+        df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+
+    for col in ['reappointed', 'name', 'position', 'org']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).fillna('')
+
+    # Normalize key fields for grouping
+    df['name_norm'] = df['name'].apply(normalize_text)
+    df['position_norm'] = df['position'].apply(normalize_text)
+    df['org_norm'] = df['org'].apply(normalize_text)
+
+    # Sort by year to ensure first occurrence is retained
+    df = df.sort_values(by='year', kind='stable')
+
+    # Track original reappointments
+    original_reappointments = df['reappointed'].str.lower().eq('true').sum()
+
+    # Mark reappointments
+    df['is_first'] = df.groupby(['name_norm', 'position_norm', 'org_norm'], dropna=False).cumcount() == 0
+    df.loc[~df['is_first'], 'reappointed'] = 'True'
+
+    new_reappointments = df['reappointed'].str.lower().eq('true').sum()
+    identified_new = new_reappointments - original_reappointments
+
+    try:
+        df.drop(columns=['name_norm', 'position_norm', 'org_norm', 'is_first'], inplace=True)
+        df.to_csv(output_file, index=False)
+        print(f"Updated dataset with reappointments saved to: {output_file}")
+    except Exception as e:
+        print(f"Failed to save updated dataset: {e}", file=sys.stderr)
+        return
+
+    print(f"\nOriginal reappointments marked: {original_reappointments}")
+    print(f"New reappointments identified: {identified_new}")
+    print(f"Total reappointments after processing: {new_reappointments}")
+
+if __name__ == "__main__":
+    main()

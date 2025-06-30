@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""
+Script to create a summary table of appointment counts by organization and year.
+Groups data by organization and year to analyze appointment patterns.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_marked_data():
+    """
+    Load the dataset from step 3 with reappointments marked.
+    """
+    input_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    
+    try:
+        df = pd.read_csv(input_path)
+        print(f"Successfully loaded marked dataset from: {input_path}")
+        print(f"Dataset shape: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: Could not find file at {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+
+def validate_data(df):
+    """
+    Validate the data and ensure required columns exist.
+    """
+    required_columns = ['org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    # Convert year to numeric and validate
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Check for invalid years
+    invalid_years = df['year'].isna().sum()
+    if invalid_years > 0:
+        print(f"Warning: {invalid_years} rows with invalid year values")
+    
+    # Check year range
+    valid_years = df['year'].dropna()
+    if len(valid_years) > 0:
+        min_year = valid_years.min()
+        max_year = valid_years.max()
+        print(f"Year range: {int(min_year)} - {int(max_year)}")
+        
+        # Validate reasonable year range
+        if min_year < 2000 or max_year > 2030:
+            print("Warning: Unusual year values detected")
+    
+    return df
+
+def create_org_year_counts(df):
+    """
+    Create a summary table with organizations as rows and years as columns.
+    """
+    print("\nCreating organization-year summary table...")
+    print("-" * 60)
+    
+    # Handle missing organization names
+    df_clean = df.copy()
+    df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
+    
+    # Group by organization and year
+    grouped = df_clean.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Validate counts
+    max_count = grouped['count'].max()
+    if max_count > 1000:
+        print(f"Warning: Maximum count of {max_count} seems unusually high")
+    
+    # Pivot to create the summary table
+    summary_table = grouped.pivot(index='org', columns='year', values='count')
+    
+    # Fill missing values with 0 (no appointments that year)
+    summary_table = summary_table.fillna(0).astype(int)
+    
+    # Sort by total appointments (descending)
+    summary_table['Total'] = summary_table.sum(axis=1)
+    summary_table = summary_table.sort_values('Total', ascending=False)
+    
+    # Calculate additional statistics
+    summary_table['Average'] = summary_table.drop('Total', axis=1).mean(axis=1).round(2)
+    summary_table['Min'] = summary_table.drop(['Total', 'Average'], axis=1).min(axis=1)
+    summary_table['Max'] = summary_table.drop(['Total', 'Average', 'Min'], axis=1).max(axis=1)
+    
+    return summary_table
+
+def analyze_summary(summary_table):
+    """
+    Analyze and print insights from the summary table.
+    """
+    print("\n" + "=" * 60)
+    print("APPOINTMENT COUNTS ANALYSIS")
+    print("=" * 60)
+    
+    # Top organizations by total appointments
+    print("\nTop 20 Organizations by Total Appointments:")
+    print("-" * 60)
+    top_orgs = summary_table.head(20)
+    
+    for idx, (org, row) in enumerate(top_orgs.iterrows(), 1):
+        print(f"{idx:2d}. {org[:50]:50} - Total: {int(row['Total']):4d}, Avg: {row['Average']:6.2f}")
+    
+    # Overall statistics
+    print("\nOverall Statistics:")
+    print("-" * 60)
+    print(f"Total organizations: {len(summary_table)}")
+    print(f"Total appointments: {int(summary_table['Total'].sum())}")
+    print(f"Average appointments per organization: {summary_table['Total'].mean():.2f}")
+    print(f"Median appointments per organization: {summary_table['Total'].median():.2f}")
+    
+    # Year-by-year totals
+    print("\nAppointments by Year:")
+    print("-" * 60)
+    year_columns = [col for col in summary_table.columns if isinstance(col, (int, float)) and col not in ['Total', 'Average', 'Min', 'Max']]
+    year_totals = summary_table[year_columns].sum().sort_index()
+    
+    for year, total in year_totals.items():
+        print(f"{int(year)}: {int(total)} appointments")
+    
+    # Organizations with consistent appointments
+    print("\nOrganizations with Appointments Every Year:")
+    print("-" * 60)
+    consistent_orgs = summary_table[(summary_table[year_columns] > 0).all(axis=1)]
+    print(f"Number of organizations: {len(consistent_orgs)}")
+    if len(consistent_orgs) > 0:
+        print("Top 5 by total appointments:")
+        for idx, (org, row) in enumerate(consistent_orgs.head(5).iterrows(), 1):
+            print(f"  {idx}. {org[:50]:50} - Total: {int(row['Total'])}")
+
+def save_summary_table(summary_table):
+    """
+    Save the summary table to CSV.
+    """
+    output_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step4_employee_counts.csv")
+    
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save the summary table
+    summary_table.to_csv(output_path)
+    print(f"\nSummary table saved to: {output_path}")
+    
+    return output_path
+
+def print_sample_table(summary_table):
+    """
+    Print a sample of the summary table.
+    """
+    print("\n" + "=" * 60)
+    print("SAMPLE OF SUMMARY TABLE (Top 10 Organizations)")
+    print("=" * 60)
+    
+    # Get year columns for display
+    year_columns = sorted([col for col in summary_table.columns if isinstance(col, (int, float)) and col not in ['Total', 'Average', 'Min', 'Max']])
+    
+    # Display columns: first few years, last few years, and summary stats
+    if len(year_columns) > 6:
+        display_columns = year_columns[:3] + year_columns[-3:] + ['Total', 'Average']
+    else:
+        display_columns = year_columns + ['Total', 'Average']
+    
+    # Print header
+    print(f"{'Organization':40} | " + " | ".join([f"{str(col):>6}" for col in display_columns]))
+    print("-" * (42 + len(display_columns) * 9))
+    
+    # Print top 10 organizations
+    for org, row in summary_table.head(10).iterrows():
+        org_display = org[:40] if len(org) > 40 else org
+        values = []
+        for col in display_columns:
+            if col in ['Average']:
+                values.append(f"{row[col]:>6.1f}")
+            else:
+                values.append(f"{int(row[col]):>6}")
+        print(f"{org_display:40} | " + " | ".join(values))
+
+def main():
+    """
+    Main function to execute the organization-year count analysis.
+    """
+    print("Starting Organization-Year Count Analysis...")
+    print("=" * 60)
+    
+    # Load the marked dataset
+    df = load_marked_data()
+    
+    # Validate the data
+    df = validate_data(df)
+    
+    # Display initial statistics
+    print("\nDataset Overview:")
+    print(f"Total rows: {len(df)}")
+    print(f"Unique organizations: {df['org'].nunique()}")
+    print(f"Missing organization values: {df['org'].isna().sum()}")
+    
+    # Create the summary table
+    summary_table = create_org_year_counts(df)
+    
+    # Print sample of the table
+    print_sample_table(summary_table)
+    
+    # Analyze the summary
+    analyze_summary(summary_table)
+    
+    # Save the summary table
+    output_path = save_summary_table(summary_table)
+    
+    # Data quality report
+    print("\n" + "=" * 60)
+    print("DATA QUALITY REPORT")
+    print("=" * 60)
+    print(f"Organizations processed: {len(summary_table)}")
+    print(f"Years covered: {len([col for col in summary_table.columns if isinstance(col, (int, float)) and col not in ['Total', 'Average', 'Min', 'Max']])}")
+    print(f"Total appointments counted: {int(summary_table['Total'].sum())}")
+    
+    # Check for potential issues
+    zero_count_orgs = len(summary_table[summary_table['Total'] == 0])
+    if zero_count_orgs > 0:
+        print(f"Warning: {zero_count_orgs} organizations with zero total appointments")
+    
+    high_count_orgs = len(summary_table[summary_table['Total'] > 500])
+    if high_count_orgs > 0:
+        print(f"Note: {high_count_orgs} organizations with more than 500 total appointments")
+    
+    print("\n" + "=" * 60)
+    print("Organization-year count analysis completed successfully!")
+
+if __name__ == "__main__":
+    main()

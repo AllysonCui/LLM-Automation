@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+
+"""
+New Brunswick Government Appointments Data Combiner
+Loads CSV files from 2013-2024 and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024 and combine into single DataFrame.
+    
+    Returns:
+        pd.DataFrame: Combined dataset with year column added
+    """
+    
+    # Define years and paths
+    years = range(2013, 2025)  # 2013 through 2024
+    raw_data_dir = Path("raw_data")
+    output_dir = Path("scripts/claudesonnet4/version1/execution1/analysis_data")
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # List to store individual DataFrames
+    dataframes = []
+    
+    print("Loading appointment data files...")
+    print("-" * 50)
+    
+    for year in years:
+        filename = f"appointments_{year}.csv"
+        filepath = raw_data_dir / filename
+        
+        try:
+            # Load CSV file
+            df = pd.read_csv(filepath)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Store DataFrame
+            dataframes.append(df)
+            
+            print(f"✓ Loaded {filename}: {df.shape[0]} rows, {df.shape[1]} columns")
+            
+        except FileNotFoundError:
+            print(f"✗ Warning: File {filename} not found, skipping...")
+            continue
+        except pd.errors.EmptyDataError:
+            print(f"✗ Warning: File {filename} is empty, skipping...")
+            continue
+        except Exception as e:
+            print(f"✗ Error loading {filename}: {str(e)}")
+            continue
+    
+    # Check if any files were loaded
+    if not dataframes:
+        raise ValueError("No CSV files were successfully loaded!")
+    
+    print(f"\nSuccessfully loaded {len(dataframes)} files")
+    print("-" * 50)
+    
+    # Combine all DataFrames
+    print("Combining datasets...")
+    combined_df = pd.concat(dataframes, ignore_index=True, sort=False)
+    
+    # Save combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_file, index=False)
+    
+    print(f"✓ Combined dataset saved to: {output_file}")
+    
+    return combined_df
+
+def print_dataset_info(df):
+    """
+    Print basic information about the combined dataset.
+    
+    Args:
+        df (pd.DataFrame): Combined appointments dataset
+    """
+    print("\nCOMBINED DATASET INFORMATION")
+    print("=" * 50)
+    print(f"Shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    print(f"Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+    
+    print(f"\nYear distribution:")
+    year_counts = df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count:,} appointments")
+    
+    print(f"\nColumn names:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+    
+    print(f"\nData types:")
+    print(df.dtypes.to_string())
+    
+    print(f"\nMissing values:")
+    missing = df.isnull().sum()
+    missing_pct = (missing / len(df)) * 100
+    for col in df.columns:
+        if missing[col] > 0:
+            print(f"  {col}: {missing[col]:,} ({missing_pct[col]:.1f}%)")
+    
+    if missing.sum() == 0:
+        print("  No missing values found")
+
+def main():
+    """Main execution function."""
+    try:
+        print("NEW BRUNSWICK APPOINTMENTS DATA COMBINER")
+        print("=" * 50)
+        
+        # Load and combine data
+        combined_df = load_and_combine_appointments()
+        
+        # Print dataset information
+        print_dataset_info(combined_df)
+        
+        print("\n" + "=" * 50)
+        print("✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Script failed with error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

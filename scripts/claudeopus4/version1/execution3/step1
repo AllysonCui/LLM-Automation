@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+Script to combine New Brunswick government appointment data from 2013-2024.
+Loads all 12 CSV files, adds year column, combines, and saves the result.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    # Define paths
+    base_path = Path.cwd()
+    raw_data_path = base_path / "raw_data"
+    output_dir = base_path / "scripts" / "claudeopus4" / "version1" / "execution3" / "analysis_data"
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize list to store dataframes
+    all_dfs = []
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        filename = f"raw_data/appointments_{year}.csv"
+        filepath = base_path / filename
+        
+        try:
+            # Load CSV file
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            all_dfs.append(df)
+            
+            print(f"Successfully loaded {filename}: {len(df)} rows")
+            
+        except FileNotFoundError:
+            print(f"Warning: File {filename} not found. Skipping...")
+            continue
+        except Exception as e:
+            print(f"Error loading {filename}: {str(e)}")
+            continue
+    
+    if not all_dfs:
+        print("Error: No data files were successfully loaded.")
+        sys.exit(1)
+    
+    print(f"\nTotal files loaded: {len(all_dfs)}")
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Save combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nCombined dataset saved to: {output_file}")
+    
+    # Print shape and basic info
+    print("\n" + "="*50)
+    print("COMBINED DATASET INFORMATION")
+    print("="*50)
+    print(f"Shape: {combined_df.shape} (rows, columns)")
+    print(f"Total appointments: {len(combined_df):,}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    print(f"Years covered: {combined_df['year'].min()} - {combined_df['year'].max()}")
+    
+    print("\nColumn names:")
+    for col in combined_df.columns:
+        print(f"  - {col}")
+    
+    print("\nData types:")
+    print(combined_df.dtypes)
+    
+    print("\nMissing values per column:")
+    missing = combined_df.isnull().sum()
+    for col, count in missing.items():
+        if count > 0:
+            print(f"  - {col}: {count:,} ({count/len(combined_df)*100:.1f}%)")
+    
+    print("\nAppointments per year:")
+    year_counts = combined_df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  - {year}: {count:,}")
+    
+    print("\n" + "="*50)
+    print("Script completed successfully!")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import sys
+from pathlib import Path
+
+# Define file paths
+input_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step3_repeats_marked.csv")
+output_csv = Path("scripts/gpt4o/version1/execution6/analysis_data/step8_annual_proportions.csv")
+output_png = Path("scripts/gpt4o/version1/execution6/analysis_data/step8_annual_reappointment_proportions.png")
+
+# Load dataset
+try:
+    df = pd.read_csv(input_file)
+except FileNotFoundError:
+    print(f"Error: File not found: {input_file}")
+    sys.exit(1)
+except pd.errors.EmptyDataError:
+    print(f"Error: File is empty: {input_file}")
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error loading file: {e}")
+    sys.exit(1)
+
+# Validate necessary columns
+required_cols = ["year", "reappointed"]
+missing = [col for col in required_cols if col not in df.columns]
+if missing:
+    print(f"Error: Missing required columns: {missing}")
+    sys.exit(1)
+
+# Clean and ensure correct types
+df = df.dropna(subset=["year"])
+df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+df["reappointed"] = df["reappointed"].astype(bool)
+
+# Filter for valid year range
+df = df[df["year"].between(2013, 2024)]
+
+# Group and aggregate data
+summary = (
+    df.groupby("year")
+    .agg(
+        total_appointments=("reappointed", "count"),
+        total_reappointments=("reappointed", "sum")
+    )
+    .reset_index()
+)
+summary["reappointment_proportion"] = (
+    summary["total_reappointments"] / summary["total_appointments"]
+)
+
+# Save results
+try:
+    summary.to_csv(output_csv, index=False)
+    print(f"Saved annual reappointment proportions to: {output_csv}")
+except Exception as e:
+    print(f"Error saving CSV: {e}")
+    sys.exit(1)
+
+# Create visualization
+try:
+    plt.figure(figsize=(10, 6))
+    plt.plot(summary["year"], summary["reappointment_proportion"], marker='o')
+    plt.title("Annual Government-wide Reappointment Proportion")
+    plt.xlabel("Year")
+    plt.ylabel("Proportion of Reappointments")
+    plt.ylim(0, 1)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_png)
+    print(f"Saved plot to: {output_png}")
+except Exception as e:
+    print(f"Error creating or saving plot: {e}")
+    sys.exit(1)
+
+# Print the year-by-year proportions
+print("\nAnnual reappointment proportions:")
+print(summary.to_string(index=False))

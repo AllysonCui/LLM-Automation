@@ -1,0 +1,55 @@
+import pandas as pd
+from pathlib import Path
+
+# Define input and output paths
+raw_data_path = Path("raw_data")
+output_path = Path("scripts/gpt4o/version2/execution3/analysis_data")
+output_path.mkdir(parents=True, exist_ok=True)
+output_file = output_path / "step1_combined_appointments.csv"
+
+# List of years to process
+years = list(range(2013, 2025))
+combined_df = []
+
+# Track column sets for diagnostics
+column_sets = {}
+
+print("Starting Step 1: Combining appointment datasets from 2013 to 2024...\n")
+
+for year in years:
+    file_path = raw_data_path / f"appointments_{year}.csv"
+    
+    if not file_path.exists():
+        print(f"⚠️ File not found: {file_path}. Skipping this year.")
+        continue
+
+    try:
+        df = pd.read_csv(file_path)
+        original_columns = df.columns.tolist()
+        column_sets[year] = original_columns
+        
+        # Add year column for reference
+        df["year"] = year
+
+        # Standardize column names to lowercase and strip whitespace
+        df.columns = df.columns.str.strip().str.lower()
+
+        combined_df.append(df)
+        print(f"✅ Loaded {file_path.name} with {df.shape[0]} records.")
+    
+    except Exception as e:
+        print(f"❌ Failed to load {file_path}: {e}")
+
+# Combine all into one DataFrame
+if combined_df:
+    all_appointments = pd.concat(combined_df, ignore_index=True)
+    all_appointments.to_csv(output_file, index=False)
+    print(f"\n✅ Successfully combined datasets. Total records: {all_appointments.shape[0]}")
+    print(f"📁 Output written to: {output_file}")
+else:
+    print("❌ No data files were successfully loaded. Exiting...")
+
+# Print column consistency summary
+print("\nColumn diagnostics by year:")
+for yr, cols in column_sets.items():
+    print(f"{yr}: {cols}")

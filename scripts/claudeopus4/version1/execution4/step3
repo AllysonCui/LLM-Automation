@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments based on repeat occurrences
+of the same person in the same position at the same organization.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import re
+
+def normalize_name(name):
+    """
+    Normalize names to handle variations (e.g., different spacing, case, punctuation).
+    
+    Args:
+        name: string or NaN value
+    
+    Returns:
+        str: normalized name or empty string for NaN
+    """
+    if pd.isna(name):
+        return ""
+    
+    # Convert to string and lowercase
+    name_str = str(name).lower().strip()
+    
+    # Remove multiple spaces and replace with single space
+    name_str = re.sub(r'\s+', ' ', name_str)
+    
+    # Remove common punctuation that might vary
+    name_str = re.sub(r'[,.\-\'"]', '', name_str)
+    
+    # Handle common variations (e.g., "jr", "sr", "dr", "mr", "ms")
+    name_str = re.sub(r'\b(jr|sr|dr|mr|ms|mrs)\b', '', name_str)
+    
+    # Remove any remaining extra spaces
+    name_str = name_str.strip()
+    
+    return name_str
+
+def load_filtered_data():
+    """
+    Load the filtered dataset from step 2.
+    """
+    input_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step2_key_columns_data.csv")
+    
+    try:
+        df = pd.read_csv(input_path)
+        print(f"Successfully loaded filtered dataset from: {input_path}")
+        print(f"Dataset shape: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: Could not find file at {input_path}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+
+def validate_required_columns(df):
+    """
+    Validate that required columns exist in the dataframe.
+    """
+    required_columns = ['name', 'position', 'org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    # Ensure reappointed column exists (create if not)
+    if 'reappointed' not in df.columns:
+        print("Creating 'reappointed' column as it doesn't exist...")
+        df['reappointed'] = False
+    
+    return df
+
+def identify_reappointments(df):
+    """
+    Identify and mark reappointments based on repeat occurrences.
+    """
+    # Create a copy to avoid modifying the original
+    df_work = df.copy()
+    
+    # Normalize names for matching
+    df_work['name_normalized'] = df_work['name'].apply(normalize_name)
+    
+    # Convert year to numeric for proper sorting
+    df_work['year'] = pd.to_numeric(df_work['year'], errors='coerce')
+    
+    # Count existing reappointments before processing
+    initial_reappointments = df_work['reappointed'].sum() if 'reappointed' in df_work.columns else 0
+    
+    # Initialize new reappointed column (preserving existing True values)
+    if 'reappointed' in df_work.columns:
+        df_work['reappointed_new'] = df_work['reappointed'].fillna(False)
+    else:
+        df_work['reappointed_new'] = False
+    
+    # Group by normalized name, position, and org
+    groupby_cols = ['name_normalized', 'position', 'org']
+    
+    print("\nProcessing groups to identify reappointments...")
+    print("-" * 60)
+    
+    newly_identified = 0
+    groups_with_repeats = 0
+    
+    # Process each group
+    for group_key, group_df in df_work.groupby(groupby_cols, dropna=False):
+        # Skip empty groups or groups with only one occurrence
+        if len(group_df) <= 1:
+            continue
+        
+        try:
+            # Sort by year to find chronological order
+            group_sorted = group_df.sort_values('year', kind='stable')
+            
+            # Get indices of all occurrences except the first
+            indices_to_mark = group_sorted.index.tolist()[1:]
+            
+            if indices_to_mark:
+                groups_with_repeats += 1
+                
+                # Count how many are newly identified
+                for idx in indices_to_mark:
+                    if not df_work.loc[idx, 'reappointed_new']:
+                        newly_identified += 1
+                
+                # Mark as reappointments using .loc
+                df_work.loc[indices_to_mark, 'reappointed_new'] = True
+                
+        except Exception as e:
+            print(f"Warning: Error processing group {group_key}: {str(e)}")
+            continue
+    
+    # Update the original reappointed column
+    df_work['reappointed'] = df_work['reappointed_new']
+    
+    # Drop temporary columns
+    df_work = df_work.drop(columns=['name_normalized', 'reappointed_new'])
+    
+    # Calculate statistics
+    final_reappointments = df_work['reappointed'].sum()
+    
+    print(f"\nGroups with repeat appointments: {groups_with_repeats}")
+    print(f"Initial reappointments: {initial_reappointments}")
+    print(f"Newly identified reappointments: {newly_identified}")
+    print(f"Total reappointments after processing: {final_reappointments}")
+    
+    return df_work, newly_identified
+
+def analyze_reappointments(df):
+    """
+    Analyze and print statistics about reappointments.
+    """
+    print("\n" + "=" * 60)
+    print("REAPPOINTMENT ANALYSIS")
+    print("=" * 60)
+    
+    total_appointments = len(df)
+    total_reappointments = df['reappointed'].sum()
+    reappointment_rate = (total_reappointments / total_appointments) * 100
+    
+    print(f"Total appointments: {total_appointments}")
+    print(f"Total reappointments: {total_reappointments}")
+    print(f"Overall reappointment rate: {reappointment_rate:.2f}%")
+    
+    # Analyze by year
+    print("\nReappointments by year:")
+    print("-" * 40)
+    year_stats = df.groupby('year')['reappointed'].agg(['sum', 'count', 'mean'])
+    year_stats.columns = ['reappointments', 'total', 'rate']
+    year_stats['rate'] = year_stats['rate'] * 100
+    
+    for year, row in year_stats.iterrows():
+        print(f"{int(year)}: {int(row['reappointments'])} / {int(row['total'])} ({row['rate']:.1f}%)")
+    
+    # Analyze by organization (top 10)
+    print("\nTop 10 organizations by reappointment count:")
+    print("-" * 40)
+    org_stats = df.groupby('org')['reappointed'].agg(['sum', 'count'])
+    org_stats.columns = ['reappointments', 'total']
+    org_stats['rate'] = (org_stats['reappointments'] / org_stats['total']) * 100
+    org_stats = org_stats.sort_values('reappointments', ascending=False).head(10)
+    
+    for org, row in org_stats.iterrows():
+        if pd.notna(org):
+            print(f"{org[:50]:50} - {int(row['reappointments'])} reappointments ({row['rate']:.1f}%)")
+
+def save_updated_data(df):
+    """
+    Save the updated dataset with reappointments marked.
+    """
+    output_path = Path("scripts/claudeopus4/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save the dataset
+    df.to_csv(output_path, index=False)
+    print(f"\nUpdated dataset saved to: {output_path}")
+    
+    return output_path
+
+def main():
+    """
+    Main function to execute the reappointment marking process.
+    """
+    print("Starting Reappointment Identification Process...")
+    print("=" * 60)
+    
+    # Load the filtered dataset
+    df = load_filtered_data()
+    
+    # Validate required columns
+    df = validate_required_columns(df)
+    
+    # Display initial statistics
+    print("\nInitial dataset info:")
+    print(f"Columns: {df.columns.tolist()}")
+    print(f"Data types:\n{df.dtypes}")
+    
+    # Check for missing values in key columns
+    print("\nMissing values in key columns:")
+    for col in ['name', 'position', 'org', 'year']:
+        missing = df[col].isna().sum()
+        if missing > 0:
+            print(f"  {col}: {missing} missing values")
+    
+    # Identify and mark reappointments
+    df_updated, newly_identified = identify_reappointments(df)
+    
+    # Analyze the results
+    analyze_reappointments(df_updated)
+    
+    # Save the updated dataset
+    output_path = save_updated_data(df_updated)
+    
+    # Display sample of newly marked reappointments
+    if newly_identified > 0:
+        print("\nSample of newly marked reappointments:")
+        print("-" * 60)
+        newly_marked = df_updated[df_updated['reappointed'] == True].head(10)
+        print(newly_marked[['name', 'position', 'org', 'year', 'reappointed']])
+    
+    print("\n" + "=" * 60)
+    print("Reappointment identification completed successfully!")
+    print(f"Newly identified reappointments: {newly_identified}")
+
+if __name__ == "__main__":
+    main()

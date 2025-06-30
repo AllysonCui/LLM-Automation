@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Key Columns Extractor
+==========================================================
+
+This script loads the combined appointments dataset and extracts key columns
+with flexible column name matching to handle variations in naming conventions.
+
+Author: Claude Sonnet 4
+Created: 2025-06-30
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import re
+
+def find_column_match(columns, target_patterns):
+    """
+    Find the best matching column name from a list of patterns.
+    
+    Args:
+        columns (list): List of available column names
+        target_patterns (list): List of possible column name patterns to match
+    
+    Returns:
+        str or None: Best matching column name, or None if no match found
+    """
+    columns_lower = [col.lower().strip() for col in columns]
+    
+    for pattern in target_patterns:
+        pattern_lower = pattern.lower().strip()
+        
+        # Exact match first
+        if pattern_lower in columns_lower:
+            return columns[columns_lower.index(pattern_lower)]
+        
+        # Partial match (pattern contains column or vice versa)
+        for i, col in enumerate(columns_lower):
+            if pattern_lower in col or col in pattern_lower:
+                return columns[i]
+    
+    return None
+
+def extract_key_columns():
+    """
+    Load the combined dataset and extract key columns with flexible naming.
+    
+    Returns:
+        pd.DataFrame: Filtered dataset with key columns only
+    """
+    
+    # Define file paths
+    input_file = Path("scripts/claudesonnet4/version1/execution8/analysis_data/step1_combined_appointments.csv")
+    output_dir = Path("scripts/claudesonnet4/version1/execution8/analysis_data")
+    output_file = output_dir / "step2_key_columns_data.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        print("Loading combined appointments dataset...")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to load dataset: {str(e)}")
+        sys.exit(1)
+    
+    # Define column mapping patterns (in order of preference)
+    column_patterns = {
+        'reappointed': ['reappointed', 'reappoint', 're-appointed', 'reappointment'],
+        'name': ['name', 'full_name', 'person_name', 'appointee'],
+        'position': ['position', 'appointment', 'role', 'title', 'job_title'],
+        'org': ['org', 'organization', 'organisation', 'agency', 'department', 'ministry'],
+        'year': ['year', 'appointment_year', 'fiscal_year']
+    }
+    
+    print("\nIdentifying key columns...")
+    print("-" * 40)
+    
+    # Find matching columns
+    column_mapping = {}
+    available_columns = list(df.columns)
+    
+    for key, patterns in column_patterns.items():
+        matched_column = find_column_match(available_columns, patterns)
+        
+        if matched_column:
+            column_mapping[key] = matched_column
+            print(f"✓ {key:<12} -> '{matched_column}'")
+        else:
+            print(f"✗ {key:<12} -> NOT FOUND")
+            print(f"  Available columns: {', '.join(available_columns)}")
+    
+    # Check if all required columns were found
+    missing_columns = []
+    for key in column_patterns.keys():
+        if key not in column_mapping:
+            missing_columns.append(key)
+    
+    if missing_columns:
+        print(f"\nERROR: Required columns not found: {', '.join(missing_columns)}")
+        print("Available columns in dataset:")
+        for i, col in enumerate(available_columns, 1):
+            print(f"  {i:2d}. {col}")
+        sys.exit(1)
+    
+    # Extract the key columns
+    try:
+        key_columns = list(column_mapping.values())
+        filtered_df = df[key_columns].copy()
+        
+        # Rename columns to standardized names
+        rename_mapping = {v: k for k, v in column_mapping.items()}
+        filtered_df = filtered_df.rename(columns=rename_mapping)
+        
+        print(f"\n✓ Extracted {len(key_columns)} key columns")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to extract columns: {str(e)}")
+        sys.exit(1)
+    
+    # Save the filtered dataset
+    try:
+        filtered_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Saved filtered dataset to: {output_file}")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to save filtered dataset: {str(e)}")
+        sys.exit(1)
+    
+    return filtered_df
+
+def analyze_extracted_data(df):
+    """
+    Analyze and print information about the extracted dataset.
+    
+    Args:
+        df (pd.DataFrame): The filtered dataset with key columns
+    """
+    print("\nEXTRACTED DATASET ANALYSIS")
+    print("=" * 50)
+    
+    # Basic information
+    print(f"Shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    
+    # Column analysis
+    print(f"\nColumn Information:")
+    print("-" * 30)
+    
+    for col in df.columns:
+        total_count = len(df)
+        non_null_count = df[col].notna().sum()
+        null_count = df[col].isna().sum()
+        null_percentage = (null_count / total_count) * 100
+        
+        print(f"{col:<12}: {non_null_count:,} values ({null_percentage:.1f}% missing)")
+        
+        # Show unique value counts for specific columns
+        if col in ['reappointed', 'year']:
+            unique_values = df[col].value_counts().sort_index()
+            if len(unique_values) <= 20:  # Only show if reasonable number of unique values
+                print(f"             Unique values: {dict(unique_values)}")
+        elif col in ['name', 'position', 'org']:
+            unique_count = df[col].nunique()
+            print(f"             Unique count: {unique_count:,}")
+        
+        print()
+    
+    # Year distribution
+    if 'year' in df.columns:
+        print("Appointments by Year:")
+        print("-" * 20)
+        year_counts = df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,}")
+    
+    # Reappointment analysis
+    if 'reappointed' in df.columns:
+        print("\nReappointment Analysis:")
+        print("-" * 22)
+        reappoint_counts = df['reappointed'].value_counts()
+        total_with_data = df['reappointed'].notna().sum()
+        
+        for value, count in reappoint_counts.items():
+            percentage = (count / total_with_data) * 100
+            print(f"  {value}: {count:,} ({percentage:.1f}%)")
+    
+    # Data quality summary
+    print(f"\nData Quality Summary:")
+    print("-" * 20)
+    total_cells = df.shape[0] * df.shape[1]
+    missing_cells = df.isna().sum().sum()
+    completeness = ((total_cells - missing_cells) / total_cells) * 100
+    
+    print(f"Overall completeness: {completeness:.1f}%")
+    print(f"Total missing values: {missing_cells:,}")
+
+def main():
+    """Main execution function."""
+    print("NEW BRUNSWICK APPOINTMENTS - KEY COLUMNS EXTRACTOR")
+    print("=" * 55)
+    
+    try:
+        # Extract key columns
+        filtered_df = extract_key_columns()
+        
+        # Analyze the extracted data
+        analyze_extracted_data(filtered_df)
+        
+        print(f"\n✓ Process completed successfully!")
+        print(f"Key columns dataset saved with {filtered_df.shape[0]:,} appointments")
+        
+    except KeyboardInterrupt:
+        print("\n\nProcess interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nFATAL ERROR: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

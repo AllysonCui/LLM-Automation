@@ -1,0 +1,57 @@
+# scripts/gpt4o/version2/execution8/step7_yearly_max_rates.py
+
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# Define input/output paths
+input_path = Path("scripts/gpt4o/version2/execution8/analysis_data/step6_reappointment_rates.csv")
+output_csv_path = Path("scripts/gpt4o/version2/execution8/analysis_data/step7_yearly_max_rates.csv")
+output_plot_path = Path("scripts/gpt4o/version2/execution8/analysis_data/step7_yearly_max_reappointment_rates.png")
+output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+def main():
+    print("Step 7: Finding organization with highest reappointment rate per year...")
+
+    if not input_path.exists():
+        print(f"❌ Input file not found: {input_path}")
+        return
+
+    try:
+        df = pd.read_csv(input_path)
+
+        # Validate expected columns
+        required_cols = {"org", "source_year", "reappointment_rate"}
+        if not required_cols.issubset(df.columns):
+            print(f"❌ Missing one or more required columns: {required_cols - set(df.columns)}")
+            return
+
+        # Ensure source_year is treated as numeric for sorting
+        df["source_year"] = pd.to_numeric(df["source_year"], errors="coerce")
+
+        # Drop rows with missing years or rates
+        df = df.dropna(subset=["source_year", "reappointment_rate"])
+
+        # Get max reappointment rate per year
+        max_rates_df = df.loc[df.groupby("source_year")["reappointment_rate"].idxmax()].reset_index(drop=True)
+
+        # Save results to CSV
+        max_rates_df.to_csv(output_csv_path, index=False)
+        print(f"✅ Yearly max reappointment rates saved to: {output_csv_path}")
+
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        plt.plot(max_rates_df["source_year"], max_rates_df["reappointment_rate"], marker='o')
+        plt.title("Highest Reappointment Rate by Organization (per Year)")
+        plt.xlabel("Year")
+        plt.ylabel("Reappointment Rate")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_plot_path)
+        print(f"📊 Plot saved to: {output_plot_path}")
+
+    except Exception as e:
+        print(f"❌ Error during processing: {e}")
+
+if __name__ == "__main__":
+    main()

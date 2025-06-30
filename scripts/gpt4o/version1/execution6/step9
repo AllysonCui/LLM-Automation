@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import scipy.stats as stats
+from statsmodels.stats.stattools import durbin_watson
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress warnings from statsmodels
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# File paths
+input_csv = Path("scripts/gpt4o/version1/execution6/analysis_data/step8_annual_proportions.csv")
+output_txt = Path("scripts/gpt4o/version1/execution6/analysis_data/step9_regression_results.txt")
+
+# Load the data
+try:
+    df = pd.read_csv(input_csv)
+except FileNotFoundError:
+    print(f"Error: File not found at {input_csv}")
+    sys.exit(1)
+except pd.errors.EmptyDataError:
+    print(f"Error: File is empty: {input_csv}")
+    sys.exit(1)
+except Exception as e:
+    print(f"Error reading CSV: {e}")
+    sys.exit(1)
+
+# Validate columns
+required_cols = ["year", "reappointment_proportion"]
+missing = [col for col in required_cols if col not in df.columns]
+if missing:
+    print(f"Error: Missing columns: {missing}")
+    sys.exit(1)
+
+# Drop rows with missing data
+df = df.dropna(subset=required_cols)
+df["year"] = pd.to_numeric(df["year"], errors="coerce").astype(int)
+df["reappointment_proportion"] = pd.to_numeric(df["reappointment_proportion"], errors="coerce")
+
+# Prepare X and Y
+X = df["year"]
+Y = df["reappointment_proportion"]
+
+if len(X) < 3:
+    print("Error: Not enough data points for regression analysis.")
+    sys.exit(1)
+
+# Linear regression
+slope, intercept, r_value, p_value, std_err = stats.linregress(X, Y)
+r_squared = r_value**2
+
+# Confidence interval (95%)
+alpha = 0.05
+df_n = len(X) - 2
+t_val = stats.t.ppf(1 - alpha/2, df_n)
+conf_interval = t_val * std_err
+slope_low = slope - conf_interval
+slope_high = slope + conf_interval
+
+# Regression predictions and residuals
+Y_pred = intercept + slope * X
+residuals = Y - Y_pred
+
+# Durbin-Watson statistic
+dw_stat = durbin_watson(residuals)
+
+# Annual change in percentage points
+annual_change_pct = slope * 100
+total_change_pct = annual_change_pct * (X.max() - X.min())
+
+# Determine direction and significance
+trend = "increasing" if slope > 0 else "decreasing"
+significant = p_value < 0.05
+significance = "statistically significant" if significant else "not statistically significant"
+
+# Write results to file
+try:
+    with open(output_txt, "w") as f:
+        f.write("Government-wide Reappointment Proportion Trend Analysis (2013–2024)\n")
+        f.write("="*70 + "\n\n")
+        f.write("Data Summary:\n")
+        f.write(df.to_string(index=False) + "\n\n")
+        f.write("Linear Regression Results:\n")
+        f.write(f"  Equation: y = {slope:.6f} * year + {intercept:.4f}\n")
+        f.write(f"  R-squared: {r_squared:.4f}\n")
+        f.write(f"  p-value: {p_value:.6f} ({significance})\n")
+        f.write(f"  Standard error: {std_err:.6f}\n")
+        f.write(f"  95% CI for slope: ({slope_low:.6f}, {slope_high:.6f})\n")
+        f.write(f"  Durbin-Watson statistic: {dw_stat:.4f} (values ~2 suggest no autocorrelation)\n\n")
+        f.write("Trend Interpretation:\n")
+        f.write(f"  The reappointment trend is {trend} at an average rate of {annual_change_pct:.3f} percentage points per year.\n")
+        f.write(f"  Total change over 12 years: {total_change_pct:.2f} percentage points.\n")
+        f.write(f"  This trend is {significance}.\n")
+except Exception as e:
+    print(f"Error writing results file: {e}")
+    sys.exit(1)
+
+# Print final answer
+print(f"\nFinal Result:")
+print(f"The government-wide reappointment proportion trend is {trend} and is {significance} (p = {p_value:.4f}).")

@@ -1,0 +1,57 @@
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# Define file paths
+input_file = Path("scripts/gpt4o/version2/execution3/analysis_data/step6_reappointment_rates.csv")
+output_dir = Path("scripts/gpt4o/version2/execution3/analysis_data")
+output_dir.mkdir(parents=True, exist_ok=True)
+output_csv = output_dir / "step8_annual_proportions.csv"
+output_plot = output_dir / "step8_annual_reappointment_proportions.png"
+
+print("Starting Step 8: Computing government-wide reappointment proportions per year...\n")
+
+if not input_file.exists():
+    print(f"❌ Input file not found: {input_file}")
+    exit(1)
+
+try:
+    df = pd.read_csv(input_file)
+
+    # Drop any missing values for safety
+    df = df.dropna(subset=['year', 'total_appointments', 'reappointment_count'])
+
+    # Ensure proper types
+    df['year'] = df['year'].astype(int)
+    df['total_appointments'] = df['total_appointments'].astype(int)
+    df['reappointment_count'] = df['reappointment_count'].astype(int)
+
+    # Aggregate across all orgs per year
+    annual_totals = df.groupby('year').agg({
+        'total_appointments': 'sum',
+        'reappointment_count': 'sum'
+    }).reset_index()
+
+    # Calculate government-wide proportion
+    annual_totals['gov_reappointment_proportion'] = (
+        annual_totals['reappointment_count'] / annual_totals['total_appointments']
+    )
+
+    # Save result
+    annual_totals.to_csv(output_csv, index=False)
+    print(f"✅ Saved government-wide annual reappointment proportions to: {output_csv}")
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(annual_totals['year'], annual_totals['gov_reappointment_proportion'],
+             marker='o', linestyle='-', color='blue')
+    plt.title("Government-Wide Annual Reappointment Proportion")
+    plt.xlabel("Year")
+    plt.ylabel("Reappointment Proportion")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_plot)
+    print(f"📈 Saved plot to: {output_plot}")
+
+except Exception as e:
+    print(f"❌ Failed during government-wide proportion calculation: {e}")

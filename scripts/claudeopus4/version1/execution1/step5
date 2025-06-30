@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+
+"""
+Script to create a summary table of reappointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+def main():
+    """Main function to generate reappointment counts by organization and year."""
+    
+    # Define input and output paths
+    data_dir = Path("scripts/claudeopus4/version1/execution1/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step5_reappointment_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file {input_file} not found!")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file)
+        print(f"Loaded {len(df)} rows")
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns exist
+    required_columns = ['org', 'year', 'reappointed']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    # Convert year to integer
+    df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+    
+    # Convert reappointed to boolean
+    print("\nConverting reappointed column to boolean...")
+    df['reappointed'] = df['reappointed'].apply(lambda x: 
+        True if str(x).lower() in ['true', '1', 'yes', 't'] 
+        else False
+    )
+    
+    # Data quality checks
+    print("\nData quality checks:")
+    print(f"  - Total records: {len(df)}")
+    print(f"  - Total reappointments: {df['reappointed'].sum()}")
+    print(f"  - Reappointment rate: {(df['reappointed'].sum() / len(df) * 100):.2f}%")
+    
+    # Check for missing values
+    missing_orgs = df['org'].isna().sum()
+    missing_years = df['year'].isna().sum()
+    if missing_orgs > 0:
+        print(f"  - WARNING: {missing_orgs} rows have missing organization values")
+    if missing_years > 0:
+        print(f"  - WARNING: {missing_years} rows have missing year values")
+    
+    # Filter for reappointments only
+    print("\nFiltering for reappointments...")
+    reappointments_df = df[df['reappointed'] == True].copy()
+    print(f"Found {len(reappointments_df)} reappointment records")
+    
+    # Remove rows with missing org or year
+    valid_reappointments = reappointments_df.dropna(subset=['org', 'year']).copy()
+    print(f"Processing {len(valid_reappointments)} reappointments with valid org and year")
+    
+    # Convert year to int for proper column handling
+    valid_reappointments['year'] = valid_reappointments['year'].astype(int)
+    
+    # Debug: Show sample of data before grouping
+    print("\nDebug - Sample of reappointment data before grouping:")
+    sample_size = min(10, len(valid_reappointments))
+    if sample_size > 0:
+        sample_df = valid_reappointments[['org', 'year', 'reappointed']].head(sample_size)
+        for idx, row in sample_df.iterrows():
+            print(f"  - {row['org'][:50]:50s} | Year: {row['year']} | Reappointed: {row['reappointed']}")
+    
+    # Group by organization and year, count reappointments
+    print("\nGrouping reappointments by organization and year...")
+    reappointment_counts = valid_reappointments.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    
+    # Debug: Show sample of grouped data
+    print("\nDebug - Sample of grouped data:")
+    sample_size = min(10, len(reappointment_counts))
+    if sample_size > 0:
+        for idx, row in reappointment_counts.head(sample_size).iterrows():
+            print(f"  - {row['org'][:50]:50s} | Year: {row['year']} | Count: {row['reappointment_count']}")
+    
+    # Get all unique organizations and years from the original dataset
+    all_orgs = df.dropna(subset=['org'])['org'].unique()
+    all_years = df.dropna(subset=['year'])['year'].astype(int).unique()
+    year_range = range(min(all_years), max(all_years) + 1)
+    
+    print(f"\nCreating complete summary table...")
+    print(f"  - Organizations: {len(all_orgs)}")
+    print(f"  - Year range: {min(all_years)} to {max(all_years)}")
+    
+    # Create pivot table
+    summary_table = reappointment_counts.pivot(index='org', columns='year', values='reappointment_count')
+    
+    # Reindex to include all organizations and years, filling with 0
+    summary_table = summary_table.reindex(index=all_orgs, columns=year_range, fill_value=0)
+    
+    # Ensure integer type for counts
+    summary_table = summary_table.fillna(0).astype(int)
+    
+    # Sort by total reappointments (descending)
+    summary_table['Total'] = summary_table.sum(axis=1)
+    summary_table = summary_table.sort_values('Total', ascending=False)
+    
+    # Validation: Check if we have actual counts
+    total_reappointments_pivot = summary_table.drop('Total', axis=1).sum().sum()
+    print(f"\nValidation - Total reappointments in pivot table: {total_reappointments_pivot}")
+    print(f"Validation - Total reappointments in filtered data: {len(valid_reappointments)}")
+    
+    if total_reappointments_pivot == 0:
+        print("WARNING: Pivot table contains all zeros! Checking data...")
+        print("Unique years in reappointment data:", sorted(valid_reappointments['year'].unique()))
+        print("Unique orgs with reappointments:", len(valid_reappointments['org'].unique()))
+    
+    # Save the summary table (without Total column)
+    summary_table_for_save = summary_table.drop('Total', axis=1)
+    summary_table_for_save.to_csv(output_file)
+    print(f"\nReappointment summary table saved to: {output_file}")
+    
+    # Print summary statistics
+    print("\n=== Reappointment Summary Statistics ===")
+    
+    # Top organizations by reappointments
+    print("\nTop 10 Organizations by Total Reappointments:")
+    top_10 = summary_table.head(10)
+    
+    display_cols = [col for col in top_10.columns if col != 'Total']
+    print("\nOrganization" + " " * 50 + "| " + " | ".join(f"{int(col):4d}" for col in display_cols) + " | Total")
+    print("-" * (65 + len(display_cols) * 7 + 8))
+    
+    for org_name, row in top_10.iterrows():
+        org_display = str(org_name)[:60].ljust(60)
+        values = " | ".join(f"{int(row[col]):4d}" for col in display_cols)
+        print(f"{org_display} | {values} | {int(row['Total']):5d}")
+    
+    # Yearly reappointment trends
+    print("\nReappointments by year:")
+    yearly_totals = summary_table_for_save.sum(axis=0).sort_index()
+    for year, total in yearly_totals.items():
+        print(f"  {year}: {int(total)} reappointments")
+    
+    # Organizations with most consistent reappointments
+    print("\nOrganizations with reappointments in all years:")
+    all_years_reappoint = summary_table_for_save[summary_table_for_save.gt(0).all(axis=1)]
+    print(f"  Found {len(all_years_reappoint)} organizations with reappointments in all {len(yearly_totals)} years")
+    
+    if 0 < len(all_years_reappoint) <= 10:
+        for org in all_years_reappoint.index:
+            total = summary_table.loc[org, 'Total']
+            print(f"    - {org} (Total: {int(total)})")
+    elif len(all_years_reappoint) > 10:
+        print(f"    (Showing top 5 of {len(all_years_reappoint)} organizations)")
+        for org in all_years_reappoint.index[:5]:
+            total = summary_table.loc[org, 'Total']
+            print(f"    - {org} (Total: {int(total)})")
+    
+    # Organizations with zero reappointments
+    zero_reappoint_orgs = summary_table[summary_table['Total'] == 0]
+    print(f"\nOrganizations with zero reappointments: {len(zero_reappoint_orgs)}")
+    if 0 < len(zero_reappoint_orgs) <= 5:
+        for org in zero_reappoint_orgs.index:
+            print(f"    - {org}")
+    elif len(zero_reappoint_orgs) > 5:
+        print(f"    (Showing first 5 of {len(zero_reappoint_orgs)} organizations)")
+        for org in zero_reappoint_orgs.index[:5]:
+            print(f"    - {org}")
+    
+    # Additional validation
+    print("\nFinal validation:")
+    if total_reappointments_pivot == len(valid_reappointments):
+        print(f"  ✓ Pivot table total matches filtered data: {total_reappointments_pivot}")
+    else:
+        print(f"  ✗ Mismatch in totals!")
+        print(f"    - Pivot table sum: {total_reappointments_pivot}")
+        print(f"    - Filtered data count: {len(valid_reappointments)}")
+    
+    print("\nScript completed successfully!")
+
+if __name__ == "__main__":
+    main()

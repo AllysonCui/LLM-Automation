@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+
+"""
+Reappointments Marker for New Brunswick Government Appointments
+
+This script identifies and marks reappointments by analyzing unique combinations
+of name, position, and organization. It marks all occurrences except the first
+(chronologically) as reappointments and handles name variations intelligently.
+
+Key Logic:
+- Groups records by (normalized_name, position, org)
+- Sorts chronologically by year within each group
+- Marks all but the first occurrence as reappointments
+- Handles name variations (e.g., "John Smith" vs "J. Smith")
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import re
+from difflib import SequenceMatcher
+
+
+def normalize_name(name):
+    """
+    Normalize names to handle variations and improve matching.
+    
+    Args:
+        name (str): Original name
+    
+    Returns:
+        str: Normalized name
+    """
+    
+    if pd.isna(name) or not isinstance(name, str):
+        return "UNKNOWN"
+    
+    # Convert to lowercase and strip whitespace
+    normalized = str(name).lower().strip()
+    
+    # Remove common prefixes and suffixes
+    prefixes = ['dr.', 'mr.', 'mrs.', 'ms.', 'prof.', 'hon.', 'rev.']
+    suffixes = ['jr.', 'sr.', 'ii', 'iii', 'iv', 'ph.d.', 'md', 'esq.']
+    
+    for prefix in prefixes:
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):].strip()
+    
+    for suffix in suffixes:
+        if normalized.endswith(suffix):
+            normalized = normalized[:-len(suffix)].strip()
+    
+    # Remove extra spaces and standardize
+    normalized = re.sub(r'\s+', ' ', normalized)
+    
+    # Handle initials (e.g., "j. smith" -> "j smith")
+    normalized = re.sub(r'\.(?=\s)', '', normalized)
+    
+    return normalized
+
+
+def are_names_similar(name1, name2, threshold=0.8):
+    """
+    Check if two names are likely the same person using fuzzy matching.
+    
+    Args:
+        name1 (str): First name
+        name2 (str): Second name
+        threshold (float): Similarity threshold (0-1)
+    
+    Returns:
+        bool: True if names are likely the same person
+    """
+    
+    if name1 == name2:
+        return True
+    
+    # Calculate similarity ratio
+    similarity = SequenceMatcher(None, name1, name2).ratio()
+    
+    if similarity >= threshold:
+        return True
+    
+    # Check for initial variations (e.g., "John Smith" vs "J Smith")
+    words1 = name1.split()
+    words2 = name2.split()
+    
+    if len(words1) >= 2 and len(words2) >= 2:
+        # Check if last names match and first name is initial of the other
+        if words1[-1] == words2[-1]:  # Same last name
+            if (len(words1[0]) == 1 and words2[0].startswith(words1[0])) or \
+               (len(words2[0]) == 1 and words1[0].startswith(words2[0])):
+                return True
+    
+    return False
+
+
+def load_key_columns_data(file_path="scripts/claudesonnet4/version1/execution6/analysis_data/step2_key_columns_data.csv"):
+    """
+    Load the key columns dataset from step 2.
+    
+    Args:
+        file_path (str): Path to the key columns dataset file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Key columns dataset not found at: {file_path}")
+        
+        df = pd.read_csv(file_path, encoding='utf-8')
+        print(f"✓ Loaded key columns dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+        
+        # Validate required columns
+        required_cols = ['name', 'position', 'org', 'year']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"ERROR loading key columns dataset: {str(e)}")
+        raise
+
+
+def identify_reappointments(df):
+    """
+    Identify and mark reappointments based on name, position, and organization.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Dataset with updated reappointment markers
+    """
+    
+    print("\nAnalyzing appointments to identify reappointments...")
+    print("-" * 55)
+    
+    # Create a copy to avoid modifying original
+    df_copy = df.copy()
+    
+    # Add normalized name column for better matching
+    df_copy['normalized_name'] = df_copy['name'].apply(normalize_name)
+    
+    # Handle missing years - assign a default high value so they sort last
+    df_copy['year_filled'] = df_copy['year'].fillna(9999)
+    
+    # Initialize reappointed column if it doesn't exist or convert to boolean
+    if 'reappointed' not in df_copy.columns:
+        df_copy['reappointed'] = False
+        print("Created new 'reappointed' column")
+    else:
+        # Convert existing reappointed column to boolean
+        df_copy['reappointed'] = df_copy['reappointed'].fillna(False)
+        
+        # Handle various boolean representations
+        if df_copy['reappointed'].dtype == 'object':
+            df_copy['reappointed'] = df_copy['reappointed'].astype(str).str.lower()
+            df_copy['reappointed'] = df_copy['reappointed'].isin(['true', '1', 'yes', 'y'])
+        else:
+            df_copy['reappointed'] = df_copy['reappointed'].astype(bool)
+    
+    # Track statistics
+    original_reappointments = df_copy['reappointed'].sum()
+    newly_identified = 0
+    groups_processed = 0
+    
+    # Group by normalized name, position, and organization
+    grouping_cols = ['normalized_name', 'position', 'org']
+    
+    print(f"Grouping by: {grouping_cols}")
+    
+    for group_key, group_df in df_copy.groupby(grouping_cols, dropna=False):
+        groups_processed += 1
+        
+        # Skip single-occurrence groups
+        if len(group_df) <= 1:
+            continue
+        
+        # Sort by year (earliest first)
+        group_sorted = group_df.sort_values(['year_filled', 'name'], na_position='last')
+        
+        # Mark all but the first as reappointments
+        indices_to_mark = group_sorted.index[1:]  # Skip first occurrence
+        
+        for idx in indices_to_mark:
+            if not df_copy.loc[idx, 'reappointed']:
+                df_copy.loc[idx, 'reappointed'] = True
+                newly_identified += 1
+        
+        # Print details for groups with multiple appointments
+        if len(group_df) > 1:
+            name_sample = group_df['name'].iloc[0]
+            position = group_key[1] if pd.notna(group_key[1]) else "N/A"
+            org = group_key[2] if pd.notna(group_key[2]) else "N/A"
+            years = sorted(group_df['year_filled'].dropna().astype(int).tolist())
+            
+            print(f"  • {name_sample} | {position} | {org}")
+            print(f"    Years: {years} → {len(group_df)-1} reappointments marked")
+    
+    print(f"\n✓ Processed {groups_processed:,} unique combinations")
+    
+    # Remove temporary columns
+    df_result = df_copy.drop(['normalized_name', 'year_filled'], axis=1)
+    
+    return df_result, original_reappointments, newly_identified
+
+
+def handle_name_variations(df):
+    """
+    Handle potential name variations within the same position/org combinations.
+    
+    Args:
+        df (pd.DataFrame): Dataset with identified reappointments
+    
+    Returns:
+        pd.DataFrame: Dataset with name variations handled
+        int: Number of additional matches found
+    """
+    
+    print("\nChecking for name variations...")
+    print("-" * 35)
+    
+    additional_matches = 0
+    df_copy = df.copy()
+    
+    # Group by position and organization only
+    for (position, org), group_df in df_copy.groupby(['position', 'org'], dropna=False):
+        if len(group_df) <= 1:
+            continue
+        
+        # Get unique names in this position/org combination
+        unique_names = group_df['name'].dropna().unique()
+        
+        if len(unique_names) <= 1:
+            continue
+        
+        # Check for similar names
+        similar_pairs = []
+        
+        for i, name1 in enumerate(unique_names):
+            for name2 in unique_names[i+1:]:
+                norm1 = normalize_name(name1)
+                norm2 = normalize_name(name2)
+                
+                if are_names_similar(norm1, norm2):
+                    similar_pairs.append((name1, name2))
+        
+        # Process similar name pairs
+        for name1, name2 in similar_pairs:
+            # Get records for both names
+            mask1 = (df_copy['name'] == name1) & (df_copy['position'] == position) & (df_copy['org'] == org)
+            mask2 = (df_copy['name'] == name2) & (df_copy['position'] == position) & (df_copy['org'] == org)
+            
+            combined_records = df_copy[mask1 | mask2].copy()
+            
+            if len(combined_records) > 1:
+                # Sort by year and mark later appointments as reappointments
+                combined_sorted = combined_records.sort_values(['year', 'name'], na_position='last')
+                
+                for idx in combined_sorted.index[1:]:
+                    if not df_copy.loc[idx, 'reappointed']:
+                        df_copy.loc[idx, 'reappointed'] = True
+                        additional_matches += 1
+                
+                print(f"  • Similar names: '{name1}' ≈ '{name2}' | {position} | {org}")
+                print(f"    → {len(combined_records)-1} additional reappointments marked")
+    
+    return df_copy, additional_matches
+
+
+def save_marked_data(df, output_dir="scripts/claudesonnet4/version1/execution6/analysis_data"):
+    """
+    Save the dataset with marked reappointments.
+    
+    Args:
+        df (pd.DataFrame): Dataset with marked reappointments
+        output_dir (str): Directory to save the output file
+    """
+    
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Define output file path
+    output_file = os.path.join(output_dir, "step3_repeats_marked.csv")
+    
+    try:
+        # Save to CSV
+        df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Saved marked dataset to: {output_file}")
+        
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        raise
+
+
+def print_reappointment_statistics(df, original_count, newly_identified, name_variation_matches):
+    """
+    Print statistics about reappointment identification.
+    
+    Args:
+        df (pd.DataFrame): Final dataset
+        original_count (int): Original number of reappointments
+        newly_identified (int): Newly identified reappointments
+        name_variation_matches (int): Additional matches from name variations
+    """
+    
+    print("\n" + "=" * 60)
+    print("REAPPOINTMENT IDENTIFICATION SUMMARY")
+    print("=" * 60)
+    
+    total_records = len(df)
+    final_reappointments = df['reappointed'].sum()
+    
+    print(f"Total records processed: {total_records:,}")
+    print(f"Original reappointments: {original_count:,}")
+    print(f"Newly identified (exact matches): {newly_identified:,}")
+    print(f"Additional (name variations): {name_variation_matches:,}")
+    print(f"Final reappointments total: {final_reappointments:,}")
+    print(f"Reappointment rate: {(final_reappointments/total_records)*100:.1f}%")
+    
+    # Year-wise breakdown if available
+    if 'year' in df.columns and not df['year'].isnull().all():
+        print(f"\nReappointments by year:")
+        year_stats = df.groupby('year')['reappointed'].agg(['count', 'sum']).round(1)
+        year_stats['rate'] = (year_stats['sum'] / year_stats['count'] * 100).round(1)
+        year_stats.columns = ['Total', 'Reappointed', 'Rate(%)']
+        
+        for year, row in year_stats.iterrows():
+            if pd.notna(year):
+                print(f"  {int(year)}: {int(row['Reappointed']):,}/{int(row['Total']):,} ({row['Rate(%)']:.1f}%)")
+    
+    print(f"\n✓ Successfully identified {newly_identified + name_variation_matches:,} additional reappointments")
+
+
+def main():
+    """Main execution function."""
+    
+    print("Reappointments Marker for NB Government Appointments")
+    print("=" * 60)
+    
+    try:
+        # Load the key columns dataset
+        df = load_key_columns_data()
+        
+        # Identify reappointments based on exact name/position/org matches
+        df_marked, original_count, newly_identified = identify_reappointments(df)
+        
+        # Handle name variations
+        df_final, name_variation_matches = handle_name_variations(df_marked)
+        
+        # Save the marked dataset
+        save_marked_data(df_final)
+        
+        # Print summary statistics
+        print_reappointment_statistics(df_final, original_count, newly_identified, name_variation_matches)
+        
+        print(f"\n✓ Reappointment marking completed successfully!")
+        
+    except Exception as e:
+        print(f"\n❌ Process failed: {str(e)}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

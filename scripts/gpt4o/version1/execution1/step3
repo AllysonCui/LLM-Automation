@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import unicodedata
+import re
+
+def normalize_name(name):
+    if pd.isnull(name):
+        return ""
+    name = str(name).lower()
+    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+    name = re.sub(r'[^a-z ]', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution1/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("steps/gpt4o/version1/execution1/analysis_data/step3_repeats_marked.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate required columns
+    expected_cols = ['reappointed', 'name', 'position', 'org', 'year']
+    if not all(col in df.columns for col in expected_cols):
+        print(f"Error: Missing required columns. Expected: {expected_cols}", file=sys.stderr)
+        sys.exit(1)
+
+    # Normalize and create matching keys
+    df['name_norm'] = df['name'].apply(normalize_name)
+    df['key'] = df['name_norm'] + "|" + df['position'].fillna('').str.lower().str.strip() + "|" + df['org'].fillna('').str.lower().str.strip()
+
+    if df['year'].isnull().any():
+        print("Warning: Some records have missing year values. These will be treated as latest.", file=sys.stderr)
+
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df.sort_values(by=['key', 'year'], kind='stable', inplace=True)
+
+    reappointments_count = 0
+    df['reappointed_updated'] = df['reappointed']  # Preserve original
+
+    for key, group in df.groupby('key'):
+        if group.empty:
+            continue
+
+        indices = group.index.tolist()
+        if len(indices) <= 1:
+            continue
+
+        first_index = indices[0]
+        other_indices = indices[1:]
+
+        # Mark reappointments except for the first chronologically
+        df.loc[other_indices, 'reappointed_updated'] = True
+
+        # Count how many we marked
+        newly_marked = (~df.loc[other_indices, 'reappointed'].astype(bool)).sum()
+        reappointments_count += newly_marked
+
+    df['reappointed'] = df['reappointed_updated']
+    df.drop(columns=['reappointed_updated', 'name_norm', 'key'], inplace=True)
+
+    try:
+        df.to_csv(output_file, index=False)
+        print(f"Updated dataset saved to {output_file}")
+        print(f"Additional reappointments identified and marked: {reappointments_count}")
+    except Exception as e:
+        print(f"Error saving output file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

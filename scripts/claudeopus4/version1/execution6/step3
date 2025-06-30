@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments based on repeated occurrences
+of the same person in the same position at the same organization.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize names to handle variations.
+    Convert to lowercase, remove extra spaces, handle common variations.
+    
+    Args:
+        name: string or NaN
+    
+    Returns:
+        str: normalized name or empty string if NaN
+    """
+    if pd.isna(name):
+        return ""
+    
+    # Convert to string and lowercase
+    name_str = str(name).lower().strip()
+    
+    # Remove multiple spaces
+    name_str = ' '.join(name_str.split())
+    
+    # Remove common titles
+    titles = ['dr.', 'dr', 'mr.', 'mr', 'mrs.', 'mrs', 'ms.', 'ms', 'prof.', 'prof']
+    for title in titles:
+        if name_str.startswith(title + ' '):
+            name_str = name_str[len(title):].strip()
+    
+    return name_str
+
+def mark_reappointments():
+    """
+    Load dataset and mark reappointments based on repeated occurrences.
+    """
+    
+    # Input and output paths
+    data_dir = Path("scripts/claudeopus4/version1/execution6/analysis_data")
+    input_file = data_dir / "step2_key_columns_data.csv"
+    output_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file {input_file} not found.")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    # Create a copy to work with
+    df_work = df.copy()
+    
+    # Ensure year is numeric
+    df_work['year'] = pd.to_numeric(df_work['year'], errors='coerce')
+    
+    # Count original reappointments
+    original_reappointed_count = 0
+    if 'reappointed' in df_work.columns:
+        # Convert to boolean if needed
+        if df_work['reappointed'].dtype == 'object':
+            df_work['reappointed'] = df_work['reappointed'].astype(str).str.lower().isin(['true', '1', 'yes'])
+        original_reappointed_count = df_work['reappointed'].sum()
+        print(f"\nOriginal reappointed count: {original_reappointed_count}")
+    else:
+        # Create reappointed column if it doesn't exist
+        df_work['reappointed'] = False
+        print("\nCreated new 'reappointed' column")
+    
+    # Normalize names for matching
+    df_work['name_normalized'] = df_work['name'].apply(normalize_name)
+    
+    # Create a composite key for grouping
+    # Handle NaN values by converting to empty strings
+    df_work['group_key'] = (
+        df_work['name_normalized'].fillna('') + '|' +
+        df_work['position'].fillna('').astype(str).str.lower().str.strip() + '|' +
+        df_work['org'].fillna('').astype(str).str.lower().str.strip()
+    )
+    
+    # Remove rows where all key fields are empty
+    valid_mask = (df_work['name_normalized'] != '') | (df_work['position'].notna()) | (df_work['org'].notna())
+    df_work = df_work[valid_mask].copy()
+    
+    print(f"\nProcessing {len(df_work)} valid records...")
+    
+    # Sort by group_key and year for consistent ordering
+    df_work = df_work.sort_values(['group_key', 'year'], kind='stable')
+    
+    # Create a new column for updated reappointed status
+    df_work['reappointed_updated'] = df_work['reappointed'].copy()
+    
+    # Process each group
+    groups_processed = 0
+    reappointments_marked = 0
+    
+    for group_key, group_df in df_work.groupby('group_key'):
+        # Skip empty groups
+        if len(group_df) <= 1:
+            continue
+        
+        # Get indices sorted by year
+        group_indices = group_df.index.tolist()
+        
+        # Skip if the group key is just separators (empty fields)
+        if group_key == '||':
+            continue
+        
+        groups_processed += 1
+        
+        # Mark all except the first as reappointments
+        for idx in group_indices[1:]:
+            if not df_work.loc[idx, 'reappointed_updated']:
+                df_work.loc[idx, 'reappointed_updated'] = True
+                reappointments_marked += 1
+    
+    # Update the reappointed column
+    df_work['reappointed'] = df_work['reappointed_updated']
+    
+    # Drop helper columns before saving
+    df_final = df_work.drop(columns=['name_normalized', 'group_key', 'reappointed_updated'])
+    
+    # Sort back to original order if index was preserved
+    df_final = df_final.sort_index()
+    
+    # Save the updated dataset
+    df_final.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nUpdated dataset saved to: {output_file}")
+    
+    # Print statistics
+    new_reappointed_count = df_final['reappointed'].sum()
+    additional_reappointments = new_reappointed_count - original_reappointed_count
+    
+    print(f"\nReappointment Statistics:")
+    print(f"  Groups processed: {groups_processed}")
+    print(f"  Original reappointments: {original_reappointed_count}")
+    print(f"  New reappointments: {new_reappointed_count}")
+    print(f"  Additional reappointments identified: {additional_reappointments}")
+    print(f"  Total reappointment rate: {new_reappointed_count / len(df_final) * 100:.1f}%")
+    
+    # Show some examples of newly identified reappointments
+    if additional_reappointments > 0:
+        print("\nExamples of newly identified reappointments:")
+        newly_marked = df_final[
+            (df_final['reappointed'] == True) & 
+            (df_work.index.isin(df_work[df_work['reappointed_updated'] != df_work['reappointed']].index))
+        ].head(5)
+        
+        for idx, row in newly_marked.iterrows():
+            print(f"  - {row['name']} | {row['position']} | {row['org']} | Year: {row['year']}")
+    
+    # Additional validation
+    print("\nData validation:")
+    print(f"  Total records: {len(df_final)}")
+    print(f"  Records with valid year: {df_final['year'].notna().sum()}")
+    print(f"  Unique combinations processed: {df_work['group_key'].nunique()}")
+    
+    return df_final
+
+if __name__ == "__main__":
+    # Run the reappointment marking process
+    updated_data = mark_reappointments()
+    
+    print("\nReappointment marking completed successfully!")

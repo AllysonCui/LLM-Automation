@@ -1,0 +1,48 @@
+import os
+import pandas as pd
+from pathlib import Path
+
+# Load correct answer
+correct_path = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
+correct_answer = pd.read_csv(correct_path)
+
+# Extract and round correct float values
+correct_col = correct_answer.select_dtypes(include=['float']).iloc[:, 0].round(3).tolist()
+
+# Define base paths and result collection
+base_paths = [
+    ("chatgpt4o", "version1"),
+    ("chatgpt4o", "version2"),
+    ("chatgpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudesonnet4", "version1")
+]
+
+results = []
+
+# Traverse each model and version
+for model, version in base_paths:
+    base_dir = Path(f"scripts/{model}/{version}")
+    total = 0
+    correct = 0
+
+    for subdir in base_dir.glob("execution*/analysis_data"):
+        file_path = subdir / "step7_yearly_max_rates.csv"
+        if file_path.exists():
+            try:
+                df = pd.read_csv(file_path)
+                values = df.select_dtypes(include=['float']).iloc[:, 0].round(3).tolist()
+                if len(values) == len(correct_col) and all(v in correct_col for v in values):
+                    correct += 1
+                total += 1
+            except Exception:
+                continue
+
+    accuracy = correct / total if total > 0 else 0
+    results.append((model, version, round(accuracy, 3)))
+
+# Output markdown table
+print("| Model         | Version   | Avg Correct Rate |")
+print("|---------------|-----------|------------------|")
+for model, version, rate in results:
+    print(f"| {model:<13} | {version:<9} | {rate:<16} |")

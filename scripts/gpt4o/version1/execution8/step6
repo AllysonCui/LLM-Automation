@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    employee_counts_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step4_employee_counts.csv")
+    reappointment_counts_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step5_reappointment_counts.csv")
+    output_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step6_reappointment_rates.csv")
+
+    # Load employee counts
+    try:
+        emp_df = pd.read_csv(employee_counts_file, index_col=0)
+    except Exception as e:
+        print(f"[ERROR] Failed to load employee counts: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Load reappointment counts
+    try:
+        reap_df = pd.read_csv(reappointment_counts_file, index_col=0)
+    except Exception as e:
+        print(f"[ERROR] Failed to load reappointment counts: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if emp_df.empty or reap_df.empty:
+        print("[ERROR] One or both input datasets are empty.", file=sys.stderr)
+        sys.exit(1)
+
+    # Unpivot both datasets to long format
+    emp_long = emp_df.reset_index().melt(id_vars="org", var_name="year", value_name="total_employees")
+    reap_long = reap_df.reset_index().melt(id_vars="org", var_name="year", value_name="reappointments")
+
+    # Ensure year is numeric
+    for df in [emp_long, reap_long]:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    # Merge on org and year
+    merged = pd.merge(emp_long, reap_long, on=["org", "year"], how="outer")
+
+    # Fill missing values with 0
+    merged["total_employees"] = merged["total_employees"].fillna(0).astype(int)
+    merged["reappointments"] = merged["reappointments"].fillna(0).astype(int)
+
+    # Avoid division by zero
+    merged["reappointment_rate"] = merged.apply(
+        lambda row: row["reappointments"] / row["total_employees"] if row["total_employees"] > 0 else np.nan,
+        axis=1
+    )
+
+    # Save output
+    try:
+        merged.to_csv(output_file, index=False)
+        print(f"[INFO] Reappointment rate table saved to: {output_file}")
+    except Exception as e:
+        print(f"[ERROR] Could not save output: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Summary: highest average reappointment rates
+    avg_rates = merged.groupby("org")["reappointment_rate"].mean()
+    top_orgs = avg_rates.sort_values(ascending=False).head(5)
+
+    print("\n[INFO] Top 5 organizations by average reappointment rate:")
+    for org, rate in top_orgs.items():
+        print(f"  {org}: {rate:.2%}")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Data Combiner
+
+This script loads appointment data from 2013-2024 CSV files, adds year columns,
+combines them into a single dataset, and saves the result.
+
+Author: Claude Sonnet 4
+Date: 2025-06-30
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024, add year columns, and combine.
+    
+    Returns:
+        pd.DataFrame: Combined dataset with all appointments
+    """
+    
+    # Create output directory
+    output_dir = Path("scripts/claudesonnet4/version1/execution10/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize list to store DataFrames
+    dataframes = []
+    
+    # Expected columns based on the provided structure
+    expected_columns = [
+        'name', 'position', 'org', 'location', 'region', 'posted_date', 
+        'start_date', 'end_date', 'term_length', 'acts', 'remuneration', 
+        'reappointed', 'oic', 'href', 'body', 'link'
+    ]
+    
+    print("Loading appointment data files...")
+    print("=" * 50)
+    
+    # Load each year's data
+    for year in range(2013, 2025):  # 2013 to 2024 inclusive
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Check if file exists
+            if not os.path.exists(filename):
+                print(f"WARNING: File {filename} not found, skipping...")
+                continue
+            
+            # Load the CSV file
+            df = pd.read_csv(filename)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Print basic info about this year's data
+            print(f"{year}: {df.shape[0]} records, {df.shape[1]} columns")
+            
+            # Check if columns match expected structure
+            missing_cols = set(expected_columns) - set(df.columns)
+            extra_cols = set(df.columns) - set(expected_columns + ['year'])
+            
+            if missing_cols:
+                print(f"  WARNING: Missing columns in {year}: {missing_cols}")
+            if extra_cols:
+                print(f"  INFO: Extra columns in {year}: {extra_cols}")
+            
+            # Add to list
+            dataframes.append(df)
+            
+        except Exception as e:
+            print(f"ERROR loading {filename}: {str(e)}")
+            continue
+    
+    # Check if we have any data
+    if not dataframes:
+        raise ValueError("No data files were successfully loaded!")
+    
+    print("\nCombining datasets...")
+    
+    # Combine all DataFrames
+    combined_df = pd.concat(dataframes, ignore_index=True, sort=False)
+    
+    # Sort by year and then by name for consistency
+    combined_df = combined_df.sort_values(['year', 'name'], na_position='last')
+    combined_df = combined_df.reset_index(drop=True)
+    
+    return combined_df
+
+def save_combined_data(df):
+    """
+    Save the combined dataset and print summary statistics.
+    
+    Args:
+        df (pd.DataFrame): Combined appointments dataset
+    """
+    
+    # Define output path
+    output_path = Path("scripts/claudesonnet4/version1/execution10/analysis_data/step1_combined_appointments.csv")
+    
+    try:
+        # Save the combined dataset
+        df.to_csv(output_path, index=False)
+        print(f"\nCombined dataset saved to: {output_path}")
+        
+    except Exception as e:
+        print(f"ERROR saving combined dataset: {str(e)}")
+        return
+    
+    # Print summary information
+    print("\nCombined Dataset Summary:")
+    print("=" * 50)
+    print(f"Shape: {df.shape}")
+    print(f"Total records: {df.shape[0]:,}")
+    print(f"Total columns: {df.shape[1]}")
+    
+    # Year distribution
+    print(f"\nRecords by year:")
+    year_counts = df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count:,} records")
+    
+    # Basic info about the dataset
+    print(f"\nDataset Info:")
+    print(f"Memory usage: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+    
+    # Check for missing values
+    missing_summary = df.isnull().sum()
+    columns_with_missing = missing_summary[missing_summary > 0]
+    
+    if len(columns_with_missing) > 0:
+        print(f"\nColumns with missing values:")
+        for col, count in columns_with_missing.items():
+            percentage = (count / len(df)) * 100
+            print(f"  {col}: {count:,} ({percentage:.1f}%)")
+    else:
+        print(f"\nNo missing values found in the dataset.")
+    
+    # Show column names
+    print(f"\nColumns in combined dataset:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+
+def main():
+    """Main execution function."""
+    
+    print("New Brunswick Government Appointments Data Combiner")
+    print("=" * 60)
+    
+    try:
+        # Load and combine all appointment data
+        combined_df = load_and_combine_appointments()
+        
+        # Save and summarize the combined dataset
+        save_combined_data(combined_df)
+        
+        print("\nScript completed successfully!")
+        
+    except Exception as e:
+        print(f"\nERROR: Script failed with error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

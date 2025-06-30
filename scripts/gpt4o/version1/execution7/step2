@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step1_combined_appointments.csv")
+    output_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step2_key_columns_data.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Define possible column names for each key field
+    column_map = {
+        'reappointed': ['reappointed'],
+        'name': ['name'],
+        'position': ['position', 'appointment'],
+        'org': ['org', 'organization'],
+        'year': ['year']
+    }
+
+    # Map actual columns in the DataFrame to standard names
+    selected_columns = {}
+    for key, variants in column_map.items():
+        for variant in variants:
+            if variant in df.columns:
+                selected_columns[key] = variant
+                break
+        if key not in selected_columns:
+            print(f"Warning: Could not find a column for '{key}' in the dataset", file=sys.stderr)
+
+    # Check if all required columns were found
+    required_keys = ['reappointed', 'name', 'position', 'org', 'year']
+    missing_keys = [key for key in required_keys if key not in selected_columns]
+    if missing_keys:
+        print(f"Error: Missing required columns: {missing_keys}", file=sys.stderr)
+        sys.exit(1)
+
+    # Create filtered DataFrame with standardized column names
+    filtered_df = df[[selected_columns[k] for k in required_keys]]
+    filtered_df.columns = required_keys
+
+    try:
+        filtered_df.to_csv(output_file, index=False)
+        print(f"Filtered dataset saved to {output_file}")
+    except Exception as e:
+        print(f"Error saving filtered dataset: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print("\nFiltered Dataset Info:")
+    print(filtered_df.info())
+    print("\nMissing values per column:")
+    print(filtered_df.isnull().sum())
+
+if __name__ == "__main__":
+    main()

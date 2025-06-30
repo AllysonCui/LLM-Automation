@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""
+Script to extract key columns from the combined appointments dataset.
+Handles variations in column naming and creates a filtered dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def find_column(df, possible_names):
+    """
+    Find a column in the dataframe using multiple possible names.
+    
+    Args:
+        df: pandas DataFrame
+        possible_names: list of possible column names
+    
+    Returns:
+        str: The actual column name found, or None if not found
+    """
+    # Convert all column names to lowercase for case-insensitive matching
+    df_columns_lower = [col.lower() for col in df.columns]
+    
+    for name in possible_names:
+        # Check exact match first
+        if name in df.columns:
+            return name
+        
+        # Check case-insensitive match
+        name_lower = name.lower()
+        for i, col_lower in enumerate(df_columns_lower):
+            if col_lower == name_lower:
+                return df.columns[i]
+    
+    return None
+
+def main():
+    """Main function to extract key columns from combined dataset."""
+    
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution7/analysis_data")
+    input_file = data_dir / "step1_combined_appointments.csv"
+    output_file = data_dir / "step2_key_columns_data.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file {input_file} not found.")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Loaded dataset with shape: {df.shape}")
+        
+        # Define possible column names for each key field
+        column_mappings = {
+            'reappointed': ['reappointed', 'reappointment', 're-appointed'],
+            'name': ['name', 'appointee_name', 'appointee', 'person_name'],
+            'position': ['position', 'appointment', 'role', 'title', 'position_title'],
+            'org': ['org', 'organization', 'organisation', 'org_name', 'agency', 'department'],
+            'year': ['year']  # This should already exist from step 1
+        }
+        
+        # Find actual column names
+        found_columns = {}
+        missing_columns = []
+        
+        print("\n=== Column Mapping Results ===")
+        for key, possible_names in column_mappings.items():
+            actual_column = find_column(df, possible_names)
+            if actual_column:
+                found_columns[key] = actual_column
+                print(f"{key}: Found as '{actual_column}'")
+            else:
+                missing_columns.append(key)
+                print(f"{key}: NOT FOUND (searched for: {', '.join(possible_names)})")
+        
+        # Create new dataframe with found columns
+        if not found_columns:
+            print("\nError: No key columns found in the dataset.")
+            sys.exit(1)
+        
+        # Select only the found columns
+        selected_columns = list(found_columns.values())
+        filtered_df = df[selected_columns].copy()
+        
+        # Rename columns to standardized names
+        rename_mapping = {v: k for k, v in found_columns.items()}
+        filtered_df.rename(columns=rename_mapping, inplace=True)
+        
+        # Save the filtered dataset
+        filtered_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nFiltered dataset saved to: {output_file}")
+        
+        # Print information about the extracted data
+        print("\n=== Filtered Dataset Information ===")
+        print(f"Shape: {filtered_df.shape}")
+        print(f"Columns: {list(filtered_df.columns)}")
+        
+        # Analyze missing values
+        print("\n=== Missing Values Analysis ===")
+        missing_counts = filtered_df.isnull().sum()
+        missing_percentages = (filtered_df.isnull().sum() / len(filtered_df)) * 100
+        
+        for col in filtered_df.columns:
+            print(f"{col}: {missing_counts[col]} missing ({missing_percentages[col]:.2f}%)")
+        
+        # Additional statistics for key columns
+        print("\n=== Key Column Statistics ===")
+        
+        if 'reappointed' in filtered_df.columns:
+            print("\nReappointed column:")
+            print(filtered_df['reappointed'].value_counts(dropna=False))
+        
+        if 'year' in filtered_df.columns:
+            print("\nYear distribution:")
+            print(filtered_df['year'].value_counts().sort_index())
+        
+        if 'org' in filtered_df.columns:
+            print(f"\nNumber of unique organizations: {filtered_df['org'].nunique()}")
+        
+        if 'position' in filtered_df.columns:
+            print(f"Number of unique positions: {filtered_df['position'].nunique()}")
+        
+        if 'name' in filtered_df.columns:
+            print(f"Number of unique appointees: {filtered_df['name'].nunique()}")
+        
+        # Report on missing columns
+        if missing_columns:
+            print("\n=== Warning: Missing Columns ===")
+            print(f"The following key columns were not found: {', '.join(missing_columns)}")
+            print("The analysis will proceed with available columns.")
+        
+    except Exception as e:
+        print(f"Error processing data: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

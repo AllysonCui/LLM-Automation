@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments based on repeat occurrences
+of the same person in the same position at the same organization.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize names to handle variations.
+    - Convert to lowercase
+    - Remove extra whitespace
+    - Remove common titles (Mr., Mrs., Dr., etc.)
+    """
+    if pd.isna(name):
+        return None
+    
+    # Convert to string and lowercase
+    name_str = str(name).lower().strip()
+    
+    # Remove common titles
+    titles = ['mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'hon.']
+    for title in titles:
+        if name_str.startswith(title):
+            name_str = name_str[len(title):].strip()
+    
+    # Remove extra whitespace
+    name_str = ' '.join(name_str.split())
+    
+    return name_str
+
+def mark_reappointments(df):
+    """
+    Identify and mark reappointments based on repeat occurrences.
+    
+    Args:
+        df: DataFrame with columns: name, position, org, year, reappointed
+    
+    Returns:
+        Updated DataFrame with reappointments marked
+    """
+    # Create a copy to avoid modifying the original
+    df_work = df.copy()
+    
+    # Ensure year is numeric for proper sorting
+    df_work['year'] = pd.to_numeric(df_work['year'], errors='coerce')
+    
+    # Check for any rows with invalid years
+    invalid_years = df_work['year'].isna().sum()
+    if invalid_years > 0:
+        print(f"Warning: {invalid_years} rows have invalid year values. These will be excluded from reappointment detection.")
+        df_work = df_work[df_work['year'].notna()].copy()
+    
+    # Normalize names for matching
+    df_work['name_normalized'] = df_work['name'].apply(normalize_name)
+    
+    # Create a composite key for grouping (normalized name + position + org)
+    # Handle missing values by converting to string
+    df_work['group_key'] = (
+        df_work['name_normalized'].fillna('') + '|' +
+        df_work['position'].fillna('').astype(str).str.lower().str.strip() + '|' +
+        df_work['org'].fillna('').astype(str).str.lower().str.strip()
+    )
+    
+    # Initialize counters
+    original_reappointed_count = df_work['reappointed'].sum() if 'reappointed' in df_work.columns else 0
+    newly_identified = 0
+    
+    # Create a new column for updated reappointed status
+    df_work['reappointed_new'] = False
+    
+    # Process each group
+    print("\nProcessing appointment groups...")
+    unique_groups = df_work['group_key'].unique()
+    
+    for i, group_key in enumerate(unique_groups):
+        if i % 1000 == 0 and i > 0:
+            print(f"  Processed {i:,} / {len(unique_groups):,} groups...")
+        
+        # Skip empty group keys
+        if group_key == '||':
+            continue
+        
+        # Get all rows for this group
+        group_mask = df_work['group_key'] == group_key
+        group_indices = df_work[group_mask].index.tolist()
+        
+        if len(group_indices) > 1:
+            # Sort by year to find chronological order
+            group_df = df_work.loc[group_indices].copy()
+            group_df = group_df.sort_values('year', kind='stable')
+            sorted_indices = group_df.index.tolist()
+            
+            # Mark all except the first as reappointments
+            for idx in sorted_indices[1:]:
+                df_work.loc[idx, 'reappointed_new'] = True
+                newly_identified += 1
+    
+    # Update the original reappointed column
+    df_work['reappointed'] = df_work['reappointed_new']
+    
+    # Drop temporary columns
+    df_work = df_work.drop(columns=['name_normalized', 'group_key', 'reappointed_new'])
+    
+    # Calculate statistics
+    final_reappointed_count = df_work['reappointed'].sum()
+    
+    return df_work, {
+        'original_reappointed': original_reappointed_count,
+        'newly_identified': newly_identified,
+        'final_reappointed': final_reappointed_count,
+        'total_records': len(df_work)
+    }
+
+def load_and_process_data():
+    """
+    Load the filtered dataset and mark reappointments.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution5/analysis_data")
+    input_file = data_dir / "step2_key_columns_data.csv"
+    output_file = data_dir / "step3_repeats_marked.csv"
+    
+    print("Loading filtered appointments data...")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} records")
+        
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_columns = ['name', 'position', 'org', 'year', 'reappointed']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {', '.join(missing_columns)}")
+        sys.exit(1)
+    
+    # Print initial statistics
+    print("\nInitial dataset statistics:")
+    print(f"  - Total records: {len(df):,}")
+    print(f"  - Unique names: {df['name'].nunique():,}")
+    print(f"  - Unique positions: {df['position'].nunique():,}")
+    print(f"  - Unique organizations: {df['org'].nunique():,}")
+    print(f"  - Original reappointments: {df['reappointed'].sum():,}")
+    
+    # Mark reappointments
+    print("\nIdentifying reappointments based on repeat occurrences...")
+    updated_df, stats = mark_reappointments(df)
+    
+    # Save the updated dataset
+    updated_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\n✓ Updated dataset saved to: {output_file}")
+    
+    # Print detailed statistics
+    print("\n" + "="*50)
+    print("REAPPOINTMENT IDENTIFICATION RESULTS")
+    print("="*50)
+    
+    print(f"\nOriginal reappointments marked: {stats['original_reappointed']:,}")
+    print(f"Additional reappointments identified: {stats['newly_identified']:,}")
+    print(f"Total reappointments now marked: {stats['final_reappointed']:,}")
+    print(f"Percentage of appointments that are reappointments: {stats['final_reappointed']/stats['total_records']*100:.1f}%")
+    
+    # Show examples of newly identified reappointments
+    print("\nExamples of newly identified reappointments:")
+    examples = updated_df[updated_df['reappointed'] == True].head(10)
+    
+    if len(examples) > 0:
+        for idx, row in examples.iterrows():
+            print(f"  - {row['name']} | {row['position']} | {row['org']} | Year: {row['year']}")
+    
+    # Year-wise breakdown
+    print("\nReappointments by year:")
+    year_stats = updated_df.groupby('year')['reappointed'].agg(['sum', 'count'])
+    year_stats['percentage'] = (year_stats['sum'] / year_stats['count'] * 100).round(1)
+    
+    for year, row in year_stats.iterrows():
+        print(f"  {int(year)}: {int(row['sum']):,} reappointments out of {int(row['count']):,} total ({row['percentage']}%)")
+    
+    return updated_df
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Mark Reappointments Based on Repeat Occurrences")
+    print("=" * 50)
+    
+    # Process the data
+    updated_df = load_and_process_data()
+    
+    print("\n✓ Reappointment marking complete!")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step5_reappointment_counts.csv")
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        return
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty or corrupted: {input_file}", file=sys.stderr)
+        return
+    except Exception as e:
+        print(f"Error loading data: {e}", file=sys.stderr)
+        return
+
+    # Filter for reappointments
+    reappointments_df = df[df['reappointed'] == True]
+
+    # Group by 'org' and 'year' and count the reappointments
+    reappointment_counts = reappointments_df.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+
+    # Debugging output: Show sample grouped data
+    print("\nSample grouped data (before pivoting):")
+    print(reappointment_counts.head())
+
+    # Pivot to create the summary table
+    reappointment_pivot = reappointment_counts.pivot_table(
+        index='org', 
+        columns='year', 
+        values='reappointment_count', 
+        aggfunc='sum', 
+        fill_value=0
+    )
+
+    # Ensure the year columns are integers, not floats
+    reappointment_pivot.columns = reappointment_pivot.columns.astype(int)
+
+    # Validate the pivot table contains actual counts rather than just zeros
+    if (reappointment_pivot == 0).all().all():
+        print("Warning: The reappointment counts pivot table contains only zeros. This may indicate no reappointments were found.", file=sys.stderr)
+
+    # Save the reappointment counts to CSV
+    try:
+        reappointment_pivot.to_csv(output_file)
+        print(f"Reappointment counts saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving reappointment counts CSV: {e}", file=sys.stderr)
+
+    # Print summary statistics about reappointment patterns
+    print("\nReappointment Summary Statistics:")
+    print(f"Total reappointments across all years and organizations: {reappointment_pivot.sum().sum()}")
+    print(f"Number of organizations with reappointments: {reappointment_pivot.astype(bool).sum(axis=1).gt(0).sum()}")
+
+    # Show the reappointment pivot table
+    print("\nReappointment Counts Pivot Table:")
+    print(reappointment_pivot)
+
+if __name__ == "__main__":
+    main()

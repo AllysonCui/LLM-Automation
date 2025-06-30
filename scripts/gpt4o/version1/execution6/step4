@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+# File paths
+input_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step3_repeats_marked.csv")
+output_file = Path("scripts/gpt4o/version1/execution6/analysis_data/step4_employee_counts.csv")
+
+# Load the dataset
+try:
+    df = pd.read_csv(input_file)
+except FileNotFoundError:
+    print(f"Error: Input file not found at {input_file}")
+    sys.exit(1)
+except pd.errors.EmptyDataError:
+    print(f"Error: Input file {input_file} is empty.")
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error while loading {input_file}: {e}")
+    sys.exit(1)
+
+# Validate presence of necessary columns
+required_cols = ["org", "year"]
+missing_cols = [col for col in required_cols if col not in df.columns]
+if missing_cols:
+    print(f"Error: Missing required columns: {missing_cols}")
+    sys.exit(1)
+
+# Normalize and clean 'org' values
+df["org"] = df["org"].astype(str).str.strip().str.lower()
+
+# Ensure 'year' is numeric
+try:
+    df["year"] = pd.to_numeric(df["year"], errors='coerce')
+except Exception as e:
+    print(f"Error converting 'year' to numeric: {e}")
+    sys.exit(1)
+
+# Drop rows with missing organization or year
+df = df.dropna(subset=["org", "year"])
+
+# Convert year to integer for grouping
+df["year"] = df["year"].astype(int)
+
+# Group by organization and year, count rows
+try:
+    summary_table = (
+        df.groupby(["org", "year"])
+        .size()
+        .unstack(fill_value=0)
+        .sort_index()
+    )
+except Exception as e:
+    print(f"Error during grouping and summarizing: {e}")
+    sys.exit(1)
+
+# Validate the result
+if summary_table.empty:
+    print("Warning: The summary table is empty after grouping.")
+else:
+    print("Summary table (first 10 rows):")
+    print(summary_table.head(10))
+
+    # Identify organization(s) with the most total appointments
+    total_appointments = summary_table.sum(axis=1)
+    max_appointments = total_appointments.max()
+    top_orgs = total_appointments[total_appointments == max_appointments].index.tolist()
+
+    print(f"\nOrganization(s) with the most total appointments ({max_appointments}):")
+    for org in top_orgs:
+        print(f"- {org}")
+
+# Save the summary table
+try:
+    summary_table.to_csv(output_file)
+    print(f"\nSummary table saved to: {output_file}")
+except Exception as e:
+    print(f"Error saving summary table: {e}")
+    sys.exit(1)

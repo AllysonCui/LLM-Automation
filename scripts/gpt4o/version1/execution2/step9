@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from scipy.stats import linregress
+from statsmodels.stats.stattools import durbin_watson
+
+
+def main():
+    input_csv = Path("steps/gpt4o/version1/execution2/analysis_data/step8_annual_proportions.csv")
+    output_txt = Path("steps/gpt4o/version1/execution2/analysis_data/step9_regression_results.txt")
+
+    try:
+        df = pd.read_csv(input_csv)
+    except FileNotFoundError:
+        print(f"Error: File not found - {input_csv}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not {'year', 'reappointment_proportion'}.issubset(df.columns):
+        print("Missing required columns in the input dataset.", file=sys.stderr)
+        sys.exit(1)
+
+    df.dropna(subset=['year', 'reappointment_proportion'], inplace=True)
+    x = df['year'].astype(int)
+    y = df['reappointment_proportion'].astype(float)
+
+    if len(x) < 2:
+        print("Not enough data points for regression analysis.", file=sys.stderr)
+        sys.exit(1)
+
+    # Linear regression
+    regression = linregress(x, y)
+    y_pred = regression.intercept + regression.slope * x
+
+    # R-squared
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot)
+
+    # Durbin-Watson test
+    residuals = y - y_pred
+    dw_stat = durbin_watson(residuals)
+
+    # Confidence interval (95%)
+    n = len(x)
+    mean_x = np.mean(x)
+    se = regression.stderr
+    t_val = 2.201  # approx for df=10 at 95% confidence
+    ci_low = regression.slope - t_val * se
+    ci_high = regression.slope + t_val * se
+
+    # Trend direction
+    trend_direction = "increasing" if regression.slope > 0 else "decreasing"
+    is_significant = regression.pvalue < 0.05
+
+    # Annual change and total change over 12 years
+    annual_pct_points = round(regression.slope * 100, 4)
+    total_change = round((regression.slope * (x.max() - x.min())) * 100, 4)
+
+    # Save results
+    with open(output_txt, 'w') as f:
+        f.write("Regression Analysis of Government-Wide Reappointment Proportion (2013-2024)\n")
+        f.write("=" * 70 + "\n")
+        f.write(f"Slope: {regression.slope:.6f} ({annual_pct_points} percentage points/year)\n")
+        f.write(f"Intercept: {regression.intercept:.6f}\n")
+        f.write(f"R-squared: {r_squared:.4f}\n")
+        f.write(f"P-value: {regression.pvalue:.4f}\n")
+        f.write(f"Standard error: {regression.stderr:.6f}\n")
+        f.write(f"95% Confidence Interval for slope: ({ci_low:.6f}, {ci_high:.6f})\n")
+        f.write(f"Durbin-Watson statistic: {dw_stat:.4f}\n")
+        f.write("\n")
+        f.write(f"Conclusion: The reappointment proportion trend is {trend_direction}.\n")
+        if is_significant:
+            f.write("The trend is statistically significant (p < 0.05).\n")
+        else:
+            f.write("The trend is NOT statistically significant (p >= 0.05).\n")
+        f.write(f"Total estimated change over 12 years: {total_change} percentage points.\n")
+
+    print(f"The government-wide reappointment trend is {trend_direction} and ", end="")
+    if is_significant:
+        print("statistically significant.")
+    else:
+        print("not statistically significant.")
+
+if __name__ == "__main__":
+    main()

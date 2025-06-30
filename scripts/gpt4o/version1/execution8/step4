@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step4_employee_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"[ERROR] Could not load dataset: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if df.empty:
+        print("[ERROR] Input dataset is empty.", file=sys.stderr)
+        sys.exit(1)
+
+    if "org" not in df.columns or "year" not in df.columns:
+        print("[ERROR] Required columns 'org' and 'year' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Clean and validate 'year' and 'org'
+    df = df.dropna(subset=["org", "year"]).copy()
+    try:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    except Exception as e:
+        print(f"[ERROR] Failed to convert 'year' column: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    df["org"] = df["org"].astype(str).str.strip()
+
+    # Group and count
+    counts = df.groupby(["org", "year"], dropna=False).size().reset_index(name="appointment_count")
+
+    # Pivot to wide format
+    try:
+        summary = counts.pivot(index="org", columns="year", values="appointment_count").fillna(0).astype(int)
+    except Exception as e:
+        print(f"[ERROR] Failed to pivot summary table: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        summary.to_csv(output_file)
+        print(f"[INFO] Summary table saved to: {output_file}")
+    except Exception as e:
+        print(f"[ERROR] Could not save summary table: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Print results
+    print("[INFO] Appointment Summary Table (top 10 rows):")
+    print(summary.head(10))
+
+    # Identify organizations with most total appointments
+    total_appointments = summary.sum(axis=1)
+    top_orgs = total_appointments.sort_values(ascending=False).head(5)
+
+    print("\n[INFO] Top 5 organizations by total appointments:")
+    for org, count in top_orgs.items():
+        print(f"  {org}: {count} appointments")
+
+if __name__ == "__main__":
+    main()

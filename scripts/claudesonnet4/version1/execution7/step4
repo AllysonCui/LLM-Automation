@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Count Generator
+
+This script creates a summary table showing appointment counts by organization
+and year from the processed appointments dataset.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def validate_data_quality(df):
+    """
+    Validate data quality and identify potential issues.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        dict: Data quality report
+    """
+    
+    print("Validating data quality...")
+    
+    quality_report = {
+        'total_records': len(df),
+        'missing_org': df['org'].isna().sum(),
+        'missing_year': df['year'].isna().sum(),
+        'missing_both': (df['org'].isna() & df['year'].isna()).sum(),
+        'empty_org': (df['org'] == '').sum() if 'org' in df.columns else 0,
+        'invalid_years': 0,
+        'duplicate_records': 0
+    }
+    
+    # Check for invalid years
+    if 'year' in df.columns:
+        valid_years = df['year'].dropna()
+        invalid_years = valid_years[(valid_years < 2000) | (valid_years > 2030)]
+        quality_report['invalid_years'] = len(invalid_years)
+    
+    # Check for duplicate records
+    if all(col in df.columns for col in ['name', 'position', 'org', 'year']):
+        duplicates = df.duplicated(subset=['name', 'position', 'org', 'year'])
+        quality_report['duplicate_records'] = duplicates.sum()
+    
+    return quality_report
+
+def print_data_quality_report(quality_report):
+    """
+    Print the data quality validation report.
+    
+    Args:
+        quality_report (dict): Data quality metrics
+    """
+    
+    print("\n" + "="*50)
+    print("DATA QUALITY VALIDATION REPORT")
+    print("="*50)
+    
+    print(f"Total records: {quality_report['total_records']:,}")
+    print()
+    
+    print("Missing Values:")
+    print(f"  Missing organization: {quality_report['missing_org']:,}")
+    print(f"  Missing year: {quality_report['missing_year']:,}")
+    print(f"  Missing both org and year: {quality_report['missing_both']:,}")
+    print(f"  Empty organization strings: {quality_report['empty_org']:,}")
+    print()
+    
+    print("Data Issues:")
+    print(f"  Invalid years (outside 2000-2030): {quality_report['invalid_years']:,}")
+    print(f"  Duplicate records: {quality_report['duplicate_records']:,}")
+    
+    # Calculate data completeness percentage
+    usable_records = (quality_report['total_records'] - 
+                     quality_report['missing_org'] - 
+                     quality_report['missing_year'] + 
+                     quality_report['missing_both'])
+    
+    if quality_report['total_records'] > 0:
+        completeness = (usable_records / quality_report['total_records']) * 100
+        print(f"\nData completeness: {completeness:.1f}%")
+
+def clean_data_for_counting(df):
+    """
+    Clean and prepare data for counting analysis.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Cleaned dataset
+        dict: Cleaning statistics
+    """
+    
+    print("\nCleaning data for analysis...")
+    
+    cleaning_stats = {
+        'original_records': len(df),
+        'removed_missing_org': 0,
+        'removed_missing_year': 0,
+        'removed_invalid_years': 0,
+        'final_records': 0
+    }
+    
+    # Start with a copy
+    df_clean = df.copy()
+    
+    # Remove records with missing organization
+    missing_org_mask = df_clean['org'].isna() | (df_clean['org'] == '')
+    cleaning_stats['removed_missing_org'] = missing_org_mask.sum()
+    df_clean = df_clean[~missing_org_mask]
+    
+    # Remove records with missing year
+    missing_year_mask = df_clean['year'].isna()
+    cleaning_stats['removed_missing_year'] = missing_year_mask.sum()
+    df_clean = df_clean[~missing_year_mask]
+    
+    # Remove records with invalid years
+    if len(df_clean) > 0:
+        invalid_year_mask = (df_clean['year'] < 2000) | (df_clean['year'] > 2030)
+        cleaning_stats['removed_invalid_years'] = invalid_year_mask.sum()
+        df_clean = df_clean[~invalid_year_mask]
+    
+    cleaning_stats['final_records'] = len(df_clean)
+    
+    print(f"  Original records: {cleaning_stats['original_records']:,}")
+    print(f"  Removed missing org: {cleaning_stats['removed_missing_org']:,}")
+    print(f"  Removed missing year: {cleaning_stats['removed_missing_year']:,}")
+    print(f"  Removed invalid years: {cleaning_stats['removed_invalid_years']:,}")
+    print(f"  Final records for analysis: {cleaning_stats['final_records']:,}")
+    
+    return df_clean, cleaning_stats
+
+def create_appointment_counts_table(df):
+    """
+    Create a pivot table with appointment counts by organization and year.
+    
+    Args:
+        df (pd.DataFrame): Cleaned dataset
+    
+    Returns:
+        pd.DataFrame: Pivot table with counts
+        dict: Summary statistics
+    """
+    
+    print("\nCreating appointment counts table...")
+    
+    # Create pivot table
+    counts_table = df.pivot_table(
+        index='org',
+        columns='year',
+        values='name',  # Use any column for counting
+        aggfunc='count',
+        fill_value=0
+    )
+    
+    # Sort columns (years) in ascending order
+    counts_table = counts_table.reindex(sorted(counts_table.columns), axis=1)
+    
+    # Add row totals
+    counts_table['Total'] = counts_table.sum(axis=1)
+    
+    # Sort by total appointments (descending)
+    counts_table = counts_table.sort_values('Total', ascending=False)
+    
+    # Add column totals
+    column_totals = counts_table.sum(axis=0)
+    column_totals.name = 'Total'
+    counts_table = pd.concat([counts_table, column_totals.to_frame().T])
+    
+    # Calculate summary statistics
+    summary_stats = {
+        'total_organizations': len(counts_table) - 1,  # Subtract 1 for total row
+        'total_appointments': counts_table.loc['Total', 'Total'],
+        'years_covered': len([col for col in counts_table.columns if col != 'Total']),
+        'min_year': min([col for col in counts_table.columns if isinstance(col, (int, float))]),
+        'max_year': max([col for col in counts_table.columns if isinstance(col, (int, float))]),
+        'avg_appointments_per_org': counts_table['Total'][:-1].mean(),  # Exclude total row
+        'median_appointments_per_org': counts_table['Total'][:-1].median()
+    }
+    
+    return counts_table, summary_stats
+
+def print_summary_table(counts_table, max_display_rows=20):
+    """
+    Print the appointment counts summary table.
+    
+    Args:
+        counts_table (pd.DataFrame): Pivot table with counts
+        max_display_rows (int): Maximum number of rows to display
+    """
+    
+    print("\n" + "="*80)
+    print("APPOINTMENT COUNTS BY ORGANIZATION AND YEAR")
+    print("="*80)
+    
+    # Display the table (excluding total row for main display)
+    display_table = counts_table.iloc[:-1]  # Exclude total row
+    
+    if len(display_table) > max_display_rows:
+        print(f"Displaying top {max_display_rows} organizations by total appointments:")
+        print(display_table.head(max_display_rows).to_string())
+        print(f"\n... and {len(display_table) - max_display_rows} more organizations")
+    else:
+        print("All organizations:")
+        print(display_table.to_string())
+    
+    # Always show the totals row
+    print("\n" + "-"*80)
+    print("TOTALS:")
+    print(counts_table.iloc[-1:].to_string())
+
+def identify_top_organizations(counts_table, top_n=10):
+    """
+    Identify and report top organizations by appointment count.
+    
+    Args:
+        counts_table (pd.DataFrame): Pivot table with counts
+        top_n (int): Number of top organizations to display
+    """
+    
+    print(f"\n" + "="*50)
+    print(f"TOP {top_n} ORGANIZATIONS BY TOTAL APPOINTMENTS")
+    print("="*50)
+    
+    # Get top organizations (excluding total row)
+    top_orgs = counts_table.iloc[:-1]['Total'].head(top_n)
+    
+    for i, (org, count) in enumerate(top_orgs.items(), 1):
+        print(f"{i:2d}. {org}: {count:,} appointments")
+    
+    # Calculate percentage of total appointments
+    total_appointments = counts_table.loc['Total', 'Total']
+    top_orgs_total = top_orgs.sum()
+    percentage = (top_orgs_total / total_appointments) * 100
+    
+    print(f"\nTop {top_n} organizations account for {top_orgs_total:,} appointments")
+    print(f"({percentage:.1f}% of all appointments)")
+
+def print_summary_statistics(summary_stats):
+    """
+    Print overall summary statistics.
+    
+    Args:
+        summary_stats (dict): Summary statistics
+    """
+    
+    print("\n" + "="*50)
+    print("SUMMARY STATISTICS")
+    print("="*50)
+    
+    print(f"Total organizations: {summary_stats['total_organizations']:,}")
+    print(f"Total appointments: {summary_stats['total_appointments']:,}")
+    print(f"Years covered: {summary_stats['years_covered']} ({summary_stats['min_year']:.0f}-{summary_stats['max_year']:.0f})")
+    print(f"Average appointments per organization: {summary_stats['avg_appointments_per_org']:.1f}")
+    print(f"Median appointments per organization: {summary_stats['median_appointments_per_org']:.1f}")
+
+def load_repeats_marked_dataset(file_path):
+    """
+    Load the dataset with marked repeats from CSV file.
+    
+    Args:
+        file_path (str): Path to the dataset CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Repeats marked dataset not found at: {file_path}")
+        
+        df = pd.read_csv(file_path)
+        print(f"Loaded repeats marked dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error loading repeats marked dataset: {str(e)}")
+        raise
+
+def save_employee_counts(counts_table, output_dir, filename="step4_employee_counts.csv"):
+    """
+    Save the appointment counts table to CSV file.
+    
+    Args:
+        counts_table (pd.DataFrame): Counts table to save
+        output_dir (str): Directory to save the output file
+        filename (str): Name of the output file
+    """
+    
+    # Ensure output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, filename)
+    
+    try:
+        # Reset index to include organization names as a column
+        output_table = counts_table.reset_index()
+        output_table.to_csv(output_path, index=False)
+        print(f"\nEmployee counts table saved to: {output_path}")
+        
+    except Exception as e:
+        print(f"Error saving file: {str(e)}")
+        raise
+
+def main():
+    """
+    Main execution function.
+    """
+    
+    print("New Brunswick Government Appointments Count Generator")
+    print("="*60)
+    
+    # Define file paths
+    data_dir = "scripts/claudesonnet4/version1/execution7/analysis_data"
+    input_file = os.path.join(data_dir, "step3_repeats_marked.csv")
+    
+    try:
+        # Load the dataset
+        df_original = load_repeats_marked_dataset(input_file)
+        
+        # Validate data quality
+        quality_report = validate_data_quality(df_original)
+        print_data_quality_report(quality_report)
+        
+        # Clean data for analysis
+        df_clean, cleaning_stats = clean_data_for_counting(df_original)
+        
+        if len(df_clean) == 0:
+            raise ValueError("No valid records remaining after data cleaning")
+        
+        # Create appointment counts table
+        counts_table, summary_stats = create_appointment_counts_table(df_clean)
+        
+        # Save the counts table
+        save_employee_counts(counts_table, data_dir)
+        
+        # Print results
+        print_summary_table(counts_table)
+        identify_top_organizations(counts_table)
+        print_summary_statistics(summary_stats)
+        
+        print("\n" + "="*60)
+        print("Appointment counts generation completed successfully!")
+        print("="*60)
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

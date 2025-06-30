@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step1_combined_appointments.csv")
+    output_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step2_key_columns_data.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: Empty file - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error loading {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Define possible variations of column names
+    column_map = {
+        "reappointed": ["reappointed"],
+        "name": ["name"],
+        "position": ["position", "appointment"],
+        "org": ["org", "organization"],
+        "year": ["year"]
+    }
+
+    selected_columns = {}
+
+    for key, variants in column_map.items():
+        for variant in variants:
+            matched_cols = [col for col in df.columns if col.strip().lower() == variant.lower()]
+            if matched_cols:
+                selected_columns[key] = matched_cols[0]
+                break
+        else:
+            print(f"Warning: None of the expected variants found for column '{key}'", file=sys.stderr)
+
+    missing_keys = [k for k in column_map if k not in selected_columns]
+    if missing_keys:
+        print(f"Error: Missing required columns: {missing_keys}", file=sys.stderr)
+        sys.exit(1)
+
+    filtered_df = df[[selected_columns[k] for k in column_map]]
+    filtered_df.columns = list(column_map.keys())  # Rename columns to standardized names
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    filtered_df.to_csv(output_file, index=False)
+
+    print("Filtered dataset saved to:", output_file)
+    print("Extracted columns:", list(filtered_df.columns))
+    print("Missing values per column:")
+    print(filtered_df.isnull().sum())
+
+if __name__ == "__main__":
+    main()

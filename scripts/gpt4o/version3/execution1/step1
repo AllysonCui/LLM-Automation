@@ -1,0 +1,101 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Paths
+RAW_DATA_DIR = "raw_data"
+OUTPUT_DIR = "scripts/gpt4o/version3/execution1/analysis_data"
+
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Step 1: Combine the 12 raw datasets
+dfs = []
+for year in range(2013, 2025):
+    path = os.path.join(RAW_DATA_DIR, f"appointments_{year}.csv")
+    df = pd.read_csv(path)
+    df["year"] = year
+    dfs.append(df)
+combined = pd.concat(dfs, ignore_index=True)
+combined.to_csv(os.path.join(OUTPUT_DIR, "step1_combined_appointments.csv"), index=False)
+
+# Step 2: Extract key columns
+key_cols = ["reappointed", "name", "position", "org", "year"]
+data = combined[key_cols].copy()
+data.to_csv(os.path.join(OUTPUT_DIR, "step2_key_columns_data.csv"), index=False)
+
+# Step 3: Mark reappointments based on repeated name-position-org
+data["reappointed"] = False
+seen = set()
+for idx, row in data.iterrows():
+    key = (row["name"], row["position"], row["org"])
+    if key in seen:
+        data.at[idx, "reappointed"] = True
+    else:
+        seen.add(key)
+data.to_csv(os.path.join(OUTPUT_DIR, "step3_repeats_marked.csv"), index=False)
+
+# Step 4: Count total employees per org per year
+employee_counts = data.groupby(["org", "year"]).size().reset_index(name="total_appointments")
+employee_counts.to_csv(os.path.join(OUTPUT_DIR, "step4_employee_counts.csv"), index=False)
+
+# Step 5: Count reappointments per org per year
+reappoint_counts = data[data["reappointed"]].groupby(["org", "year"]).size().reset_index(name="reappointments")
+reappoint_counts.to_csv(os.path.join(OUTPUT_DIR, "step5_reappointment_counts.csv"), index=False)
+
+# Step 6: Merge counts and compute reappointment rates
+merged = pd.merge(employee_counts, reappoint_counts, on=["org", "year"], how="left")
+merged["reappointments"].fillna(0, inplace=True)
+merged["reappointment_rate"] = merged["reappointments"] / merged["total_appointments"]
+merged.to_csv(os.path.join(OUTPUT_DIR, "step6_reappointment_rates.csv"), index=False)
+
+# Step 7: Identify org with highest reappointment rate each year
+max_rates = merged.loc[merged.groupby("year")["reappointment_rate"].idxmax()]
+max_rates.to_csv(os.path.join(OUTPUT_DIR, "step7_yearly_max_rates.csv"), index=False)
+
+# Plot highest rates per year
+plt.figure(figsize=(12, 6))
+plt.plot(max_rates["year"], max_rates["reappointment_rate"], marker="o")
+plt.title("Highest Annual Reappointment Rate by Organization")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Rate")
+plt.grid(True)
+plt.savefig(os.path.join(OUTPUT_DIR, "step7_yearly_max_reappointment_rates.png"))
+plt.close()
+
+# Step 8: Compute government-wide reappointment proportion by year
+annual_props = data.groupby("year").agg(
+    total_appointments=("reappointed", "count"),
+    total_reappointments=("reappointed", "sum")
+).reset_index()
+annual_props["reappointment_proportion"] = (
+    annual_props["total_reappointments"] / annual_props["total_appointments"]
+)
+annual_props.to_csv(os.path.join(OUTPUT_DIR, "step8_annual_proportions.csv"), index=False)
+
+# Plot government-wide annual reappointment proportions
+plt.figure(figsize=(12, 6))
+plt.plot(annual_props["year"], annual_props["reappointment_proportion"], marker="o")
+plt.title("Government-wide Reappointment Proportions Over Time")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Proportion")
+plt.grid(True)
+plt.savefig(os.path.join(OUTPUT_DIR, "step8_annual_reappointment_proportions.png"))
+plt.close()
+
+# Step 9: Linear regression on reappointment proportions
+X = annual_props["year"].values.reshape(-1, 1)
+y = annual_props["reappointment_proportion"].values
+reg = LinearRegression().fit(X, y)
+slope = reg.coef_[0]
+intercept = reg.intercept_
+r2 = reg.score(X, y)
+
+with open(os.path.join(OUTPUT_DIR, "step9_regression_results.txt"), "w") as f:
+    f.write("Linear Regression on Reappointment Proportions:\n")
+    f.write(f"Intercept: {intercept:.6f}\n")
+    f.write(f"Slope: {slope:.6f}\n")
+    f.write(f"R-squared: {r2:.4f}\n")
+    f.write("Trend: " + ("Increasing" if slope > 0 else "Decreasing") + "\n")

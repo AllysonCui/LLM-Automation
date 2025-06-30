@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""
+Script to extract key columns from the combined New Brunswick government appointments dataset.
+Handles variations in column naming and creates a filtered dataset for analysis.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_matching_column(df, possible_names):
+    """
+    Find a column in the dataframe that matches any of the possible names.
+    Case-insensitive matching.
+    
+    Args:
+        df: pandas DataFrame
+        possible_names: list of possible column names
+    
+    Returns:
+        str: actual column name found, or None if not found
+    """
+    # Get lowercase version of all column names
+    df_columns_lower = {col.lower(): col for col in df.columns}
+    
+    # Try to find a match
+    for name in possible_names:
+        if name.lower() in df_columns_lower:
+            return df_columns_lower[name.lower()]
+    
+    return None
+
+def load_and_filter_columns():
+    """
+    Load the combined dataset and extract key columns with robust column name handling
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution9/analysis_data")
+    input_path = data_dir / "step1_combined_appointments.csv"
+    output_path = data_dir / "step2_key_columns_data.csv"
+    
+    # Check if input file exists
+    if not input_path.exists():
+        print(f"Error: Input file not found at {input_path}")
+        sys.exit(1)
+    
+    print("Loading combined dataset...")
+    try:
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df)} rows, {len(df.columns)} columns")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Print all available columns for reference
+    print("\nAvailable columns in dataset:")
+    for i, col in enumerate(df.columns):
+        print(f"  {i+1}. {col}")
+    
+    # Define possible column name variations for each key column
+    column_mappings = {
+        'reappointed': ['reappointed', 'reappointment', 're-appointed', 'is_reappointed'],
+        'name': ['name', 'appointee_name', 'person_name', 'full_name'],
+        'position': ['position', 'appointment', 'role', 'title', 'position_title'],
+        'org': ['org', 'organization', 'organisation', 'department', 'agency', 'board']
+    }
+    
+    # Find actual column names
+    found_columns = {}
+    missing_columns = []
+    
+    print("\nMatching columns...")
+    for target_col, possible_names in column_mappings.items():
+        actual_col = find_matching_column(df, possible_names)
+        if actual_col:
+            found_columns[target_col] = actual_col
+            print(f"✓ Found '{target_col}' as '{actual_col}'")
+        else:
+            missing_columns.append(target_col)
+            print(f"✗ Could not find column for '{target_col}'")
+    
+    # Always include year column
+    if 'year' in df.columns:
+        found_columns['year'] = 'year'
+        print(f"✓ Found 'year' column")
+    else:
+        print("✗ Warning: 'year' column not found!")
+    
+    if missing_columns:
+        print(f"\nWarning: Could not find columns for: {', '.join(missing_columns)}")
+        print("Continuing with available columns...")
+    
+    # Create new dataframe with only the found columns
+    actual_columns = list(found_columns.values())
+    filtered_df = df[actual_columns].copy()
+    
+    # Rename columns to standardized names
+    rename_dict = {v: k for k, v in found_columns.items()}
+    filtered_df = filtered_df.rename(columns=rename_dict)
+    
+    # Save filtered dataset
+    filtered_df.to_csv(output_path, index=False, encoding='utf-8')
+    print(f"\n✓ Filtered dataset saved to: {output_path}")
+    
+    # Print information about extracted columns
+    print("\n" + "="*50)
+    print("EXTRACTED COLUMNS INFORMATION")
+    print("="*50)
+    print(f"Shape: {filtered_df.shape} (rows, columns)")
+    print(f"\nColumns in filtered dataset: {list(filtered_df.columns)}")
+    
+    # Analyze missing values
+    print("\nMissing values per column:")
+    missing_counts = filtered_df.isnull().sum()
+    missing_pct = (filtered_df.isnull().sum() / len(filtered_df) * 100).round(2)
+    
+    for col in filtered_df.columns:
+        print(f"  {col}: {missing_counts[col]} ({missing_pct[col]}%)")
+    
+    # Print data types
+    print("\nData types:")
+    for col, dtype in filtered_df.dtypes.items():
+        print(f"  {col}: {dtype}")
+    
+    # Print unique value counts for categorical columns
+    print("\nUnique values per column:")
+    for col in filtered_df.columns:
+        unique_count = filtered_df[col].nunique()
+        print(f"  {col}: {unique_count} unique values")
+    
+    # Show sample data
+    print("\nFirst 5 rows of filtered data:")
+    print(filtered_df.head())
+    
+    # Special analysis for reappointed column if found
+    if 'reappointed' in filtered_df.columns:
+        print("\nReappointment statistics:")
+        reappointed_counts = filtered_df['reappointed'].value_counts(dropna=False)
+        print(reappointed_counts)
+        
+        if not reappointed_counts.empty:
+            total_valid = filtered_df['reappointed'].notna().sum()
+            if total_valid > 0:
+                reappointed_true = filtered_df['reappointed'].sum()
+                print(f"\nReappointment rate: {reappointed_true}/{total_valid} ({reappointed_true/total_valid*100:.2f}%)")
+    
+    return filtered_df
+
+def main():
+    """
+    Main execution function
+    """
+    print("New Brunswick Government Appointments Analysis")
+    print("Step 2: Extracting Key Columns")
+    print("-" * 50)
+    
+    # Load and filter columns
+    filtered_df = load_and_filter_columns()
+    
+    print("\n✓ Step 2 completed successfully!")
+
+if __name__ == "__main__":
+    main()

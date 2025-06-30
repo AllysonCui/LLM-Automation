@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Data Combiner
+Loads appointment data from 2013-2024 CSV files and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024 and combine into single DataFrame.
+    
+    Returns:
+        pd.DataFrame: Combined appointments data with year column added
+    """
+    # Define the years range
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("scripts/claudesonnet4/version1/execution3/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    combined_data = []
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Check if file exists
+            if not os.path.exists(filename):
+                print(f"Warning: File {filename} not found, skipping...")
+                continue
+            
+            # Load the CSV file
+            print(f"Loading {filename}...")
+            df = pd.read_csv(filename)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Add to combined data list
+            combined_data.append(df)
+            
+            print(f"  - Loaded {len(df)} records from {year}")
+            
+        except Exception as e:
+            print(f"Error loading {filename}: {str(e)}")
+            continue
+    
+    if not combined_data:
+        raise ValueError("No data files were successfully loaded!")
+    
+    # Combine all DataFrames
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(combined_data, ignore_index=True)
+    
+    # Save combined dataset
+    output_file = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_file, index=False)
+    print(f"Combined dataset saved to: {output_file}")
+    
+    return combined_df
+
+def print_dataset_info(df):
+    """
+    Print basic information about the combined dataset.
+    
+    Args:
+        df (pd.DataFrame): The combined appointments DataFrame
+    """
+    print("\n" + "="*50)
+    print("COMBINED DATASET INFORMATION")
+    print("="*50)
+    
+    print(f"Shape: {df.shape}")
+    print(f"Total records: {len(df):,}")
+    print(f"Total columns: {len(df.columns)}")
+    
+    print("\nColumns:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+    
+    print("\nData types:")
+    print(df.dtypes)
+    
+    print("\nYear distribution:")
+    if 'year' in df.columns:
+        year_counts = df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} appointments")
+    
+    print("\nMissing values per column:")
+    missing = df.isnull().sum()
+    for col, count in missing.items():
+        if count > 0:
+            percentage = (count / len(df)) * 100
+            print(f"  {col}: {count:,} ({percentage:.1f}%)")
+    
+    print("\nFirst few rows:")
+    print(df.head())
+
+def main():
+    """Main execution function."""
+    try:
+        print("New Brunswick Government Appointments Data Combiner")
+        print("="*55)
+        
+        # Load and combine the data
+        combined_df = load_and_combine_appointments()
+        
+        # Print dataset information
+        print_dataset_info(combined_df)
+        
+        print("\nData combination completed successfully!")
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

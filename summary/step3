@@ -1,0 +1,57 @@
+import os
+import pandas as pd
+
+# Load correct answer
+try:
+    correct_df = pd.read_csv("scripts/human/version1/analysis_data/step3_repeats_marked.csv")
+    if "reappointed" not in correct_df.columns:
+        raise ValueError("Column 'reappointed' not found in human reference file.")
+    correct_counts = correct_df["reappointed"].value_counts().to_dict()
+except Exception as e:
+    print(f"Failed to load correct answer: {e}")
+    exit(1)
+
+# Normalize to ensure both True and False keys exist
+correct_answer = {True: 0, False: 0}
+for key in correct_counts:
+    correct_answer[bool(key)] = correct_counts[key]
+
+# Define base directories
+base_paths = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudesonnet4", "version1")
+]
+
+# Print header
+print("| Model         | Version   | # of Unique Reappointment Definitions |")
+print("|---------------|-----------|---------------------------------------|")
+
+# Main loop
+for model, version in base_paths:
+    full_path = f"scripts/{model}/{version}"
+    combinations = set()
+
+    if not os.path.exists(full_path):
+        print(f"| {model:<13} | {version:<9} | Path does not exist                  |")
+        continue
+
+    for folder in os.listdir(full_path):
+        exec_path = os.path.join(full_path, folder)
+        if os.path.isdir(exec_path) and folder.startswith("execution"):
+            target_file = os.path.join(exec_path, "analysis_data", "step3_repeats_marked.csv")
+            if not os.path.exists(target_file):
+                continue
+            try:
+                df = pd.read_csv(target_file)
+                if "reappointed" not in df.columns:
+                    continue
+                counts = df["reappointed"].value_counts().to_dict()
+                normalized = (counts.get(True, 0), counts.get(False, 0))
+                combinations.add(normalized)
+            except Exception:
+                continue
+
+    print(f"| {model:<13} | {version:<9} | {len(combinations):<37} |")

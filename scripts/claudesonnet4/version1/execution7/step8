@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Annual Reappointment Proportion Calculator
+
+This script calculates the overall government-wide reappointment proportion
+for each year from 2013-2024 across all organizations.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import matplotlib.pyplot as plt
+
+def load_reappointment_dataset(file_path):
+    """
+    Load the dataset with reappointment flags from CSV file.
+    
+    Args:
+        file_path (str): Path to the reappointment dataset CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset with reappointment flags
+    """
+    
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Reappointment dataset not found at: {file_path}")
+        
+        df = pd.read_csv(file_path)
+        print(f"Loaded reappointment dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        print(f"Columns: {list(df.columns)}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error loading reappointment dataset: {str(e)}")
+        raise
+
+def validate_reappointment_data(df):
+    """
+    Validate the reappointment dataset for annual proportion calculation.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        dict: Validation report
+    """
+    
+    print("\nValidating reappointment data...")
+    
+    validation_report = {
+        'total_records': len(df),
+        'missing_year': df['year'].isna().sum(),
+        'missing_reappointed': df['reappointed'].isna().sum(),
+        'year_range': [df['year'].min(), df['year'].max()] if len(df) > 0 else [None, None],
+        'reappointed_true': (df['reappointed'] == True).sum(),
+        'reappointed_false': (df['reappointed'] == False).sum(),
+        'reappointed_other': len(df) - (df['reappointed'] == True).sum() - (df['reappointed'] == False).sum()
+    }
+    
+    print(f"Total records: {validation_report['total_records']:,}")
+    print(f"Missing year: {validation_report['missing_year']:,}")
+    print(f"Missing reappointed flag: {validation_report['missing_reappointed']:,}")
+    
+    if validation_report['year_range'][0] is not None:
+        print(f"Year range: {validation_report['year_range'][0]:.0f} - {validation_report['year_range'][1]:.0f}")
+    
+    print(f"Reappointed = True: {validation_report['reappointed_true']:,}")
+    print(f"Reappointed = False: {validation_report['reappointed_false']:,}")
+    print(f"Other reappointed values: {validation_report['reappointed_other']:,}")
+    
+    # Check unique years
+    years = sorted(df['year'].dropna().unique())
+    print(f"Available years: {years}")
+    
+    return validation_report
+
+def clean_data_for_analysis(df):
+    """
+    Clean the dataset for annual proportion analysis.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Cleaned dataset
+        dict: Cleaning statistics
+    """
+    
+    print("\nCleaning data for annual proportion analysis...")
+    
+    cleaning_stats = {
+        'original_records': len(df),
+        'removed_missing_year': 0,
+        'removed_missing_reappointed': 0,
+        'removed_invalid_years': 0,
+        'final_records': 0
+    }
+    
+    # Start with a copy
+    df_clean = df.copy()
+    
+    # Remove records with missing year
+    missing_year_mask = df_clean['year'].isna()
+    cleaning_stats['removed_missing_year'] = missing_year_mask.sum()
+    df_clean = df_clean[~missing_year_mask]
+    
+    # Remove records with missing reappointed flag
+    missing_reappointed_mask = df_clean['reappointed'].isna()
+    cleaning_stats['removed_missing_reappointed'] = missing_reappointed_mask.sum()
+    df_clean = df_clean[~missing_reappointed_mask]
+    
+    # Keep only records within the expected year range (2013-2024)
+    if len(df_clean) > 0:
+        invalid_year_mask = (df_clean['year'] < 2013) | (df_clean['year'] > 2024)
+        cleaning_stats['removed_invalid_years'] = invalid_year_mask.sum()
+        df_clean = df_clean[~invalid_year_mask]
+    
+    # Ensure year is integer
+    if len(df_clean) > 0:
+        df_clean['year'] = df_clean['year'].astype(int)
+    
+    # Ensure reappointed is boolean
+    df_clean['reappointed'] = df_clean['reappointed'].astype(bool)
+    
+    cleaning_stats['final_records'] = len(df_clean)
+    
+    print(f"  Original records: {cleaning_stats['original_records']:,}")
+    print(f"  Removed missing year: {cleaning_stats['removed_missing_year']:,}")
+    print(f"  Removed missing reappointed: {cleaning_stats['removed_missing_reappointed']:,}")
+    print(f"  Removed invalid years: {cleaning_stats['removed_invalid_years']:,}")
+    print(f"  Final records: {cleaning_stats['final_records']:,}")
+    
+    return df_clean, cleaning_stats
+
+def calculate_annual_proportions(df):
+    """
+    Calculate annual government-wide reappointment proportions.
+    
+    Args:
+        df (pd.DataFrame): Cleaned dataset
+    
+    Returns:
+        pd.DataFrame: Annual proportions dataset
+        dict: Calculation statistics
+    """
+    
+    print("\nCalculating annual reappointment proportions...")
+    
+    # Group by year and calculate totals
+    annual_stats = df.groupby('year').agg({
+        'reappointed': ['count', 'sum']
+    }).reset_index()
+    
+    # Flatten column names
+    annual_stats.columns = ['year', 'total_appointments', 'total_reappointments']
+    
+    # Calculate proportion
+    annual_stats['reappointment_proportion'] = (
+        annual_stats['total_reappointments'] / annual_stats['total_appointments']
+    )
+    
+    # Ensure we have all years from 2013-2024, filling missing years with zeros
+    all_years = pd.DataFrame({'year': range(2013, 2025)})
+    annual_stats = all_years.merge(annual_stats, on='year', how='left')
+    
+    # Fill missing values with 0
+    annual_stats['total_appointments'] = annual_stats['total_appointments'].fillna(0).astype(int)
+    annual_stats['total_reappointments'] = annual_stats['total_reappointments'].fillna(0).astype(int)
+    annual_stats['reappointment_proportion'] = annual_stats['reappointment_proportion'].fillna(0)
+    
+    # Calculate summary statistics
+    calc_stats = {
+        'years_with_data': (annual_stats['total_appointments'] > 0).sum(),
+        'total_appointments_all_years': annual_stats['total_appointments'].sum(),
+        'total_reappointments_all_years': annual_stats['total_reappointments'].sum(),
+        'overall_proportion': 0,
+        'min_proportion': annual_stats[annual_stats['total_appointments'] > 0]['reappointment_proportion'].min(),
+        'max_proportion': annual_stats[annual_stats['total_appointments'] > 0]['reappointment_proportion'].max(),
+        'avg_proportion': annual_stats[annual_stats['total_appointments'] > 0]['reappointment_proportion'].mean()
+    }
+    
+    # Calculate overall proportion across all years
+    if calc_stats['total_appointments_all_years'] > 0:
+        calc_stats['overall_proportion'] = (
+            calc_stats['total_reappointments_all_years'] / calc_stats['total_appointments_all_years']
+        )
+    
+    print(f"  Years with data: {calc_stats['years_with_data']}")
+    print(f"  Total appointments (all years): {calc_stats['total_appointments_all_years']:,}")
+    print(f"  Total reappointments (all years): {calc_stats['total_reappointments_all_years']:,}")
+    print(f"  Overall proportion: {calc_stats['overall_proportion']:.3f} ({calc_stats['overall_proportion']*100:.1f}%)")
+    
+    return annual_stats, calc_stats
+
+def print_yearly_proportions(annual_stats):
+    """
+    Print year-by-year proportions.
+    
+    Args:
+        annual_stats (pd.DataFrame): Annual proportions dataset
+    """
+    
+    print("\n" + "="*70)
+    print("YEAR-BY-YEAR GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS")
+    print("="*70)
+    
+    for _, row in annual_stats.iterrows():
+        year = row['year']
+        total = row['total_appointments']
+        reapp = row['total_reappointments']
+        prop = row['reappointment_proportion']
+        
+        if total > 0:
+            print(f"{year}: {reapp:,} reappointments out of {total:,} total appointments ({prop*100:.1f}%)")
+        else:
+            print(f"{year}: No appointment data")
+
+def create_annual_proportion_visualization(annual_stats, output_dir):
+    """
+    Create a visualization showing the government-wide reappointment proportion trend.
+    
+    Args:
+        annual_stats (pd.DataFrame): Annual proportions dataset
+        output_dir (str): Directory to save the visualization
+    """
+    
+    print("\nCreating annual proportion visualization...")
+    
+    # Filter out years with no data for plotting
+    plot_data = annual_stats[annual_stats['total_appointments'] > 0].copy()
+    
+    if len(plot_data) == 0:
+        print("No data available for visualization")
+        return
+    
+    # Set up the plot
+    plt.figure(figsize=(14, 8))
+    
+    # Create the main plot
+    plt.plot(plot_data['year'], plot_data['reappointment_proportion'] * 100, 
+             marker='o', linewidth=3, markersize=8, color='#D32F2F', 
+             markerfacecolor='#F44336', markeredgecolor='#D32F2F', markeredgewidth=2)
+    
+    # Add value labels on each point
+    for _, row in plot_data.iterrows():
+        prop_pct = row['reappointment_proportion'] * 100
+        plt.annotate(f'{prop_pct:.1f}%', 
+                    (row['year'], prop_pct),
+                    textcoords="offset points", 
+                    xytext=(0,15), 
+                    ha='center', 
+                    fontsize=10,
+                    fontweight='bold',
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    
+    # Customize the plot
+    plt.title('Government-Wide Reappointment Proportion by Year\nNew Brunswick Government Appointments', 
+              fontsize=16, fontweight='bold', pad=20)
+    plt.xlabel('Year', fontsize=12, fontweight='bold')
+    plt.ylabel('Reappointment Proportion (%)', fontsize=12, fontweight='bold')
+    
+    # Set x-axis ticks to show all years
+    plt.xticks(plot_data['year'], rotation=45)
+    
+    # Add grid
+    plt.grid(True, alpha=0.3, linestyle='--')
+    
+    # Set y-axis to percentage format
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}%'))
+    
+    # Add a horizontal line for the overall average
+    overall_avg = plot_data['reappointment_proportion'].mean() * 100
+    plt.axhline(y=overall_avg, color='gray', linestyle='--', alpha=0.7, 
+                label=f'Average: {overall_avg:.1f}%')
+    plt.legend()
+    
+    # Set reasonable y-axis limits
+    y_min = max(0, plot_data['reappointment_proportion'].min() * 100 - 2)
+    y_max = plot_data['reappointment_proportion'].max() * 100 + 2
+    plt.ylim(y_min, y_max)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Save the plot
+    output_path = os.path.join(output_dir, "step8_annual_reappointment_proportions.png")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to: {output_path}")
+    
+    # Close the plot to free memory
+    plt.close()
+
+def save_annual_proportions(annual_stats, output_dir, filename="step8_annual_proportions.csv"):
+    """
+    Save the annual proportions dataset to CSV file.
+    
+    Args:
+        annual_stats (pd.DataFrame): Annual proportions dataset to save
+        output_dir (str): Directory to save the output file
+        filename (str): Name of the output file
+    """
+    
+    # Ensure output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, filename)
+    
+    try:
+        # Round proportion to reasonable precision
+        output_df = annual_stats.copy()
+        output_df['reappointment_proportion'] = output_df['reappointment_proportion'].round(6)
+        
+        output_df.to_csv(output_path, index=False)
+        print(f"\nAnnual proportions saved to: {output_path}")
+        
+    except Exception as e:
+        print(f"Error saving file: {str(e)}")
+        raise
+
+def print_summary_statistics(annual_stats, calc_stats):
+    """
+    Print summary statistics about annual proportions.
+    
+    Args:
+        annual_stats (pd.DataFrame): Annual proportions dataset
+        calc_stats (dict): Calculation statistics
+    """
+    
+    print("\n" + "="*60)
+    print("SUMMARY STATISTICS")
+    print("="*60)
+    
+    print(f"Data Coverage:")
+    print(f"  Years with appointment data: {calc_stats['years_with_data']}")
+    print(f"  Total years analyzed: {len(annual_stats)}")
+    
+    print(f"\nOverall Totals (2013-2024):")
+    print(f"  Total appointments: {calc_stats['total_appointments_all_years']:,}")
+    print(f"  Total reappointments: {calc_stats['total_reappointments_all_years']:,}")
+    print(f"  Overall reappointment proportion: {calc_stats['overall_proportion']:.3f} ({calc_stats['overall_proportion']*100:.1f}%)")
+    
+    if calc_stats['years_with_data'] > 0:
+        print(f"\nAnnual Proportion Statistics:")
+        print(f"  Minimum: {calc_stats['min_proportion']:.3f} ({calc_stats['min_proportion']*100:.1f}%)")
+        print(f"  Maximum: {calc_stats['max_proportion']:.3f} ({calc_stats['max_proportion']*100:.1f}%)")
+        print(f"  Average: {calc_stats['avg_proportion']:.3f} ({calc_stats['avg_proportion']*100:.1f}%)")
+    
+    # Find year with highest and lowest proportions
+    data_years = annual_stats[annual_stats['total_appointments'] > 0]
+    if len(data_years) > 0:
+        highest_year = data_years.loc[data_years['reappointment_proportion'].idxmax()]
+        lowest_year = data_years.loc[data_years['reappointment_proportion'].idxmin()]
+        
+        print(f"\nExtreme Years:")
+        print(f"  Highest proportion: {highest_year['year']} ({highest_year['reappointment_proportion']*100:.1f}%)")
+        print(f"  Lowest proportion: {lowest_year['year']} ({lowest_year['reappointment_proportion']*100:.1f}%)")
+
+def main():
+    """
+    Main execution function.
+    """
+    
+    print("New Brunswick Government Annual Reappointment Proportion Calculator")
+    print("="*75)
+    
+    # Define file paths
+    data_dir = "scripts/claudesonnet4/version1/execution7/analysis_data"
+    input_file = os.path.join(data_dir, "step3_repeats_marked.csv")
+    
+    try:
+        # Load the dataset
+        df_original = load_reappointment_dataset(input_file)
+        
+        # Validate the data
+        validation_report = validate_reappointment_data(df_original)
+        
+        # Clean the data
+        df_clean, cleaning_stats = clean_data_for_analysis(df_original)
+        
+        if len(df_clean) == 0:
+            raise ValueError("No valid records remaining after data cleaning")
+        
+        # Calculate annual proportions
+        annual_stats, calc_stats = calculate_annual_proportions(df_clean)
+        
+        # Save the results
+        save_annual_proportions(annual_stats, data_dir)
+        
+        # Create visualization
+        create_annual_proportion_visualization(annual_stats, data_dir)
+        
+        # Print results
+        print_yearly_proportions(annual_stats)
+        print_summary_statistics(annual_stats, calc_stats)
+        
+        print("\n" + "="*75)
+        print("Annual reappointment proportion calculation completed successfully!")
+        print("="*75)
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,58 @@
+import pandas as pd
+from pathlib import Path
+from scipy.stats import linregress
+
+# Define file paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step8_annual_proportions.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step9_regression_results.txt"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def main():
+    if not INPUT_FILE.exists():
+        print(f"[ERROR] Input file missing: {INPUT_FILE}")
+        return
+
+    try:
+        df = pd.read_csv(INPUT_FILE)
+    except Exception as e:
+        print(f"[ERROR] Failed to load input: {e}")
+        return
+
+    if 'year' not in df.columns or 'reappointment_proportion' not in df.columns:
+        print("[ERROR] Required columns missing from input.")
+        return
+
+    # Drop any rows with missing values
+    df = df.dropna(subset=['year', 'reappointment_proportion'])
+
+    # Run linear regression
+    x = df['year']
+    y = df['reappointment_proportion']
+    print("[INFO] Running linear regression...")
+    result = linregress(x, y)
+
+    # Interpret result
+    trend = "increasing" if result.slope > 0 else "decreasing"
+    significance = "statistically significant" if result.pvalue < 0.05 else "not statistically significant"
+
+    # Prepare summary text
+    summary = (
+        f"Linear Regression Results on Reappointment Proportions (2013–2024)\n"
+        f"{'-'*60}\n"
+        f"Slope (trend direction): {result.slope:.6f} → {trend}\n"
+        f"Intercept: {result.intercept:.6f}\n"
+        f"R-squared: {result.rvalue**2:.4f}\n"
+        f"P-value: {result.pvalue:.6f} → {significance}\n"
+        f"Standard Error: {result.stderr:.6f}\n"
+    )
+
+    print(summary)
+    with open(OUTPUT_FILE, "w") as f:
+        f.write(summary)
+    print(f"[SUCCESS] Regression summary saved to: {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    main()

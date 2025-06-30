@@ -1,0 +1,59 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# Define file paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step6_reappointment_rates.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_CSV = OUTPUT_DIR / "step7_yearly_max_rates.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "step7_yearly_max_reappointment_rates.png"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def main():
+    if not INPUT_FILE.exists():
+        print(f"[ERROR] Input file missing: {INPUT_FILE}")
+        return
+
+    try:
+        df = pd.read_csv(INPUT_FILE)
+    except Exception as e:
+        print(f"[ERROR] Failed to load input file: {e}")
+        return
+
+    required_columns = ['organization', 'year', 'reappointment_rate']
+    for col in required_columns:
+        if col not in df.columns:
+            print(f"[ERROR] Required column missing: {col}")
+            return
+
+    print("[INFO] Finding max reappointment rate per year...")
+    df_max = (
+        df.sort_values(by=['year', 'reappointment_rate'], ascending=[True, False])
+          .groupby('year')
+          .first()
+          .reset_index()
+    )
+
+    df_max = df_max[['year', 'organization', 'reappointment_rate']]
+    df_max.rename(columns={'organization': 'max_org', 'reappointment_rate': 'max_rate'}, inplace=True)
+
+    print(f"[INFO] Max records found for {df_max.shape[0]} years.")
+    df_max.to_csv(OUTPUT_CSV, index=False)
+    print(f"[SUCCESS] Max reappointment rates saved to: {OUTPUT_CSV}")
+
+    print("[INFO] Plotting max reappointment rates over years...")
+    plt.figure(figsize=(10, 6))
+    plt.plot(df_max['year'], df_max['max_rate'], marker='o', linestyle='-')
+    plt.title('Maximum Reappointment Rate per Year by Organization')
+    plt.xlabel('Year')
+    plt.ylabel('Max Reappointment Rate')
+    plt.grid(True)
+    plt.xticks(df_max['year'])
+    plt.tight_layout()
+    plt.savefig(OUTPUT_PLOT)
+    print(f"[SUCCESS] Plot saved to: {OUTPUT_PLOT}")
+
+if __name__ == "__main__":
+    main()

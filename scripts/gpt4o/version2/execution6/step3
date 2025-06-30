@@ -1,0 +1,46 @@
+# File: scripts/gpt4o/version2/execution6/step3_mark_repeats.py
+
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution6/analysis_data/step2_key_columns_data.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution6/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step3_repeats_marked.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+print("Starting Step 3: Marking reappointments based on repeated combinations...")
+
+# Load key columns
+try:
+    df = pd.read_csv(INPUT_FILE)
+    print(f"Loaded key columns data: {df.shape}")
+except Exception as e:
+    raise RuntimeError(f"Failed to load input file: {e}")
+
+# Check required columns
+required_columns = ["name", "position", "org", "reappointed"]
+missing_columns = [col for col in required_columns if col not in df.columns]
+if missing_columns:
+    raise ValueError(f"Missing required columns: {missing_columns}")
+
+# Sort by source_year if available to establish first occurrence
+if 'source_year' in df.columns:
+    df.sort_values(by=['name', 'position', 'org', 'source_year'], inplace=True)
+else:
+    df.sort_values(by=['name', 'position', 'org'], inplace=True)
+
+# Identify first occurrence of each unique combination
+df['repeat_flag'] = df.duplicated(subset=['name', 'position', 'org'], keep='first')
+
+# Overwrite 'reappointed' field: False for first, True for subsequent repeats
+df['reappointed'] = df['repeat_flag']
+df.drop(columns=['repeat_flag'], inplace=True)
+
+print(f"Reappointment marking complete. Total marked as reappointed: {df['reappointed'].sum()}")
+
+# Save result
+df.to_csv(OUTPUT_FILE, index=False)
+print(f"Step 3 complete: Updated data saved to {OUTPUT_FILE}")

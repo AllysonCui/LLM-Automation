@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step3_repeats_marked.csv")
+    csv_output = Path("scripts/gpt4o/version1/execution10/analysis_data/step8_annual_proportions.csv")
+    img_output = Path("scripts/gpt4o/version1/execution10/analysis_data/step8_annual_reappointment_proportions.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not {'year', 'reappointed'}.issubset(df.columns):
+        print("Error: Required columns 'year' and 'reappointed' are missing.", file=sys.stderr)
+        sys.exit(1)
+
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['year'])
+    df['year'] = df['year'].astype(int)
+    df = df[df['year'].between(2013, 2024)]
+
+    df['reappointed'] = df['reappointed'].fillna(False).astype(bool)
+
+    summary = (
+        df.groupby('year')
+        .agg(total_appointments=('reappointed', 'size'),
+             total_reappointments=('reappointed', 'sum'))
+        .reset_index()
+    )
+
+    summary['reappointment_proportion'] = summary['total_reappointments'] / summary['total_appointments']
+
+    csv_output.parent.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(csv_output, index=False)
+
+    print("Annual reappointment proportions:")
+    print(summary)
+
+    # Visualization
+    plt.figure(figsize=(10, 6))
+    plt.plot(summary['year'], summary['reappointment_proportion'], marker='o')
+    plt.title("Government-wide Reappointment Proportion by Year")
+    plt.xlabel("Year")
+    plt.ylabel("Reappointment Proportion")
+    plt.ylim(0, 1)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(img_output)
+    plt.close()
+
+if __name__ == "__main__":
+    main()

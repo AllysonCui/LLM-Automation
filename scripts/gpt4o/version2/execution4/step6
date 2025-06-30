@@ -1,0 +1,42 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+employee_file = Path("scripts/gpt4o/version2/execution4/analysis_data/step4_employee_counts.csv")
+reappoint_file = Path("scripts/gpt4o/version2/execution4/analysis_data/step5_reappointment_counts.csv")
+output_dir = Path("scripts/gpt4o/version2/execution4/analysis_data")
+output_file = output_dir / "step6_reappointment_rates.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    # Load total employee counts
+    df_employees = pd.read_csv(employee_file)
+    df_employees.columns = df_employees.columns.str.strip().str.lower()
+    print(f"Loaded employee counts: {df_employees.shape[0]} rows.")
+
+    # Load reappointment counts
+    df_reappointments = pd.read_csv(reappoint_file)
+    df_reappointments.columns = df_reappointments.columns.str.strip().str.lower()
+    print(f"Loaded reappointment counts: {df_reappointments.shape[0]} rows.")
+
+    # Merge the two on org and year
+    merged = pd.merge(df_employees, df_reappointments, on=["org", "year"], how="left")
+    merged["reappointment_count"] = merged["reappointment_count"].fillna(0).astype(int)
+
+    # Calculate reappointment rate
+    merged["reappointment_rate"] = merged["reappointment_count"] / merged["total_appointments"]
+
+    # Save to CSV
+    merged.to_csv(output_file, index=False)
+    print(f"Saved reappointment rates: {merged.shape[0]} rows to {output_file}")
+
+    # Summary stats
+    avg_rate = merged["reappointment_rate"].mean()
+    print(f"Average reappointment rate across all org-year pairs: {avg_rate:.3f}")
+
+except FileNotFoundError as e:
+    print(f"Error: Required input file not found - {e.filename}")
+except Exception as e:
+    print(f"An error occurred: {e}")

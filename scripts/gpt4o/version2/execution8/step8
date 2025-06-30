@@ -1,0 +1,66 @@
+# scripts/gpt4o/version2/execution8/step8_annual_proportions.py
+
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# File paths
+input_path = Path("scripts/gpt4o/version2/execution8/analysis_data/step3_repeats_marked.csv")
+output_csv = Path("scripts/gpt4o/version2/execution8/analysis_data/step8_annual_proportions.csv")
+output_plot = Path("scripts/gpt4o/version2/execution8/analysis_data/step8_annual_reappointment_proportions.png")
+output_csv.parent.mkdir(parents=True, exist_ok=True)
+
+def main():
+    print("Step 8: Computing government-wide reappointment proportions per year...")
+
+    if not input_path.exists():
+        print(f"❌ Input file not found: {input_path}")
+        return
+
+    try:
+        df = pd.read_csv(input_path)
+
+        # Normalize 'reappointed' column
+        df["reappointed"] = df["reappointed"].astype(str).str.lower().isin(["true", "1", "yes"])
+
+        # Drop rows with missing org or year
+        df = df.dropna(subset=["org", "source_year"])
+
+        # Count total unique orgs per year
+        total_orgs = df.groupby("source_year")["org"].nunique().reset_index(name="total_orgs")
+
+        # Count orgs with at least one reappointment per year
+        reappointed_orgs = (
+            df[df["reappointed"]]
+            .groupby("source_year")["org"]
+            .nunique()
+            .reset_index(name="orgs_with_reappointments")
+        )
+
+        # Merge and compute proportion
+        merged = pd.merge(total_orgs, reappointed_orgs, on="source_year", how="left")
+        merged["orgs_with_reappointments"] = merged["orgs_with_reappointments"].fillna(0)
+        merged["reappointment_proportion"] = (
+            merged["orgs_with_reappointments"] / merged["total_orgs"]
+        ).round(4)
+
+        # Save CSV
+        merged.to_csv(output_csv, index=False)
+        print(f"✅ Proportion data saved to: {output_csv}")
+
+        # Plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(merged["source_year"], merged["reappointment_proportion"], marker="o")
+        plt.title("Government-wide Reappointment Proportion per Year")
+        plt.xlabel("Year")
+        plt.ylabel("Proportion of Orgs with Reappointments")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_plot)
+        print(f"📊 Plot saved to: {output_plot}")
+
+    except Exception as e:
+        print(f"❌ Error during processing: {e}")
+
+if __name__ == "__main__":
+    main()

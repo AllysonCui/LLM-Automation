@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Count Summary
+Creates a summary table of appointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def validate_data_quality(df):
+    """
+    Validate data quality and report any issues.
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame
+    
+    Returns:
+        dict: Data quality statistics
+    """
+    quality_stats = {
+        'total_records': len(df),
+        'missing_org': df['org'].isnull().sum(),
+        'missing_year': df['year'].isnull().sum(),
+        'empty_org': (df['org'] == '').sum() if 'org' in df.columns else 0,
+        'unique_orgs': df['org'].nunique(),
+        'unique_years': df['year'].nunique(),
+        'year_range': None
+    }
+    
+    # Get year range
+    valid_years = df['year'].dropna()
+    if len(valid_years) > 0:
+        quality_stats['year_range'] = (valid_years.min(), valid_years.max())
+    
+    return quality_stats
+
+def clean_organization_names(df):
+    """
+    Clean and standardize organization names.
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame
+    
+    Returns:
+        pd.DataFrame: DataFrame with cleaned organization names
+    """
+    df_clean = df.copy()
+    
+    # Handle missing organizations
+    df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
+    
+    # Clean empty strings
+    df_clean['org'] = df_clean['org'].replace('', 'Unknown Organization')
+    
+    # Strip whitespace and standardize
+    df_clean['org'] = df_clean['org'].astype(str).str.strip()
+    
+    # Replace empty strings after stripping
+    df_clean['org'] = df_clean['org'].replace('', 'Unknown Organization')
+    
+    return df_clean
+
+def create_appointment_counts_table(df):
+    """
+    Create a pivot table of appointment counts by organization and year.
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame with appointment data
+    
+    Returns:
+        pd.DataFrame: Pivot table with organizations as rows, years as columns
+    """
+    print("Creating appointment counts summary table...")
+    
+    # Clean the data
+    df_clean = clean_organization_names(df)
+    
+    # Handle missing years
+    df_clean['year'] = df_clean['year'].fillna('Unknown Year')
+    
+    # Create the pivot table
+    counts_table = pd.crosstab(
+        df_clean['org'], 
+        df_clean['year'], 
+        margins=True, 
+        margins_name='Total'
+    )
+    
+    # Sort by total appointments (descending)
+    if 'Total' in counts_table.columns:
+        counts_table = counts_table.sort_values('Total', ascending=False)
+    
+    # Sort columns (years) in chronological order, keeping 'Total' at the end
+    year_columns = [col for col in counts_table.columns if col != 'Total' and col != 'Unknown Year']
+    other_columns = [col for col in counts_table.columns if col in ['Unknown Year']]
+    total_column = ['Total'] if 'Total' in counts_table.columns else []
+    
+    # Sort year columns numerically
+    try:
+        year_columns_sorted = sorted([col for col in year_columns if str(col).replace('.0', '').isdigit()], 
+                                   key=lambda x: float(x))
+        non_numeric_years = [col for col in year_columns if not str(col).replace('.0', '').isdigit()]
+        year_columns = year_columns_sorted + sorted(non_numeric_years)
+    except:
+        year_columns = sorted(year_columns)
+    
+    # Reorder columns
+    ordered_columns = year_columns + other_columns + total_column
+    counts_table = counts_table[ordered_columns]
+    
+    return counts_table
+
+def analyze_appointment_patterns(counts_table):
+    """
+    Analyze appointment patterns and identify key insights.
+    
+    Args:
+        counts_table (pd.DataFrame): Pivot table of appointment counts
+    
+    Returns:
+        dict: Analysis results
+    """
+    analysis = {}
+    
+    # Remove the 'Total' row and column for analysis
+    data_only = counts_table.copy()
+    if 'Total' in data_only.index:
+        data_only = data_only.drop('Total')
+    if 'Total' in data_only.columns:
+        total_col = data_only['Total'].copy()
+        data_only = data_only.drop('Total', axis=1)
+    else:
+        total_col = data_only.sum(axis=1)
+    
+    # Top organizations by total appointments
+    analysis['top_orgs'] = total_col.head(10)
+    
+    # Years with most appointments
+    if len(data_only.columns) > 0:
+        year_totals = data_only.sum(axis=0)
+        analysis['top_years'] = year_totals.head(10)
+    
+    # Organizations with most consistent appointments (present in most years)
+    if len(data_only.columns) > 0:
+        org_presence = (data_only > 0).sum(axis=1)
+        analysis['most_consistent'] = org_presence.head(10)
+    
+    # Basic statistics
+    analysis['total_appointments'] = data_only.sum().sum()
+    analysis['total_organizations'] = len(data_only)
+    analysis['total_years'] = len(data_only.columns)
+    
+    return analysis
+
+def print_summary_statistics(counts_table, analysis, quality_stats):
+    """
+    Print comprehensive summary statistics.
+    
+    Args:
+        counts_table (pd.DataFrame): Pivot table of appointment counts
+        analysis (dict): Analysis results
+        quality_stats (dict): Data quality statistics
+    """
+    print("\n" + "="*60)
+    print("APPOINTMENT COUNTS SUMMARY")
+    print("="*60)
+    
+    # Data quality summary
+    print("Data Quality Summary:")
+    print(f"  Total records processed: {quality_stats['total_records']:,}")
+    print(f"  Missing organizations: {quality_stats['missing_org']:,}")
+    print(f"  Missing years: {quality_stats['missing_year']:,}")
+    print(f"  Unique organizations: {quality_stats['unique_orgs']:,}")
+    print(f"  Unique years: {quality_stats['unique_years']:,}")
+    if quality_stats['year_range']:
+        print(f"  Year range: {quality_stats['year_range'][0]} - {quality_stats['year_range'][1]}")
+    
+    # Overall statistics
+    print(f"\nOverall Statistics:")
+    print(f"  Total appointments: {analysis['total_appointments']:,}")
+    print(f"  Total organizations: {analysis['total_organizations']:,}")
+    print(f"  Total years covered: {analysis['total_years']:,}")
+    
+    # Top organizations
+    print(f"\nTop 10 Organizations by Total Appointments:")
+    for i, (org, count) in enumerate(analysis['top_orgs'].items(), 1):
+        print(f"  {i:2d}. {org}: {count:,} appointments")
+    
+    # Top years
+    if 'top_years' in analysis:
+        print(f"\nTop 10 Years by Total Appointments:")
+        for i, (year, count) in enumerate(analysis['top_years'].items(), 1):
+            print(f"  {i:2d}. {year}: {count:,} appointments")
+    
+    # Most consistent organizations
+    if 'most_consistent' in analysis:
+        print(f"\nTop 10 Most Consistent Organizations (present in most years):")
+        for i, (org, year_count) in enumerate(analysis['most_consistent'].items(), 1):
+            print(f"  {i:2d}. {org}: present in {year_count} years")
+    
+    # Summary table preview
+    print(f"\nSummary Table Preview (showing top 10 organizations):")
+    display_table = counts_table.head(10)
+    
+    # Format the table for better display
+    print("\n" + display_table.to_string())
+    
+    # Table dimensions
+    print(f"\nFull table dimensions: {counts_table.shape[0]} organizations × {counts_table.shape[1]} columns")
+
+def main():
+    """Main execution function."""
+    try:
+        print("New Brunswick Government Appointments Count Summary Generator")
+        print("="*65)
+        
+        # Define input and output paths
+        input_dir = Path("scripts/claudesonnet4/version1/execution3/analysis_data")
+        input_file = input_dir / "step3_repeats_marked.csv"
+        output_file = input_dir / "step4_employee_counts.csv"
+        
+        # Check if input file exists
+        if not input_file.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+        
+        print(f"Loading dataset from: {input_file}")
+        df = pd.read_csv(input_file)
+        print(f"Loaded dataset with shape: {df.shape}")
+        
+        # Verify required columns exist
+        required_columns = ['org', 'year']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        print(f"Dataset columns: {list(df.columns)}")
+        
+        # Validate data quality
+        quality_stats = validate_data_quality(df)
+        
+        # Create appointment counts table
+        counts_table = create_appointment_counts_table(df)
+        
+        # Analyze patterns
+        analysis = analyze_appointment_patterns(counts_table)
+        
+        # Print summary statistics
+        print_summary_statistics(counts_table, analysis, quality_stats)
+        
+        # Save the counts table
+        counts_table.to_csv(output_file)
+        print(f"\nAppointment counts table saved to: {output_file}")
+        
+        # Validation check
+        total_from_table = analysis['total_appointments']
+        total_from_original = len(df)
+        if total_from_table != total_from_original:
+            print(f"\nWarning: Count mismatch detected!")
+            print(f"  Original records: {total_from_original}")
+            print(f"  Table total: {total_from_table}")
+        else:
+            print(f"\nValidation passed: All {total_from_original:,} records accounted for.")
+        
+        print("\nAppointment counts summary completed successfully!")
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

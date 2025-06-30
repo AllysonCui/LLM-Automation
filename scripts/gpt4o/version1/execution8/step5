@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step5_reappointment_counts.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"[ERROR] Failed to load dataset: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if df.empty:
+        print("[ERROR] Dataset is empty.", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate columns
+    for col in ["reappointed", "org", "year"]:
+        if col not in df.columns:
+            print(f"[ERROR] Missing required column: {col}", file=sys.stderr)
+            sys.exit(1)
+
+    # Filter reappointments
+    df = df[df["reappointed"] == True].copy()
+    if df.empty:
+        print("[WARNING] No reappointment records found.", file=sys.stderr)
+
+    # Clean data
+    df = df.dropna(subset=["org", "year"])
+    df["org"] = df["org"].astype(str).str.strip()
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    # Group by org and year
+    grouped = df.groupby(["org", "year"], dropna=False).size().reset_index(name="reappointment_count")
+
+    # Debug output
+    print("[DEBUG] Sample of grouped reappointment data:")
+    print(grouped.head(10))
+
+    # Pivot to summary table
+    try:
+        summary = grouped.pivot(index="org", columns="year", values="reappointment_count").fillna(0).astype(int)
+    except Exception as e:
+        print(f"[ERROR] Failed to create pivot table: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validation: ensure some values are greater than 0
+    if (summary.sum().sum() == 0):
+        print("[WARNING] Pivot table contains only zeros.", file=sys.stderr)
+
+    try:
+        summary.to_csv(output_file)
+        print(f"[INFO] Reappointment summary saved to: {output_file}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save reappointment summary: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Summary statistics
+    total_reappointments = summary.sum().sum()
+    print(f"\n[INFO] Total reappointments: {total_reappointments}")
+    print("[INFO] Top 5 organizations by reappointment count:")
+    top_orgs = summary.sum(axis=1).sort_values(ascending=False).head(5)
+    for org, count in top_orgs.items():
+        print(f"  {org}: {count}")
+
+if __name__ == "__main__":
+    main()

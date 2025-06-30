@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution2/analysis_data/step3_repeats_marked.csv")
+    output_csv = Path("steps/gpt4o/version1/execution2/analysis_data/step8_annual_proportions.csv")
+    output_png = Path("steps/gpt4o/version1/execution2/analysis_data/step8_annual_reappointment_proportions.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found - {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not {'year', 'reappointed'}.issubset(df.columns):
+        print("Missing required columns in the input dataset.", file=sys.stderr)
+        sys.exit(1)
+
+    df.dropna(subset=['year'], inplace=True)
+    df['year'] = pd.to_numeric(df['year'], errors='coerce').astype('Int64')
+
+    results = []
+    for year in range(2013, 2025):
+        year_df = df[df['year'] == year]
+        total = len(year_df)
+        reapps = year_df['reappointed'].sum() if not year_df.empty else 0
+        proportion = reapps / total if total > 0 else 0
+
+        results.append({
+            'year': year,
+            'total_appointments': total,
+            'total_reappointments': reapps,
+            'reappointment_proportion': round(proportion, 4)
+        })
+
+    result_df = pd.DataFrame(results)
+    result_df.to_csv(output_csv, index=False)
+
+    print("Government-wide reappointment proportions by year:")
+    print(result_df)
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(result_df['year'], result_df['reappointment_proportion'], marker='o')
+    plt.title('Annual Reappointment Proportion - New Brunswick Government')
+    plt.xlabel('Year')
+    plt.ylabel('Proportion of Reappointments')
+    plt.ylim(0, 1)
+    plt.grid(True)
+    plt.savefig(output_png)
+    plt.close()
+
+if __name__ == "__main__":
+    main()

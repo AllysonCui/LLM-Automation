@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    output_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step4_employee_counts.csv")
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        return
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty or corrupted: {input_file}", file=sys.stderr)
+        return
+    except Exception as e:
+        print(f"Error loading data: {e}", file=sys.stderr)
+        return
+
+    # Group by 'org' and 'year', then count the appointments (unique 'name' and 'position' for each year)
+    summary_df = df.groupby(['org', 'year']).size().unstack(fill_value=0)
+
+    # Validate counts and handle potential issues
+    # Check if there are any absurdly high or low counts (e.g., more appointments than reasonable for one organization per year)
+    if summary_df.isnull().values.any():
+        print("Warning: There are missing values in the summary table.", file=sys.stderr)
+
+    # Save the summary table to a CSV file
+    try:
+        summary_df.to_csv(output_file)
+        print(f"Summary table saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving summary CSV: {e}", file=sys.stderr)
+
+    # Print the summary table
+    print("\nSummary Table:")
+    print(summary_df)
+
+    # Identify organizations with the most appointments
+    max_appointments_per_year = summary_df.max(axis=1)
+    most_appointments_org = summary_df.idxmax(axis=1)
+
+    print("\nOrganizations with the most appointments per year:")
+    for org, year in zip(most_appointments_org, max_appointments_per_year):
+        print(f"Organization: {org}, Year: {year}, Appointments: {max_appointments_per_year[org]}")
+
+if __name__ == "__main__":
+    main()

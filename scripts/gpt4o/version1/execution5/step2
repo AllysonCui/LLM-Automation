@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+from pathlib import Path
+
+# Define the path to the input and output directories
+input_file_path = Path("scripts/gpt4o/version1/execution5/analysis_data/step1_combined_appointments.csv")
+output_dir = Path("scripts/gpt4o/version1/execution5/analysis_data")
+
+# Create output directory if it doesn't exist
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Define the key column names to extract
+key_columns = ["reappointed", "name", "position", "org", "year"]
+
+# A mapping of possible variations for column names
+column_variants = {
+    "reappointed": ["reappointed", "reappoint", "reappointment"],
+    "name": ["name", "appointee_name", "individual_name"],
+    "position": ["position", "appointment", "role"],
+    "org": ["org", "organization", "org_name", "organization_name"]
+}
+
+# Function to find the actual column name given variants
+def find_column(df, variants):
+    for variant in variants:
+        if variant in df.columns:
+            return variant
+    return None
+
+try:
+    # Load the combined dataset
+    df = pd.read_csv(input_file_path)
+
+    # Initialize a dictionary to hold the actual column names
+    actual_columns = {}
+
+    # Extract the actual column names based on the variants
+    for key, variants in column_variants.items():
+        actual_column = find_column(df, variants)
+        if actual_column:
+            actual_columns[key] = actual_column
+        else:
+            print(f"Warning: Could not find any valid column for '{key}'.")
+
+    # Check if all key columns are present
+    if len(actual_columns) < len(key_columns) - 1:
+        print("Error: Not all key columns found in the dataset.")
+    else:
+        # Extract the relevant columns and add the 'year' column
+        filtered_df = df[["year"] + list(actual_columns.values())]
+
+        # Rename columns to the desired standard names
+        filtered_df.columns = ["year", "reappointed", "name", "position", "org"]
+
+        # Save the filtered dataset
+        filtered_file_path = output_dir / "step2_key_columns_data.csv"
+        filtered_df.to_csv(filtered_file_path, index=False)
+
+        # Print information about the extracted columns and any missing values
+        print("Extracted columns:")
+        print(filtered_df.columns)
+        print("\nMissing values:")
+        print(filtered_df.isnull().sum())
+
+except FileNotFoundError:
+    print(f"Error: File {input_file_path} not found.")
+except pd.errors.EmptyDataError:
+    print(f"Error: The file {input_file_path} is empty.")
+except Exception as e:
+    print(f"An error occurred: {e}")

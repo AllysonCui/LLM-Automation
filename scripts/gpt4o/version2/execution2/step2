@@ -1,0 +1,60 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution2/analysis_data/step1_combined_appointments.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution2/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step2_key_columns_data.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# List of required columns and their possible name variants
+COLUMN_ALIASES = {
+    'name': ['name', 'full name', 'appointee'],
+    'position': ['position', 'title'],
+    'organization': ['organization', 'org', 'department', 'agency'],
+    'reappointed': ['reappointed', 're-appointment', 'reappointment']
+}
+
+def find_column(df, aliases):
+    for alias in aliases:
+        if alias in df.columns:
+            return alias
+    return None
+
+def main():
+    if not INPUT_FILE.exists():
+        print(f"[ERROR] Input file does not exist: {INPUT_FILE}")
+        return
+
+    try:
+        df = pd.read_csv(INPUT_FILE)
+        df.columns = df.columns.str.lower().str.strip()  # Standardize column names
+    except Exception as e:
+        print(f"[ERROR] Failed to read input file: {e}")
+        return
+
+    key_data = pd.DataFrame()
+    for standard_col, aliases in COLUMN_ALIASES.items():
+        matched_col = find_column(df, aliases)
+        if matched_col:
+            key_data[standard_col] = df[matched_col]
+        else:
+            print(f"[WARNING] Could not find column for: {standard_col}")
+            key_data[standard_col] = pd.NA  # fill with missing if not found
+
+    # Preserve year if present
+    if 'year' in df.columns:
+        key_data['year'] = df['year']
+    else:
+        print("[WARNING] 'year' column not found in input file.")
+
+    print(f"[INFO] Extracted key data shape: {key_data.shape}")
+    print(f"[INFO] Null values per column:\n{key_data.isnull().sum()}")
+
+    key_data.to_csv(OUTPUT_FILE, index=False)
+    print(f"[SUCCESS] Key columns saved to: {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    main()

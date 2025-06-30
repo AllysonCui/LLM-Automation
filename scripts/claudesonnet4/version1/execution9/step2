@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Key Columns Extractor
+Extracts key columns from the combined appointments dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_column_name(df, target_names):
+    """
+    Find a column name that matches one of the target names (case-insensitive).
+    
+    Args:
+        df: DataFrame to search in
+        target_names: List of possible column names to look for
+    
+    Returns:
+        str: The actual column name found, or None if not found
+    """
+    df_columns_lower = [col.lower().strip() for col in df.columns]
+    
+    for target in target_names:
+        target_lower = target.lower().strip()
+        if target_lower in df_columns_lower:
+            # Return the original column name (with original case)
+            return df.columns[df_columns_lower.index(target_lower)]
+    
+    return None
+
+def main():
+    """Main function to extract key columns from appointments dataset."""
+    
+    # Define paths
+    script_dir = Path(__file__).parent
+    analysis_data_dir = script_dir / "analysis_data"
+    input_file = analysis_data_dir / "step1_combined_appointments.csv"
+    output_file = analysis_data_dir / "step2_key_columns_data.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"✗ Error: Input file not found - {input_file}")
+        print("Please ensure step1_combined_appointments.csv exists in the analysis_data directory")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        print(f"Loading combined dataset from: {input_file}")
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        
+        # Define column mappings with possible variations
+        column_mappings = {
+            'reappointed': ['reappointed', 're-appointed', 'reappointment', 're-appointment'],
+            'name': ['name', 'full_name', 'person_name', 'appointee_name'],
+            'position': ['position', 'title', 'role', 'job_title', 'appointment_position'],
+            'org': ['org', 'organization', 'organisation', 'agency', 'department', 'institution'],
+            'year': ['year', 'appointment_year', 'fiscal_year']
+        }
+        
+        print("\nExisting columns in dataset:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"  {i:2d}. {col}")
+        
+        # Find actual column names
+        found_columns = {}
+        missing_columns = []
+        
+        print("\nMapping columns...")
+        for key, possible_names in column_mappings.items():
+            found_col = find_column_name(df, possible_names)
+            if found_col:
+                found_columns[key] = found_col
+                print(f"  ✓ {key} -> '{found_col}'")
+            else:
+                missing_columns.append(key)
+                print(f"  ✗ {key} -> NOT FOUND (searched: {possible_names})")
+        
+        # Check if we have the essential columns
+        if missing_columns:
+            print(f"\n⚠ Warning: Missing columns: {missing_columns}")
+            if len(missing_columns) > 2:  # If more than 2 columns missing, it's problematic
+                print("✗ Error: Too many essential columns missing")
+                sys.exit(1)
+        
+        # Extract available columns
+        columns_to_extract = list(found_columns.values())
+        key_df = df[columns_to_extract].copy()
+        
+        # Rename columns to standardized names
+        rename_mapping = {found_columns[key]: key for key in found_columns.keys()}
+        key_df = key_df.rename(columns=rename_mapping)
+        
+        print(f"\n✓ Extracted {len(columns_to_extract)} key columns")
+        
+        # Save the filtered dataset
+        key_df.to_csv(output_file, index=False)
+        print(f"✓ Saved key columns dataset to: {output_file}")
+        
+        # Print information about the extracted dataset
+        print("\n" + "="*50)
+        print("KEY COLUMNS DATASET SUMMARY")
+        print("="*50)
+        print(f"Shape: {key_df.shape}")
+        print(f"Total rows: {key_df.shape[0]:,}")
+        print(f"Total columns: {key_df.shape[1]}")
+        
+        print("\nExtracted columns:")
+        for i, col in enumerate(key_df.columns, 1):
+            print(f"  {i}. {col}")
+        
+        print("\nData types:")
+        print(key_df.dtypes.to_string())
+        
+        # Check for missing values
+        print("\nMissing values analysis:")
+        missing_counts = key_df.isnull().sum()
+        total_rows = len(key_df)
+        
+        if missing_counts.sum() == 0:
+            print("  ✓ No missing values found")
+        else:
+            print("  Missing values per column:")
+            for col, count in missing_counts.items():
+                if count > 0:
+                    pct = (count / total_rows) * 100
+                    print(f"    {col}: {count:,} ({pct:.1f}%)")
+        
+        # Show sample data
+        print("\nSample data (first 5 rows):")
+        print(key_df.head().to_string(index=False))
+        
+        if 'year' in key_df.columns:
+            print("\nYear distribution:")
+            year_counts = key_df['year'].value_counts().sort_index()
+            for year, count in year_counts.items():
+                print(f"  {year}: {count:,} appointments")
+        
+        if 'reappointed' in key_df.columns:
+            print("\nReappointment distribution:")
+            reapp_counts = key_df['reappointed'].value_counts()
+            for value, count in reapp_counts.items():
+                pct = (count / total_rows) * 100
+                print(f"  {value}: {count:,} ({pct:.1f}%)")
+        
+        print("\n✓ Key columns extraction completed successfully!")
+        
+    except Exception as e:
+        print(f"✗ Error processing dataset: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

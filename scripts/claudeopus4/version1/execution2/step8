@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""
+Script to calculate annual government-wide reappointment proportions.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def load_data():
+    """
+    Load the dataset from step 3 with reappointment flags.
+    """
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    print("Loading dataset from step 3...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df):,} appointment records")
+        return df
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        sys.exit(1)
+
+def calculate_annual_proportions(df):
+    """
+    Calculate reappointment proportions for each year.
+    """
+    # Validate required columns
+    required_cols = ['year', 'reappointed']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    print("\nCalculating annual proportions...")
+    
+    # Ensure year is integer
+    df['year'] = df['year'].astype(int)
+    
+    # Convert reappointed to boolean if needed
+    if df['reappointed'].dtype != bool:
+        df['reappointed'] = df['reappointed'].apply(
+            lambda x: True if x in [True, 'True', 'true', 1, '1'] else False
+        )
+    
+    # Group by year and calculate totals
+    annual_stats = []
+    
+    for year in sorted(df['year'].unique()):
+        year_data = df[df['year'] == year]
+        
+        total_appointments = len(year_data)
+        total_reappointments = year_data['reappointed'].sum()
+        
+        # Calculate proportion
+        proportion = total_reappointments / total_appointments if total_appointments > 0 else 0
+        
+        annual_stats.append({
+            'year': year,
+            'total_appointments': total_appointments,
+            'total_reappointments': total_reappointments,
+            'reappointment_proportion': proportion
+        })
+    
+    # Convert to DataFrame
+    result_df = pd.DataFrame(annual_stats)
+    result_df = result_df.sort_values('year')
+    
+    print(f"✓ Calculated proportions for {len(result_df)} years")
+    
+    return result_df
+
+def save_results(result_df, output_path):
+    """
+    Save the annual proportions to CSV.
+    """
+    result_df.to_csv(output_path, index=False)
+    print(f"\n✓ Saved annual proportions to: {output_path}")
+
+def create_visualization(result_df, output_path):
+    """
+    Create visualization of government-wide reappointment proportion trend.
+    """
+    print("\nCreating visualization...")
+    
+    # Set up the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Plot the reappointment proportions
+    plt.plot(result_df['year'], result_df['reappointment_proportion'] * 100,
+             marker='o', linewidth=3, markersize=10, color='darkgreen', label='Reappointment Rate')
+    
+    # Add value labels
+    for _, row in result_df.iterrows():
+        plt.annotate(f"{row['reappointment_proportion']*100:.1f}%",
+                    xy=(row['year'], row['reappointment_proportion'] * 100),
+                    xytext=(0, 10),
+                    textcoords='offset points',
+                    ha='center',
+                    fontsize=9)
+    
+    # Add average line
+    avg_proportion = result_df['reappointment_proportion'].mean() * 100
+    plt.axhline(y=avg_proportion, color='red', linestyle='--', alpha=0.7,
+                label=f'12-Year Average: {avg_proportion:.1f}%')
+    
+    # Customize the plot
+    plt.title('New Brunswick Government-wide Reappointment Proportion by Year', 
+              fontsize=16, fontweight='bold', pad=20)
+    plt.xlabel('Year', fontsize=14)
+    plt.ylabel('Reappointment Proportion (%)', fontsize=14)
+    plt.grid(True, alpha=0.3)
+    
+    # Set y-axis limits and format
+    plt.ylim(0, max(result_df['reappointment_proportion'] * 100) * 1.1)
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
+    
+    # Set x-axis to show all years
+    plt.xticks(result_df['year'], rotation=45)
+    
+    # Add legend
+    plt.legend(loc='best', fontsize=12)
+    
+    # Add annotation about trend
+    first_year_prop = result_df.iloc[0]['reappointment_proportion'] * 100
+    last_year_prop = result_df.iloc[-1]['reappointment_proportion'] * 100
+    change = last_year_prop - first_year_prop
+    
+    trend_text = f"Change from {result_df.iloc[0]['year']} to {result_df.iloc[-1]['year']}: {change:+.1f} percentage points"
+    plt.text(0.02, 0.02, trend_text, transform=plt.gca().transAxes,
+             fontsize=10, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved visualization to: {output_path}")
+    plt.close()
+
+def print_yearly_results(result_df):
+    """
+    Print the year-by-year proportions.
+    """
+    print("\n" + "="*70)
+    print("YEAR-BY-YEAR GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS")
+    print("="*70)
+    
+    print(f"\n{'Year':>6} {'Total Appts':>12} {'Reappts':>10} {'Proportion':>12}")
+    print("-" * 42)
+    
+    for _, row in result_df.iterrows():
+        print(f"{row['year']:>6} {row['total_appointments']:>12,} "
+              f"{row['total_reappointments']:>10,} {row['reappointment_proportion']*100:>11.1f}%")
+    
+    # Summary statistics
+    print("\nSummary Statistics:")
+    print(f"  Total appointments (2013-2024): {result_df['total_appointments'].sum():,}")
+    print(f"  Total reappointments (2013-2024): {result_df['total_reappointments'].sum():,}")
+    print(f"  Overall reappointment rate: {result_df['total_reappointments'].sum() / result_df['total_appointments'].sum() * 100:.1f}%")
+    print(f"  Average annual reappointment rate: {result_df['reappointment_proportion'].mean() * 100:.1f}%")
+    
+    # Trend analysis
+    first_half = result_df.iloc[:len(result_df)//2]
+    second_half = result_df.iloc[len(result_df)//2:]
+    
+    first_half_avg = first_half['reappointment_proportion'].mean() * 100
+    second_half_avg = second_half['reappointment_proportion'].mean() * 100
+    
+    print(f"\nTrend Analysis:")
+    print(f"  First 6 years ({first_half.iloc[0]['year']}-{first_half.iloc[-1]['year']}) average: {first_half_avg:.1f}%")
+    print(f"  Last 6 years ({second_half.iloc[0]['year']}-{second_half.iloc[-1]['year']}) average: {second_half_avg:.1f}%")
+    
+    if second_half_avg > first_half_avg:
+        print(f"  Trend: INCREASING (+{second_half_avg - first_half_avg:.1f} percentage points)")
+    else:
+        print(f"  Trend: DECREASING ({second_half_avg - first_half_avg:.1f} percentage points)")
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Annual Government-wide Reappointment Proportions Analysis")
+    print("Calculating overall reappointment rates for New Brunswick government")
+    print("-" * 60)
+    
+    try:
+        # Define paths
+        output_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+        csv_output = output_dir / "step8_annual_proportions.csv"
+        png_output = output_dir / "step8_annual_reappointment_proportions.png"
+        
+        # Load data
+        df = load_data()
+        
+        # Calculate annual proportions
+        result_df = calculate_annual_proportions(df)
+        
+        # Save results
+        save_results(result_df, csv_output)
+        
+        # Create visualization
+        create_visualization(result_df, png_output)
+        
+        # Print results
+        print_yearly_results(result_df)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

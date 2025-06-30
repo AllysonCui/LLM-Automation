@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""
+step to identify and mark repeat appointments in New Brunswick government data.
+
+This step:
+1. Loads the dataset from step 2
+2. For each unique combination of "name", "position", and "org":
+   - Identifies all occurrences of the same person in same position at same organization
+   - Marks all occurrences EXCEPT the first (chronologically by year) as reappointments
+3. Updates the "reappointed" column for these cases
+4. Handles name variations and potential duplicates intelligently
+5. Prints statistics showing how many additional reappointments were identified
+6. Saves the updated dataset as 'step3_repeats_marked.csv'
+
+Author: Claude
+Date: 2025-06-11
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+import re
+
+def load_dataset(input_path):
+    """
+    Load the dataset from step 2.
+    
+    Args:
+        input_path (str): Path to the input CSV file
+    
+    Returns:
+        pd.DataFrame: Loaded dataset
+    """
+    try:
+        df = pd.read_csv(input_path)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+        return df
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Could not find input file: {input_path}")
+    except Exception as e:
+        raise Exception(f"Error loading dataset: {str(e)}")
+
+def normalize_name(name):
+    """
+    Normalize name strings to handle variations and potential duplicates.
+    
+    Args:
+        name (str): Original name string
+        
+    Returns:
+        str: Normalized name string
+    """
+    if pd.isna(name) or name == '':
+        return ''
+    
+    # Convert to string and strip whitespace
+    name = str(name).strip()
+    
+    # Convert to lowercase for comparison
+    name = name.lower()
+    
+    # Remove extra whitespace between words
+    name = re.sub(r'\s+', ' ', name)
+    
+    # Remove common punctuation that might cause mismatches
+    name = re.sub(r'[.,;]', '', name)
+    
+    # Handle common abbreviations and variations
+    # Dr. / Doctor
+    name = re.sub(r'\b(dr|doctor)\b\.?\s*', 'dr ', name)
+    
+    # Mr. / Mrs. / Ms.
+    name = re.sub(r'\b(mr|mrs|ms)\b\.?\s*', '', name)
+    
+    # Remove parenthetical information (like maiden names)
+    name = re.sub(r'\([^)]*\)', '', name)
+    
+    # Clean up any double spaces created
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    return name
+
+def normalize_text_field(text):
+    """
+    Normalize text fields (position, org) for consistent comparison.
+    
+    Args:
+        text (str): Original text string
+        
+    Returns:
+        str: Normalized text string
+    """
+    if pd.isna(text) or text == '':
+        return ''
+    
+    # Convert to string and strip whitespace
+    text = str(text).strip()
+    
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove common punctuation
+    text = re.sub(r'[.,;:]', '', text)
+    
+    return text
+
+def identify_repeat_appointments(df):
+    """
+    Identify repeat appointments based on name, position, and organization combinations.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+        
+    Returns:
+        pd.DataFrame: Dataset with repeat appointment flags
+        dict: Statistics about identified repeats
+    """
+    print("\nIdentifying repeat appointments...")
+    
+    # Verify required columns exist
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    # Create working copy
+    df_work = df.copy()
+    
+    # Normalize text fields for comparison
+    print("Normalizing text fields...")
+    df_work['name_normalized'] = df_work['name'].apply(normalize_name)
+    df_work['position_normalized'] = df_work['position'].apply(normalize_text_field)
+    df_work['org_normalized'] = df_work['org'].apply(normalize_text_field)
+    
+    # Handle missing years - assign a default high value so they sort last
+    df_work['year_for_sorting'] = df_work['year'].fillna(9999)
+    
+    # Create unique combination identifier
+    df_work['combo_key'] = (df_work['name_normalized'] + '|' + 
+                           df_work['position_normalized'] + '|' + 
+                           df_work['org_normalized'])
+    
+    # Find combinations that appear multiple times
+    combo_counts = df_work['combo_key'].value_counts()
+    repeated_combos = combo_counts[combo_counts > 1]
+    
+    print(f"Found {len(repeated_combos)} unique combinations with multiple appointments")
+    print(f"Total records in repeated combinations: {repeated_combos.sum():,}")
+    
+    # Track original reappointed status
+    original_reappointed = df_work['reappointed'].copy()
+    
+    # Initialize statistics
+    stats = {
+        'total_repeated_combinations': len(repeated_combos),
+        'total_records_in_repeats': repeated_combos.sum(),
+        'newly_marked_reappointments': 0,
+        'already_marked_in_repeats': 0
+    }
+    
+    # Process each repeated combination
+    print("Processing repeated combinations...")
+    newly_marked_mask = pd.Series(False, index=df_work.index)
+    
+    for combo_key in repeated_combos.index:
+        # Get all records for this combination
+        combo_mask = df_work['combo_key'] == combo_key
+        combo_records = df_work[combo_mask].copy()
+        
+        # Sort by year (earliest first) - missing years will be last
+        # Use a stable sort with the original index as secondary sort key
+        combo_records = combo_records.sort_values(['year_for_sorting'], kind='stable')
+        
+        # Mark all except the first as reappointments
+        if len(combo_records) > 1:
+            # Get indices of all except the first
+            reappointment_indices = combo_records.index[1:].tolist()
+            
+            # Count how many were already marked
+            already_marked = original_reappointed.loc[reappointment_indices].sum()
+            stats['already_marked_in_repeats'] += already_marked
+            
+            # Mark as reappointments
+            df_work.loc[reappointment_indices, 'reappointed'] = True
+            
+            # Track newly marked ones
+            newly_marked = (~original_reappointed.loc[reappointment_indices]).sum()
+            stats['newly_marked_reappointments'] += newly_marked
+            newly_marked_mask.loc[reappointment_indices] = ~original_reappointed.loc[reappointment_indices]
+    
+    # Clean up working columns
+    df_result = df_work.drop(['name_normalized', 'position_normalized', 
+                             'org_normalized', 'year_for_sorting', 'combo_key'], axis=1)
+    
+    return df_result, stats, newly_marked_mask
+
+def show_repeat_examples(df, newly_marked_mask, num_examples=5):
+    """
+    Show examples of newly identified repeat appointments.
+    
+    Args:
+        df (pd.DataFrame): Updated dataset
+        newly_marked_mask (pd.Series): Mask for newly marked records
+        num_examples (int): Number of examples to show
+    """
+    newly_marked_records = df[newly_marked_mask]
+    
+    if len(newly_marked_records) == 0:
+        print("\nNo new repeat appointments were identified.")
+        return
+    
+    print(f"\nExamples of newly identified repeat appointments (showing up to {num_examples}):")
+    print("-" * 80)
+    
+    # Show examples
+    for i, (idx, record) in enumerate(newly_marked_records.head(num_examples).iterrows()):
+        print(f"Example {i+1}:")
+        print(f"  Name: {record.get('name', 'N/A')}")
+        print(f"  Position: {record.get('position', 'N/A')}")
+        print(f"  Organization: {record.get('org', 'N/A')}")
+        print(f"  Year: {record.get('year', 'N/A')}")
+        print()
+
+def analyze_repeat_patterns(df, stats):
+    """
+    Analyze patterns in the repeat appointments.
+    
+    Args:
+        df (pd.DataFrame): Updated dataset
+        stats (dict): Statistics from repeat identification
+    """
+    print("\n" + "="*60)
+    print("REPEAT APPOINTMENT ANALYSIS")
+    print("="*60)
+    
+    # Create normalized fields for analysis
+    df_analysis = df.copy()
+    df_analysis['name_normalized'] = df_analysis['name'].apply(normalize_name)
+    df_analysis['position_normalized'] = df_analysis['position'].apply(normalize_text_field)
+    df_analysis['org_normalized'] = df_analysis['org'].apply(normalize_text_field)
+    df_analysis['combo_key'] = (df_analysis['name_normalized'] + '|' + 
+                               df_analysis['position_normalized'] + '|' + 
+                               df_analysis['org_normalized'])
+    
+    # Find people with multiple appointments
+    combo_counts = df_analysis['combo_key'].value_counts()
+    repeated_combos = combo_counts[combo_counts > 1]
+    
+    print(f"Unique combinations with multiple appointments: {len(repeated_combos)}")
+    
+    if len(repeated_combos) > 0:
+        print(f"Distribution of appointment counts:")
+        count_distribution = repeated_combos.value_counts().sort_index()
+        for num_appointments, frequency in count_distribution.items():
+            print(f"  {num_appointments} appointments: {frequency} people/positions")
+        
+        # Show most frequent repeaters
+        print(f"\nTop repeat appointment combinations:")
+        top_repeaters = repeated_combos.head(5)
+        for combo_key, count in top_repeaters.items():
+            name_part = combo_key.split('|')[0] if combo_key else 'Unknown'
+            print(f"  {count} appointments: {name_part}")
+
+def print_update_statistics(stats, df_before, df_after):
+    """
+    Print comprehensive statistics about the updates made.
+    
+    Args:
+        stats (dict): Update statistics
+        df_before (pd.DataFrame): Dataset before updates
+        df_after (pd.DataFrame): Dataset after updates
+    """
+    print("\n" + "="*60)
+    print("UPDATE STATISTICS")
+    print("="*60)
+    
+    print(f"Repeated combinations found: {stats['total_repeated_combinations']:,}")
+    print(f"Total records in repeated combinations: {stats['total_records_in_repeats']:,}")
+    print(f"Already marked as reappointed: {stats['already_marked_in_repeats']:,}")
+    print(f"Newly marked as reappointed: {stats['newly_marked_reappointments']:,}")
+    
+    # Before and after comparison
+    print(f"\nReappointed column before update:")
+    before_counts = df_before['reappointed'].value_counts()
+    for value, count in before_counts.items():
+        pct = (count / len(df_before)) * 100
+        print(f"  {value}: {count:,} ({pct:.1f}%)")
+    
+    print(f"\nReappointed column after update:")
+    after_counts = df_after['reappointed'].value_counts()
+    for value, count in after_counts.items():
+        pct = (count / len(df_after)) * 100
+        print(f"  {value}: {count:,} ({pct:.1f}%)")
+    
+    # Net change
+    if True in before_counts and True in after_counts:
+        net_increase = after_counts[True] - before_counts[True]
+        print(f"\nNet increase in reappointed=True: {net_increase:,}")
+    elif True in after_counts and True not in before_counts:
+        print(f"\nNet increase in reappointed=True: {after_counts[True]:,}")
+
+def main():
+    """Main function to execute the repeat appointment identification process."""
+    try:
+        print("New Brunswick Appointments - Mark Repeat Appointments")
+        print("="*60)
+        
+        # Define input and output paths
+        input_path = "steps/claudesonnet4/version1/analysis_data/step2_key_columns_data.csv"
+        output_path = "steps/claudesonnet4/version1/analysis_data/step3_repeats_marked.csv"
+        
+        # Create output directory if it doesn't exist
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load the dataset
+        print(f"Loading dataset from: {input_path}")
+        df = load_dataset(input_path)
+        
+        # Store original for comparison
+        df_original = df.copy()
+        
+        # Identify and mark repeat appointments
+        df_updated, stats, newly_marked_mask = identify_repeat_appointments(df)
+        
+        # Show examples of newly identified repeats
+        show_repeat_examples(df_updated, newly_marked_mask)
+        
+        # Analyze repeat patterns
+        analyze_repeat_patterns(df_updated, stats)
+        
+        # Print update statistics
+        print_update_statistics(stats, df_original, df_updated)
+        
+        # Save the updated dataset
+        print(f"\nSaving updated dataset to: {output_path}")
+        try:
+            df_updated.to_csv(output_path, index=False)
+            print(f"✓ Updated dataset saved successfully")
+        except Exception as e:
+            raise Exception(f"Error saving dataset: {str(e)}")
+        
+        print("\n✓ step completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ step failed with error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

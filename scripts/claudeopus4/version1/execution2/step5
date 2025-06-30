@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""
+Script to analyze reappointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def load_data():
+    """
+    Load the dataset from step 3.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    print("Loading dataset from step 3...")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset with {len(df):,} rows")
+        return df
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        sys.exit(1)
+
+def filter_reappointments(df):
+    """
+    Filter for records where reappointed is True.
+    """
+    # Check required columns
+    required_columns = ['org', 'year', 'reappointed']
+    missing_cols = [col for col in required_columns if col not in df.columns]
+    
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        print(f"Available columns: {df.columns.tolist()}")
+        sys.exit(1)
+    
+    print("\nFiltering for reappointments...")
+    
+    # Check reappointed column type and values
+    print(f"Reappointed column dtype: {df['reappointed'].dtype}")
+    print(f"Unique values in reappointed: {df['reappointed'].unique()}")
+    
+    # Convert reappointed to boolean if needed
+    if df['reappointed'].dtype != bool:
+        df['reappointed'] = df['reappointed'].apply(
+            lambda x: True if x in [True, 'True', 'true', 1, '1'] else False
+        )
+        print("✓ Converted reappointed column to boolean")
+    
+    # Filter for reappointments
+    df_reappointed = df[df['reappointed'] == True].copy()
+    print(f"✓ Found {len(df_reappointed):,} reappointment records")
+    
+    # Ensure year is integer
+    df_reappointed['year'] = df_reappointed['year'].astype(int)
+    print("✓ Ensured year column is integer type")
+    
+    return df_reappointed
+
+def group_and_debug(df_reappointed):
+    """
+    Group by org and year, count reappointments, and show debugging output.
+    """
+    print("\nGrouping by organization and year...")
+    
+    # Group and count
+    grouped = df_reappointed.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    print(f"\n✓ Created grouped data with {len(grouped):,} org-year combinations")
+    print(f"Unique organizations: {grouped['org'].nunique()}")
+    print(f"Year range: {grouped['year'].min()} - {grouped['year'].max()}")
+    
+    # Debugging output
+    print("\n" + "="*60)
+    print("DEBUGGING: Sample Grouped Data")
+    print("="*60)
+    
+    print("\nFirst 10 rows of grouped data:")
+    print(grouped.head(10).to_string(index=False))
+    
+    print("\nTop 10 org-year combinations by reappointment count:")
+    top10 = grouped.nlargest(10, 'count')
+    print(top10.to_string(index=False))
+    
+    print("\nSummary statistics for counts:")
+    print(f"  Mean: {grouped['count'].mean():.2f}")
+    print(f"  Median: {grouped['count'].median():.0f}")
+    print(f"  Max: {grouped['count'].max()}")
+    print(f"  Min: {grouped['count'].min()}")
+    
+    return grouped
+
+def create_pivot_table(grouped_data):
+    """
+    Create pivot table with organizations as rows and years as columns.
+    """
+    print("\nCreating pivot table...")
+    
+    # Create pivot
+    pivot = grouped_data.pivot(index='org', columns='year', values='count')
+    
+    # Fill NaN with 0 (organizations with no reappointments in certain years)
+    pivot = pivot.fillna(0).astype(int)
+    
+    print(f"✓ Created pivot table: {pivot.shape[0]} organizations × {pivot.shape[1]} years")
+    
+    return pivot
+
+def validate_pivot_table(pivot):
+    """
+    Validate that the pivot table contains actual counts.
+    """
+    print("\nValidating pivot table...")
+    
+    # Check for non-zero values
+    non_zero_count = (pivot > 0).sum().sum()
+    total_cells = pivot.shape[0] * pivot.shape[1]
+    
+    if non_zero_count == 0:
+        print("ERROR: Pivot table contains only zeros!")
+        return False
+    
+    print(f"✓ Validation passed:")
+    print(f"  - Non-zero cells: {non_zero_count:,} out of {total_cells:,} ({non_zero_count/total_cells*100:.1f}%)")
+    print(f"  - Total reappointments: {pivot.sum().sum():,}")
+    print(f"  - Max value in any cell: {pivot.max().max()}")
+    
+    return True
+
+def save_and_analyze(pivot, output_path):
+    """
+    Save the pivot table and print summary statistics.
+    """
+    # Save to CSV
+    pivot.to_csv(output_path)
+    print(f"\n✓ Saved reappointment counts to: {output_path}")
+    
+    # Print summary statistics
+    print("\n" + "="*70)
+    print("REAPPOINTMENT PATTERNS SUMMARY")
+    print("="*70)
+    
+    # Overall statistics
+    total_reappointments = pivot.sum().sum()
+    orgs_with_reappointments = (pivot.sum(axis=1) > 0).sum()
+    
+    print(f"\nOverall Statistics:")
+    print(f"  Total reappointments: {total_reappointments:,}")
+    print(f"  Organizations with reappointments: {orgs_with_reappointments}")
+    print(f"  Years covered: {sorted(pivot.columns.tolist())}")
+    
+    # Top organizations
+    org_totals = pivot.sum(axis=1).sort_values(ascending=False)
+    print("\nTop 15 Organizations by Total Reappointments:")
+    print("-" * 50)
+    for i, (org, total) in enumerate(org_totals.head(15).items(), 1):
+        years_active = (pivot.loc[org] > 0).sum()
+        org_display = org[:40] + "..." if len(str(org)) > 43 else str(org)
+        print(f"{i:2d}. {org_display:<43} {int(total):>4} ({years_active} years)")
+    
+    # Yearly trends
+    yearly_totals = pivot.sum(axis=0).sort_index()
+    print("\nReappointments by Year:")
+    for year, total in yearly_totals.items():
+        print(f"  {year}: {int(total):>4}")
+    
+    # Trend analysis
+    years = sorted(pivot.columns.tolist())
+    if len(years) >= 2:
+        first_year = yearly_totals.iloc[0]
+        last_year = yearly_totals.iloc[-1]
+        change = last_year - first_year
+        change_pct = (change / first_year * 100) if first_year > 0 else 0
+        
+        print(f"\nTrend Analysis:")
+        print(f"  First year ({years[0]}): {int(first_year)} reappointments")
+        print(f"  Last year ({years[-1]}): {int(last_year)} reappointments")
+        print(f"  Change: {int(change):+d} ({change_pct:+.1f}%)")
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Reappointment Counts by Organization and Year")
+    print("-" * 50)
+    
+    try:
+        # Define output path
+        output_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+        output_file = output_dir / "step5_reappointment_counts.csv"
+        
+        # Load data
+        df = load_data()
+        
+        # Filter for reappointments
+        df_reappointed = filter_reappointments(df)
+        
+        if len(df_reappointed) == 0:
+            print("\nError: No reappointment records found!")
+            sys.exit(1)
+        
+        # Group and debug
+        grouped_data = group_and_debug(df_reappointed)
+        
+        # Create pivot table
+        pivot_table = create_pivot_table(grouped_data)
+        
+        # Validate
+        if not validate_pivot_table(pivot_table):
+            sys.exit(1)
+        
+        # Save and analyze
+        save_and_analyze(pivot_table, output_file)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

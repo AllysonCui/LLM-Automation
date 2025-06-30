@@ -1,0 +1,47 @@
+import pandas as pd
+from pathlib import Path
+
+# Define input and output paths
+input_file = Path("scripts/gpt4o/version2/execution9/analysis_data/step3_repeats_marked.csv")
+output_dir = Path("scripts/gpt4o/version2/execution9/analysis_data")
+output_file = output_dir / "step5_reappointment_counts.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Step 5: Counting reappointments for each organization per year...\n")
+
+try:
+    # Load input data
+    df = pd.read_csv(input_file)
+    print(f"Loaded dataset with {len(df)} records.")
+
+    # Normalize column names and ensure consistency
+    df.columns = df.columns.str.lower()
+    for col in ['name', 'position', 'org']:
+        df[col] = df[col].fillna('').str.strip().str.lower()
+
+    # Ensure 'reappointed' is boolean
+    df['reappointed'] = df['reappointed'].astype(str).str.lower().isin(['true', 'yes', '1'])
+
+    # Validate required column
+    if 'source_year' not in df.columns:
+        raise KeyError("Missing 'source_year' column. Ensure it's preserved from Step 1.")
+
+    # Filter only reappointments
+    reappointed_df = df[df['reappointed'] == True]
+
+    # Group by org and year and count
+    reappointment_counts = reappointed_df.groupby(['org', 'source_year']).size().reset_index(name='reappointment_count')
+
+    # Save output
+    reappointment_counts.to_csv(output_file, index=False)
+    print(f"Reappointment counts saved to: {output_file}")
+    print(f"Total rows in output: {len(reappointment_counts)}")
+
+except FileNotFoundError:
+    print(f"ERROR: Input file not found: {input_file}")
+except KeyError as ke:
+    print(f"ERROR: {ke}")
+except Exception as e:
+    print(f"Unexpected error: {e}")

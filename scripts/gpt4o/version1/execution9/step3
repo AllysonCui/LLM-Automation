@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+import unicodedata
+import re
+
+def normalize_name(name):
+    if pd.isnull(name):
+        return ''
+    name = unicodedata.normalize('NFKD', str(name)).encode('ascii', 'ignore').decode('utf-8')
+    name = re.sub(r'[^a-zA-Z ]', '', name).lower().strip()
+    return name
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step3_repeats_marked.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate expected columns
+    expected_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    if not all(col in df.columns for col in expected_columns):
+        print("Error: Missing one or more required columns.", file=sys.stderr)
+        sys.exit(1)
+
+    # Normalize name for grouping
+    df['name_norm'] = df['name'].apply(normalize_name)
+
+    # Validate year type
+    if not pd.api.types.is_numeric_dtype(df['year']):
+        try:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        except Exception as e:
+            print(f"Error converting year column to numeric: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    df_before = df['reappointed'].fillna('').astype(str)
+    df['reappointed'] = df['reappointed'].fillna('').astype(str)
+
+    grouped = df.sort_values(by='year', kind='stable').groupby(
+        ['name_norm', 'position', 'org'], sort=False, dropna=False
+    )
+
+    additional_reappointments = 0
+
+    for (name, position, org), group in grouped:
+        if group.empty:
+            continue
+
+        idx_list = group.index.tolist()
+        if len(idx_list) > 1:
+            for idx in idx_list[1:]:
+                if df.loc[idx, 'reappointed'].strip().lower() not in ['yes', 'y']:
+                    df.loc[idx, 'reappointed'] = 'Yes'
+                    additional_reappointments += 1
+
+    print(f"Additional reappointments identified and marked: {additional_reappointments}")
+
+    df.drop(columns=['name_norm'], inplace=True)
+    df.to_csv(output_file, index=False)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+from pathlib import Path
+
+# Define the path to the input and output directories
+employee_counts_file_path = Path("scripts/gpt4o/version1/execution5/analysis_data/step4_employee_counts.csv")
+reappointment_counts_file_path = Path("scripts/gpt4o/version1/execution5/analysis_data/step5_reappointment_counts.csv")
+output_dir = Path("scripts/gpt4o/version1/execution5/analysis_data")
+
+# Create output directory if it doesn't exist
+output_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    # Load the employee counts and reappointment counts datasets
+    employee_counts = pd.read_csv(employee_counts_file_path, index_col=[0, 1])
+    reappointment_counts = pd.read_csv(reappointment_counts_file_path, index_col=[0, 1])
+
+    # Rename columns to differentiate them before merging
+    employee_counts.columns = [f"{col}_employee" for col in employee_counts.columns]
+    reappointment_counts.columns = [f"{col}_reappointment" for col in reappointment_counts.columns]
+
+    # Merge the two datasets on 'org' and 'year'
+    merged_df = pd.merge(employee_counts, reappointment_counts, how='left', left_index=True, right_index=True)
+
+    # Debugging output: Check the columns before renaming
+    print("\nColumns before renaming:")
+    print(merged_df.columns)
+
+    # Create an empty list to hold the reappointment rate columns
+    reappointment_rate_columns = []
+
+    # Iterate over the years (2014 to 2024) and calculate the reappointment rate for each year
+    for year in range(2014, 2025):
+        employee_col = f"{year}_employee"
+        reappointment_col = f"{year}_reappointment"
+        
+        # Calculate the reappointment rate, handling division by zero
+        rate_col = f"reappointment_rate_{year}"
+        merged_df[rate_col] = merged_df[reappointment_col] / merged_df[employee_col]
+        
+        # Handle division by zero (replace with NaN or 0)
+        merged_df[rate_col].replace([float('inf'), -float('inf')], float('nan'), inplace=True)
+        merged_df[rate_col].fillna(0, inplace=True)  # Optionally, set NaN to 0
+
+        # Add the column to the list of reappointment rates
+        reappointment_rate_columns.append(rate_col)
+
+    # Reset the index to get 'org' and 'year' as columns
+    merged_df.reset_index(inplace=True)
+
+    # Save the results as 'step6_reappointment_rates.csv'
+    output_file_path = output_dir / "step6_reappointment_rates.csv"
+    merged_df.to_csv(output_file_path, index=False)
+
+    # Print the comprehensive table
+    print("Comprehensive table with reappointment rates:")
+    print(merged_df)
+
+    # Print organizations with the highest average reappointment rates
+    avg_reappointment_rate = merged_df[reappointment_rate_columns].mean(axis=1)
+    merged_df['avg_reappointment_rate'] = avg_reappointment_rate
+    highest_avg_reappointment_rate_orgs = merged_df.groupby('org')['avg_reappointment_rate'].mean().idxmax()
+    highest_avg_rate = merged_df.groupby('org')['avg_reappointment_rate'].mean().max()
+
+    print("\nOrganization with the highest average reappointment rate:")
+    print(f"Organization: {highest_avg_reappointment_rate_orgs} with an average rate of {highest_avg_rate:.2f}")
+
+except FileNotFoundError as e:
+    print(f"Error: {e}")
+except pd.errors.EmptyDataError:
+    print(f"Error: One of the input files is empty.")
+except Exception as e:
+    print(f"An error occurred: {e}")

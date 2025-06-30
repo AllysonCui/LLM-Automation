@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""
+Script to combine New Brunswick government appointment data from 2013-2024.
+Loads 12 CSV files, adds year column, combines into single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024 and combine into single DataFrame.
+    
+    Returns:
+        pd.DataFrame: Combined appointments data with year column added
+    """
+    # Define years to process
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    # List to store individual DataFrames
+    dataframes = []
+    
+    # Track loading status
+    loaded_files = []
+    failed_files = []
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Load CSV file
+            df = pd.read_csv(filename)
+            
+            # Add year column
+            df['year'] = year
+            
+            # Store DataFrame
+            dataframes.append(df)
+            loaded_files.append(filename)
+            
+            print(f"✓ Loaded {filename}: {df.shape[0]} rows, {df.shape[1]} columns")
+            
+        except FileNotFoundError:
+            print(f"✗ File not found: {filename}")
+            failed_files.append(filename)
+            
+        except pd.errors.EmptyDataError:
+            print(f"✗ Empty file: {filename}")
+            failed_files.append(filename)
+            
+        except Exception as e:
+            print(f"✗ Error loading {filename}: {str(e)}")
+            failed_files.append(filename)
+    
+    # Check if any files were loaded
+    if not dataframes:
+        raise ValueError("No CSV files were successfully loaded!")
+    
+    # Report loading summary
+    print(f"\nLoading Summary:")
+    print(f"Successfully loaded: {len(loaded_files)} files")
+    if failed_files:
+        print(f"Failed to load: {len(failed_files)} files")
+        for file in failed_files:
+            print(f"  - {file}")
+    
+    # Combine all DataFrames
+    print("\nCombining datasets...")
+    combined_df = pd.concat(dataframes, ignore_index=True)
+    
+    return combined_df
+
+def save_combined_data(df, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
+    """
+    Save combined DataFrame to CSV file.
+    
+    Args:
+        df (pd.DataFrame): Combined appointments data
+        output_dir (str): Output directory path
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Define output file path
+    output_file = os.path.join(output_dir, "step1_combined_appointments.csv")
+    
+    # Save to CSV
+    df.to_csv(output_file, index=False)
+    print(f"✓ Combined dataset saved to: {output_file}")
+    
+    return output_file
+
+def print_dataset_info(df):
+    """
+    Print basic information about the combined dataset.
+    
+    Args:
+        df (pd.DataFrame): Combined appointments data
+    """
+    print("\n" + "="*60)
+    print("COMBINED DATASET INFORMATION")
+    print("="*60)
+    
+    # Shape information
+    print(f"Dataset shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    
+    # Year distribution
+    if 'year' in df.columns:
+        year_counts = df['year'].value_counts().sort_index()
+        print(f"\nAppointments by year:")
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} appointments")
+    
+    # Column information
+    print(f"\nColumns ({len(df.columns)}):")
+    for i, col in enumerate(df.columns, 1):
+        non_null = df[col].notna().sum()
+        null_pct = (df[col].isna().sum() / len(df)) * 100
+        print(f"  {i:2d}. {col:<20} ({non_null:,} non-null, {null_pct:.1f}% missing)")
+    
+    # Data types
+    print(f"\nData types:")
+    dtype_counts = df.dtypes.value_counts()
+    for dtype, count in dtype_counts.items():
+        print(f"  {dtype}: {count} columns")
+    
+    # Memory usage
+    memory_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
+    print(f"\nMemory usage: {memory_mb:.2f} MB")
+
+def main():
+    """Main execution function."""
+    try:
+        print("New Brunswick Government Appointments Data Combiner")
+        print("="*55)
+        
+        # Load and combine data
+        combined_df = load_and_combine_appointments()
+        
+        # Save combined data
+        output_file = save_combined_data(combined_df)
+        
+        # Print dataset information
+        print_dataset_info(combined_df)
+        
+        print(f"\n✓ Process completed successfully!")
+        print(f"Combined dataset available at: {output_file}")
+        
+    except Exception as e:
+        print(f"\n✗ Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step3_repeats_marked.csv")
+    output_csv = Path("scripts/gpt4o/version1/execution8/analysis_data/step8_annual_proportions.csv")
+    output_plot = Path("scripts/gpt4o/version1/execution8/analysis_data/step8_annual_reappointment_proportions.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"[ERROR] Failed to load input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if "year" not in df.columns or "reappointed" not in df.columns:
+        print("[ERROR] Required columns 'year' or 'reappointed' missing.", file=sys.stderr)
+        sys.exit(1)
+
+    df = df.dropna(subset=["year"])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df = df[df["year"].between(2013, 2024)]
+
+    if not pd.api.types.is_bool_dtype(df["reappointed"]):
+        df["reappointed"] = df["reappointed"].astype(bool)
+
+    results = []
+    for year in range(2013, 2025):
+        year_df = df[df["year"] == year]
+        total_appointments = len(year_df)
+        total_reappointments = year_df["reappointed"].sum()
+        proportion = total_reappointments / total_appointments if total_appointments > 0 else np.nan
+        results.append({
+            "year": year,
+            "total_appointments": total_appointments,
+            "total_reappointments": total_reappointments,
+            "reappointment_proportion": proportion
+        })
+
+    result_df = pd.DataFrame(results)
+
+    try:
+        result_df.to_csv(output_csv, index=False)
+        print(f"[INFO] Annual proportions saved to: {output_csv}")
+    except Exception as e:
+        print(f"[ERROR] Could not save CSV: {e}", file=sys.stderr)
+
+    # Visualization
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(result_df["year"], result_df["reappointment_proportion"], marker="o")
+        plt.title("Annual Reappointment Proportion (Government-wide)")
+        plt.xlabel("Year")
+        plt.ylabel("Reappointment Proportion")
+        plt.ylim(0, 1)
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_plot)
+        print(f"[INFO] Visualization saved to: {output_plot}")
+    except Exception as e:
+        print(f"[ERROR] Could not create plot: {e}", file=sys.stderr)
+
+    # Print summary
+    print("\n[INFO] Year-by-year reappointment proportions:")
+    for _, row in result_df.iterrows():
+        print(f"  {row['year']}: {row['reappointment_proportion']:.2%} ({row['total_reappointments']} of {row['total_appointments']})")
+
+if __name__ == "__main__":
+    main()

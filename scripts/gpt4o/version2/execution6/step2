@@ -1,0 +1,52 @@
+# File: scripts/gpt4o/version2/execution6/step2_extract_key_columns.py
+
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution6/analysis_data/step1_combined_appointments.csv")
+OUTPUT_DIR = Path("scripts/gpt4o/version2/execution6/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step2_key_columns_data.csv"
+
+# Ensure output directory exists
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+print("Starting Step 2: Extracting key columns...")
+
+# Load combined dataset
+try:
+    df = pd.read_csv(INPUT_FILE)
+    print(f"Loaded combined data: {df.shape}")
+except Exception as e:
+    raise RuntimeError(f"Failed to load input file: {e}")
+
+# Define acceptable column name variants
+column_map = {
+    "name": ["name", "Name", "full_name"],
+    "position": ["position", "Position", "title"],
+    "org": ["org", "organization", "Organization"],
+    "reappointed": ["reappointed", "Reappointed", "is_reappointed"]
+}
+
+# Find actual column names in dataset
+standardized_cols = {}
+for std_col, variants in column_map.items():
+    found = next((col for col in variants if col in df.columns), None)
+    if found:
+        standardized_cols[std_col] = found
+    else:
+        raise ValueError(f"Missing expected column for: '{std_col}' (tried: {variants})")
+
+# Subset and rename columns
+key_df = df[[standardized_cols[col] for col in ["name", "position", "org", "reappointed"]]].copy()
+key_df.columns = ["name", "position", "org", "reappointed"]
+
+# Preserve source_year if available
+if 'source_year' in df.columns:
+    key_df['source_year'] = df['source_year']
+
+print(f"Extracted key columns: {key_df.shape}")
+
+# Save result
+key_df.to_csv(OUTPUT_FILE, index=False)
+print(f"Step 2 complete: Key columns saved to {OUTPUT_FILE}")

@@ -1,0 +1,53 @@
+import os
+import pandas as pd
+from pathlib import Path
+
+# Load correct answer
+correct_path = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
+correct_answer = pd.read_csv(correct_path)
+
+# Extract and round the correct float values to 4 decimal places
+correct_col = correct_answer.select_dtypes(include=['float']).iloc[:, 0].round(4).tolist()
+
+# Define base paths and result collection
+base_paths = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudesonnet4", "version1")
+]
+
+results = []
+
+# Traverse each model and version
+for model, version in base_paths:
+    base_dir = Path(f"scripts/{model}/{version}")
+    total = 0
+    correct = 0
+    wrong_execs = []
+
+    for subdir in base_dir.glob("execution*/analysis_data"):
+        exec_num = subdir.parts[-2].replace("execution", "")
+        file_path = subdir / "step7_yearly_max_rates.csv"
+        if file_path.exists():
+            try:
+                df = pd.read_csv(file_path)
+                float_col = df.select_dtypes(include=['float']).iloc[:, 0].round(4).tolist()
+                # Compare as multisets
+                if sorted(float_col) == sorted(correct_col):
+                    correct += 1
+                else:
+                    wrong_execs.append(exec_num)
+                total += 1
+            except Exception:
+                wrong_execs.append(exec_num)
+
+    accuracy = correct / total if total > 0 else 0
+    results.append((model, version, round(accuracy, 3), ", ".join(sorted(wrong_execs))))
+
+# Output markdown table
+print("| Model         | Version   | Avg Correct Rate | Wrong Executions        |")
+print("|---------------|-----------|------------------|--------------------------|")
+for model, version, rate, wrong in results:
+    print(f"| {model:<13} | {version:<9} | {rate:<16} | {wrong} |")

@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""
+Key Columns Extractor for New Brunswick Government Appointments Data
+
+This script loads the combined appointments dataset, identifies key columns with 
+flexible naming matching, and creates a filtered dataset with only the essential 
+columns for analysis.
+
+Author: Claude Sonnet 4
+Version: 1.0
+Execution: 5
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_column_match(df_columns, target_names):
+    """
+    Find the best matching column name from a list of possible names.
+    
+    Args:
+        df_columns: List of actual column names in the DataFrame
+        target_names: List of possible column names to match
+    
+    Returns:
+        Matched column name or None if no match found
+    """
+    df_columns_lower = [col.lower().strip() for col in df_columns]
+    
+    for target in target_names:
+        target_lower = target.lower().strip()
+        
+        # Exact match first
+        if target_lower in df_columns_lower:
+            idx = df_columns_lower.index(target_lower)
+            return df_columns[idx]
+        
+        # Partial match (target contains or is contained in column name)
+        for i, col_lower in enumerate(df_columns_lower):
+            if target_lower in col_lower or col_lower in target_lower:
+                return df_columns[i]
+    
+    return None
+
+def main():
+    """Main function to extract key columns from combined dataset."""
+    
+    # Define paths
+    script_dir = Path(__file__).parent
+    analysis_data_dir = script_dir / "analysis_data"
+    input_file = analysis_data_dir / "step1_combined_appointments.csv"
+    output_file = analysis_data_dir / "step2_key_columns_data.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run the data combination script first.")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        print("Loading combined appointments dataset...")
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
+        
+        # Define column mapping with possible variations
+        column_mappings = {
+            'reappointed': ['reappointed', 'reappoint', 're-appointed', 'reappointment'],
+            'name': ['name', 'full_name', 'person_name', 'appointee', 'individual'],
+            'position': ['position', 'appointment', 'role', 'title', 'job_title'],
+            'org': ['org', 'organization', 'organisation', 'agency', 'department', 'ministry'],
+            'year': ['year', 'appointment_year', 'fiscal_year']
+        }
+        
+        print("\nIdentifying key columns...")
+        print("-" * 40)
+        
+        # Find matching columns
+        key_columns = {}
+        missing_columns = []
+        
+        for key, possible_names in column_mappings.items():
+            matched_column = find_column_match(df.columns.tolist(), possible_names)
+            
+            if matched_column:
+                key_columns[key] = matched_column
+                print(f"✓ {key:12} -> '{matched_column}'")
+            else:
+                missing_columns.append(key)
+                print(f"✗ {key:12} -> NOT FOUND")
+        
+        # Check if we found essential columns
+        if missing_columns:
+            print(f"\nWARNING: Missing columns: {missing_columns}")
+            if len(missing_columns) > 2:  # Allow up to 2 missing columns
+                print("ERROR: Too many essential columns missing!")
+                print("Available columns:", list(df.columns))
+                sys.exit(1)
+        
+        print(f"\nSuccessfully identified {len(key_columns)} key columns")
+        print("-" * 40)
+        
+        # Extract key columns
+        print("Extracting key columns...")
+        
+        # Create new DataFrame with key columns
+        extracted_data = {}
+        for key, column_name in key_columns.items():
+            extracted_data[key] = df[column_name]
+        
+        # Create filtered DataFrame
+        filtered_df = pd.DataFrame(extracted_data)
+        
+        # Reorder columns for consistency
+        column_order = ['name', 'position', 'org', 'reappointed', 'year']
+        final_columns = [col for col in column_order if col in filtered_df.columns]
+        filtered_df = filtered_df[final_columns]
+        
+        # Save filtered dataset
+        filtered_df.to_csv(output_file, index=False)
+        print(f"✓ Filtered dataset saved to: {output_file}")
+        
+        print("-" * 40)
+        print("FILTERED DATASET SUMMARY:")
+        print(f"Shape: {filtered_df.shape} (rows, columns)")
+        print(f"Columns: {list(filtered_df.columns)}")
+        
+        print("\nColumn Information:")
+        print("-" * 30)
+        for col in filtered_df.columns:
+            non_null = filtered_df[col].notna().sum()
+            null_count = filtered_df[col].isna().sum()
+            null_pct = (null_count / len(filtered_df)) * 100
+            dtype = str(filtered_df[col].dtype)
+            
+            print(f"{col:12} | {dtype:10} | {non_null:6} non-null | {null_count:6} null ({null_pct:5.1f}%)")
+        
+        # Additional analysis for key columns
+        if 'reappointed' in filtered_df.columns:
+            print(f"\nReappointment Status:")
+            print("-" * 20)
+            reappoint_counts = filtered_df['reappointed'].value_counts(dropna=False)
+            for status, count in reappoint_counts.items():
+                pct = (count / len(filtered_df)) * 100
+                print(f"{str(status):8}: {count:5} ({pct:5.1f}%)")
+        
+        if 'year' in filtered_df.columns:
+            print(f"\nYear Distribution:")
+            print("-" * 17)
+            year_counts = filtered_df['year'].value_counts().sort_index()
+            for year, count in year_counts.items():
+                print(f"{year}: {count:4} appointments")
+        
+        if 'org' in filtered_df.columns:
+            print(f"\nTop 10 Organizations:")
+            print("-" * 22)
+            org_counts = filtered_df['org'].value_counts().head(10)
+            for org, count in org_counts.items():
+                org_name = str(org)[:30] + "..." if len(str(org)) > 30 else str(org)
+                print(f"{org_name:33}: {count:4}")
+        
+        print("\nKey columns extraction completed successfully!")
+        
+    except Exception as e:
+        print(f"ERROR during column extraction: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

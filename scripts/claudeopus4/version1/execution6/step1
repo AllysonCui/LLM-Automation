@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""
+Script to combine New Brunswick government appointment data from 2013-2024
+and prepare for reappointment trend analysis by government branch.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_combine_appointments():
+    """
+    Load all appointment CSV files from 2013-2024, add year column,
+    combine into single DataFrame, and save the result.
+    """
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("scripts/claudeopus4/version1/execution6/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # List to store all dataframes
+    all_dataframes = []
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    print("Loading appointment data files...")
+    
+    for year in years:
+        # Construct filename using relative path
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Load CSV file
+            df = pd.read_csv(filename, encoding='utf-8')
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            all_dataframes.append(df)
+            
+            print(f"Successfully loaded {filename}: {len(df)} rows")
+            
+        except FileNotFoundError:
+            print(f"Warning: File {filename} not found. Skipping...")
+            continue
+        except Exception as e:
+            print(f"Error loading {filename}: {str(e)}")
+            continue
+    
+    if not all_dataframes:
+        print("Error: No data files were successfully loaded.")
+        sys.exit(1)
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    
+    # Save combined dataset
+    output_path = output_dir / "step1_combined_appointments.csv"
+    combined_df.to_csv(output_path, index=False, encoding='utf-8')
+    print(f"\nCombined dataset saved to: {output_path}")
+    
+    # Print shape and basic info
+    print(f"\nCombined dataset shape: {combined_df.shape}")
+    print(f"Total rows: {len(combined_df)}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    print(f"\nYears included: {sorted(combined_df['year'].unique())}")
+    
+    print("\nColumn information:")
+    print(combined_df.dtypes)
+    
+    print("\nBasic statistics:")
+    print(f"Number of files successfully loaded: {len(all_dataframes)}")
+    print(f"Average appointments per year: {len(combined_df) / len(all_dataframes):.1f}")
+    
+    # Check reappointed column
+    if 'reappointed' in combined_df.columns:
+        reappointed_count = combined_df['reappointed'].sum()
+        print(f"\nTotal reappointments: {reappointed_count}")
+        print(f"Reappointment rate: {reappointed_count / len(combined_df) * 100:.1f}%")
+    
+    return combined_df
+
+if __name__ == "__main__":
+    # Run the data combination process
+    combined_data = load_and_combine_appointments()
+    
+    print("\nData combination completed successfully!")

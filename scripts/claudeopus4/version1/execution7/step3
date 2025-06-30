@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""
+Script to identify and mark reappointments based on repeated occurrences
+of the same person in the same position at the same organization.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def normalize_name(name):
+    """
+    Normalize a name for comparison by handling common variations.
+    
+    Args:
+        name: str or None
+    
+    Returns:
+        str: Normalized name or empty string if None/NaN
+    """
+    if pd.isna(name) or name is None:
+        return ""
+    
+    # Convert to string and strip whitespace
+    name_str = str(name).strip()
+    
+    # Convert to lowercase for comparison
+    name_str = name_str.lower()
+    
+    # Remove common titles and suffixes
+    titles_to_remove = ['mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'hon.', 'jr.', 'sr.', 'ii', 'iii']
+    for title in titles_to_remove:
+        name_str = name_str.replace(title, '')
+    
+    # Remove extra spaces
+    name_str = ' '.join(name_str.split())
+    
+    return name_str
+
+def main():
+    """Main function to identify and mark reappointments."""
+    
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution7/analysis_data")
+    input_file = data_dir / "step2_key_columns_data.csv"
+    output_file = data_dir / "step3_repeats_marked.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file {input_file} not found.")
+        sys.exit(1)
+    
+    try:
+        # Load the dataset
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Loaded dataset with shape: {df.shape}")
+        
+        # Check required columns
+        required_cols = ['name', 'position', 'org', 'year']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            print(f"Error: Missing required columns: {missing_cols}")
+            sys.exit(1)
+        
+        # Create a copy for modification
+        df_updated = df.copy()
+        
+        # Ensure reappointed column exists
+        if 'reappointed' not in df_updated.columns:
+            df_updated['reappointed'] = False
+            print("Created 'reappointed' column (initialized as False)")
+        
+        # Convert reappointed to boolean if it isn't already
+        df_updated['reappointed'] = df_updated['reappointed'].astype(bool)
+        
+        # Count original reappointments
+        original_reappointments = df_updated['reappointed'].sum()
+        print(f"\nOriginal reappointments marked: {original_reappointments}")
+        
+        # Create normalized name column for matching
+        df_updated['name_normalized'] = df_updated['name'].apply(normalize_name)
+        
+        # Handle missing values in key columns
+        print("\n=== Handling Missing Values ===")
+        for col in ['name', 'position', 'org']:
+            missing_count = df_updated[col].isna().sum()
+            if missing_count > 0:
+                print(f"{col}: {missing_count} missing values")
+                # Fill with empty string for comparison purposes
+                df_updated[col] = df_updated[col].fillna('')
+        
+        # Sort by year to ensure chronological order
+        df_updated = df_updated.sort_values('year')
+        
+        # Track new reappointments identified
+        new_reappointments = 0
+        
+        # Group by normalized name, position, and org
+        print("\n=== Identifying Reappointments ===")
+        groups = df_updated.groupby(['name_normalized', 'position', 'org'])
+        
+        for (name_norm, position, org), group in groups:
+            # Skip groups with empty name
+            if name_norm == "":
+                continue
+            
+            # If group has more than one occurrence
+            if len(group) > 1:
+                # Get indices sorted by year
+                indices = group.sort_values('year').index
+                
+                # Mark all except the first as reappointments
+                for idx in indices[1:]:
+                    if not df_updated.loc[idx, 'reappointed']:
+                        df_updated.loc[idx, 'reappointed'] = True
+                        new_reappointments += 1
+        
+        # Remove the temporary normalized name column
+        df_updated = df_updated.drop(columns=['name_normalized'])
+        
+        # Calculate statistics
+        total_reappointments = df_updated['reappointed'].sum()
+        
+        print(f"\nNewly identified reappointments: {new_reappointments}")
+        print(f"Total reappointments after update: {total_reappointments}")
+        print(f"Percentage of appointments that are reappointments: {(total_reappointments / len(df_updated)) * 100:.2f}%")
+        
+        # Analyze reappointments by year
+        print("\n=== Reappointments by Year ===")
+        year_stats = df_updated.groupby('year')['reappointed'].agg(['sum', 'count', 'mean'])
+        year_stats.columns = ['reappointments', 'total_appointments', 'reappointment_rate']
+        year_stats['reappointment_rate'] = year_stats['reappointment_rate'] * 100
+        print(year_stats.round(2))
+        
+        # Find people with most reappointments
+        print("\n=== Top 10 Most Frequently Reappointed (Same Position/Org) ===")
+        repeat_counts = df_updated[df_updated['name'] != ''].groupby(['name', 'position', 'org']).size()
+        top_repeats = repeat_counts[repeat_counts > 1].sort_values(ascending=False).head(10)
+        for (name, pos, org), count in top_repeats.items():
+            print(f"{name} - {pos} at {org}: {count} appointments")
+        
+        # Save the updated dataset
+        df_updated.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nUpdated dataset saved to: {output_file}")
+        
+        # Summary of edge cases handled
+        print("\n=== Edge Cases Summary ===")
+        print(f"Records with missing names: {(df_updated['name'] == '').sum()}")
+        print(f"Records with missing positions: {(df_updated['position'] == '').sum()}")
+        print(f"Records with missing organizations: {(df_updated['org'] == '').sum()}")
+        
+        # Verify data integrity
+        print("\n=== Data Integrity Check ===")
+        print(f"Total records: {len(df_updated)}")
+        print(f"Unique names: {df_updated[df_updated['name'] != '']['name'].nunique()}")
+        print(f"Unique positions: {df_updated[df_updated['position'] != '']['position'].nunique()}")
+        print(f"Unique organizations: {df_updated[df_updated['org'] != '']['org'].nunique()}")
+        
+    except Exception as e:
+        print(f"Error processing data: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

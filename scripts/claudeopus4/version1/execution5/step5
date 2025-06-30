@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""
+Script to analyze reappointment counts by organization and year.
+Focuses on records where reappointed is True.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def create_reappointment_counts_table(df):
+    """
+    Create a pivot table of reappointment counts by organization and year.
+    
+    Args:
+        df: DataFrame with columns including 'org', 'year', and 'reappointed'
+    
+    Returns:
+        Pivot table DataFrame with organizations as rows, years as columns
+    """
+    # Filter for reappointments only
+    print("\nFiltering for reappointments (reappointed = True)...")
+    reappointments_df = df[df['reappointed'] == True].copy()
+    print(f"Found {len(reappointments_df):,} reappointment records out of {len(df):,} total records")
+    
+    # Ensure year is integer
+    reappointments_df['year'] = pd.to_numeric(reappointments_df['year'], errors='coerce').astype('Int64')
+    
+    # Remove rows with missing organization or year
+    initial_count = len(reappointments_df)
+    reappointments_df = reappointments_df.dropna(subset=['org', 'year'])
+    dropped_count = initial_count - len(reappointments_df)
+    
+    if dropped_count > 0:
+        print(f"Warning: Dropped {dropped_count:,} reappointment rows with missing organization or year values")
+    
+    # Show sample of grouped data for debugging
+    print("\nSample of reappointment data before grouping:")
+    sample_data = reappointments_df[['org', 'year', 'name', 'position']].head(10)
+    for idx, row in sample_data.iterrows():
+        print(f"  - {row['org']} | Year: {row['year']} | {row['name']} | {row['position']}")
+    
+    # Group by organization and year, count reappointments
+    print("\nGrouping reappointments by organization and year...")
+    counts = reappointments_df.groupby(['org', 'year']).size().reset_index(name='reappointment_count')
+    
+    # Show debugging info about grouped data
+    print(f"\nGrouped data summary:")
+    print(f"  - Total unique org-year combinations with reappointments: {len(counts):,}")
+    print(f"  - Total reappointments counted: {counts['reappointment_count'].sum():,}")
+    
+    # Show sample of grouped counts
+    print("\nSample of grouped reappointment counts:")
+    for idx, row in counts.head(10).iterrows():
+        print(f"  - {row['org']} ({int(row['year'])}): {row['reappointment_count']} reappointments")
+    
+    # Create pivot table
+    pivot_table = counts.pivot(index='org', columns='year', values='reappointment_count')
+    
+    # Convert year columns to integers (remove any decimal points)
+    pivot_table.columns = [int(col) for col in pivot_table.columns]
+    
+    # Fill NaN values with 0 (no reappointments for that org in that year)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    # Sort columns (years) in chronological order
+    pivot_table = pivot_table.reindex(sorted(pivot_table.columns), axis=1)
+    
+    # Add total column
+    pivot_table['Total'] = pivot_table.sum(axis=1)
+    
+    # Sort by total reappointments (descending)
+    pivot_table = pivot_table.sort_values('Total', ascending=False)
+    
+    # Filter out organizations with zero total reappointments
+    pivot_table = pivot_table[pivot_table['Total'] > 0]
+    
+    return pivot_table, counts
+
+def validate_reappointment_counts(pivot_table, raw_counts):
+    """
+    Validate that the pivot table contains actual counts.
+    
+    Args:
+        pivot_table: Pivot table with reappointment counts
+        raw_counts: Raw grouped counts before pivoting
+    
+    Returns:
+        Boolean indicating if validation passed
+    """
+    # Check if pivot table has any non-zero values
+    year_columns = [col for col in pivot_table.columns if col != 'Total']
+    
+    if not year_columns:
+        print("Error: No year columns found in pivot table")
+        return False
+    
+    # Sum all values in year columns
+    total_in_pivot = pivot_table[year_columns].sum().sum()
+    total_in_raw = raw_counts['reappointment_count'].sum()
+    
+    print(f"\nValidation check:")
+    print(f"  - Total reappointments in raw grouped data: {total_in_raw:,}")
+    print(f"  - Total reappointments in pivot table: {int(total_in_pivot):,}")
+    
+    if total_in_pivot == 0:
+        print("  ✗ Warning: Pivot table contains only zeros!")
+        return False
+    elif abs(total_in_pivot - total_in_raw) > 1:  # Allow for small rounding differences
+        print(f"  ✗ Warning: Mismatch between raw and pivot totals!")
+        return False
+    else:
+        print("  ✓ Validation passed: Counts match")
+        return True
+
+def load_and_process_data():
+    """
+    Load the dataset from step 3 and create reappointment counts summary.
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution5/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step5_reappointment_counts.csv"
+    
+    print("Loading appointments data from step 3...")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file not found: {input_file}")
+        sys.exit(1)
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} records")
+        
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_columns = ['org', 'year', 'reappointed', 'name', 'position']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"Error: Missing required columns: {', '.join(missing_columns)}")
+        sys.exit(1)
+    
+    # Check reappointed column values
+    print(f"\nReappointed column value distribution:")
+    print(df['reappointed'].value_counts())
+    
+    # Create reappointment counts table
+    print("\nCreating reappointment counts by organization and year...")
+    pivot_table, raw_counts = create_reappointment_counts_table(df)
+    
+    # Validate the pivot table
+    if not validate_reappointment_counts(pivot_table, raw_counts):
+        print("Warning: Validation failed, but continuing with analysis...")
+    
+    # Save the pivot table
+    pivot_table.to_csv(output_file, encoding='utf-8')
+    print(f"\n✓ Reappointment counts saved to: {output_file}")
+    
+    # Print summary statistics
+    print("\n" + "="*50)
+    print("REAPPOINTMENT PATTERNS SUMMARY")
+    print("="*50)
+    
+    # Overall statistics
+    total_reappointments = int(pivot_table['Total'].sum())
+    print(f"\nTotal reappointments across all organizations: {total_reappointments:,}")
+    print(f"Organizations with at least one reappointment: {len(pivot_table):,}")
+    
+    # Year columns for analysis
+    year_columns = sorted([col for col in pivot_table.columns if col != 'Total'])
+    
+    if year_columns:
+        print(f"Years covered: {min(year_columns)} - {max(year_columns)}")
+        
+        # Maximum reappointments in single year
+        max_single_year = pivot_table[year_columns].max().max()
+        print(f"Maximum reappointments in single year: {int(max_single_year):,}")
+        
+        # Find which org and year had the maximum
+        for org in pivot_table.index:
+            for year in year_columns:
+                if pivot_table.loc[org, year] == max_single_year:
+                    print(f"  - {org} in {year}")
+                    break
+    
+    # Top organizations by reappointments
+    print("\nTop 10 Organizations by Total Reappointments:")
+    top_orgs = pivot_table.head(10)
+    
+    for idx, (org, row) in enumerate(top_orgs.iterrows(), 1):
+        total = int(row['Total'])
+        avg_per_year = total / len(year_columns) if year_columns else 0
+        print(f"  {idx:2d}. {org}: {total:,} total reappointments (avg {avg_per_year:.1f}/year)")
+    
+    # Sample of the pivot table
+    print("\nSample of reappointment counts table (top 5 organizations, recent years):")
+    # Get the most recent 5 years
+    recent_years = year_columns[-5:] if len(year_columns) >= 5 else year_columns
+    
+    # Display columns: organization name + recent years + total
+    display_columns = recent_years + ['Total']
+    sample_table = pivot_table.head(5)[display_columns]
+    
+    # Format for display
+    print("\n" + "-" * 80)
+    print(f"{'Organization':<40} " + " ".join([f"{str(year):>6}" for year in recent_years]) + f" {'Total':>8}")
+    print("-" * 80)
+    
+    for org in sample_table.index:
+        org_display = org[:39] + "…" if len(org) > 40 else org
+        values = " ".join([f"{int(sample_table.loc[org, year]):>6}" for year in recent_years])
+        total = f"{int(sample_table.loc[org, 'Total']):>8}"
+        print(f"{org_display:<40} {values} {total}")
+    
+    # Year-over-year trends
+    print("\nReappointments by year:")
+    year_totals = {}
+    for year in year_columns:
+        year_total = pivot_table[year].sum()
+        year_totals[year] = int(year_total)
+    
+    for year in sorted(year_totals.keys()):
+        print(f"  {year}: {year_totals[year]:,} reappointments")
+    
+    # Check for trends
+    if len(year_totals) >= 3:
+        years_sorted = sorted(year_totals.keys())
+        recent_avg = sum(year_totals[y] for y in years_sorted[-3:]) / 3
+        early_avg = sum(year_totals[y] for y in years_sorted[:3]) / 3
+        
+        if recent_avg > early_avg * 1.2:
+            print("\n📈 Trend: Reappointments have increased over the period")
+        elif recent_avg < early_avg * 0.8:
+            print("\n📉 Trend: Reappointments have decreased over the period")
+        else:
+            print("\n➡️  Trend: Reappointments have remained relatively stable")
+    
+    return pivot_table
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Reappointment Counts Analysis")
+    print("=" * 50)
+    
+    # Process the data
+    pivot_table = load_and_process_data()
+    
+    print("\n✓ Reappointment counts analysis complete!")
+
+if __name__ == "__main__":
+    main()

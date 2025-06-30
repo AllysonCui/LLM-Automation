@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from scipy.stats import linregress
+from statsmodels.stats.stattools import durbin_watson
+import statsmodels.api as sm
+
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step8_annual_proportions.csv")
+    output_file = Path("scripts/gpt4o/version1/execution10/analysis_data/step9_regression_results.txt")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    required_cols = {"year", "reappointment_proportion"}
+    if not required_cols.issubset(df.columns):
+        print("Error: Missing required columns for regression.", file=sys.stderr)
+        sys.exit(1)
+
+    df = df.dropna(subset=["year", "reappointment_proportion"])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype(int)
+    df["reappointment_proportion"] = pd.to_numeric(df["reappointment_proportion"], errors="coerce")
+
+    # Prepare regression variables
+    X = df["year"].values
+    Y = df["reappointment_proportion"].values
+
+    # Fit linear regression model
+    regression = linregress(X, Y)
+    slope = regression.slope
+    intercept = regression.intercept
+    r_value = regression.rvalue
+    p_value = regression.pvalue
+    std_err = regression.stderr
+    r_squared = r_value ** 2
+
+    # Confidence intervals using 1.96 for ~95% CI (normal assumption)
+    ci_95 = 1.96 * std_err
+    ci_low = slope - ci_95
+    ci_high = slope + ci_95
+
+    # Durbin-Watson test for autocorrelation
+    X_sm = sm.add_constant(X)
+    model = sm.OLS(Y, X_sm).fit()
+    dw_stat = durbin_watson(model.resid)
+
+    # Outlier detection (Cook's distance, leverage points)
+    influence = model.get_influence()
+    cooks_d = influence.cooks_distance[0]
+    outliers = df.loc[cooks_d > 4 / len(df)]
+
+    # Calculate total and annual change
+    annual_change_pct = slope * 100
+    total_change_pct = (X[-1] - X[0]) * slope * 100
+
+    # Interpretation
+    trend_direction = "increasing" if slope > 0 else "decreasing"
+    significant = p_value < 0.05
+
+    conclusion = (
+        f"The government-wide reappointment proportion trend is {trend_direction} "
+        f"and it IS {'statistically significant' if significant else 'NOT statistically significant'} (p = {p_value:.4f})."
+    )
+
+    # Save results
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w") as f:
+        f.write("Regression Analysis of Government-wide Reappointment Proportions (2013-2024)\n")
+        f.write("="*70 + "\n")
+        f.write(f"Regression Equation: Y = {intercept:.6f} + {slope:.6f} * Year\n")
+        f.write(f"R-squared: {r_squared:.4f}\n")
+        f.write(f"P-value: {p_value:.4f}\n")
+        f.write(f"Standard Error: {std_err:.6f}\n")
+        f.write(f"95% Confidence Interval for Slope: ({ci_low:.6f}, {ci_high:.6f})\n")
+        f.write(f"Durbin-Watson Statistic: {dw_stat:.4f}\n")
+        f.write(f"Annual Change: {annual_change_pct:.4f} percentage points\n")
+        f.write(f"Total Change (2013-2024): {total_change_pct:.4f} percentage points\n")
+        f.write("\nIdentified Outliers (Cook's D > 4/n):\n")
+        f.write(outliers.to_string(index=False))
+        f.write("\n\nConclusion: " + conclusion + "\n")
+
+    print(conclusion)
+
+if __name__ == "__main__":
+    main()

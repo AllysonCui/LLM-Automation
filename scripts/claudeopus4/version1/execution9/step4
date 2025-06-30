@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""
+Script to count appointments by organization and year, creating a summary table
+for New Brunswick government appointments data.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def load_and_count_appointments():
+    """
+    Load data and create a summary table of appointment counts by organization and year
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution9/analysis_data")
+    input_path = data_dir / "step3_repeats_marked.csv"
+    output_path = data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_path.exists():
+        print(f"Error: Input file not found at {input_path}")
+        sys.exit(1)
+    
+    print("Loading dataset from step 3...")
+    try:
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df)} rows")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns
+    if 'org' not in df.columns or 'year' not in df.columns:
+        print(f"Error: Missing required columns. Available columns: {list(df.columns)}")
+        sys.exit(1)
+    
+    # Data quality check - print basic info
+    print(f"\nYear range: {df['year'].min()} - {df['year'].max()}")
+    print(f"Total unique organizations: {df['org'].nunique()}")
+    print(f"Missing organization values: {df['org'].isna().sum()}")
+    print(f"Missing year values: {df['year'].isna().sum()}")
+    
+    # Handle missing values
+    if df['org'].isna().sum() > 0:
+        print(f"\nWarning: {df['org'].isna().sum()} rows have missing organization values")
+        # Replace missing org values with 'Unknown Organization'
+        df['org'] = df['org'].fillna('Unknown Organization')
+    
+    # Remove rows with missing years (if any)
+    if df['year'].isna().sum() > 0:
+        print(f"Warning: Removing {df['year'].isna().sum()} rows with missing year values")
+        df = df.dropna(subset=['year'])
+    
+    # Convert year to integer if it's not already
+    df['year'] = df['year'].astype(int)
+    
+    # Group by organization and year to count appointments
+    print("\nCounting appointments by organization and year...")
+    counts = df.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Pivot to create summary table (organizations as rows, years as columns)
+    summary_table = counts.pivot(index='org', columns='year', values='count')
+    
+    # Fill missing values with 0 (no appointments that year)
+    summary_table = summary_table.fillna(0).astype(int)
+    
+    # Sort organizations by total appointments (descending)
+    summary_table['Total'] = summary_table.sum(axis=1)
+    summary_table = summary_table.sort_values('Total', ascending=False)
+    
+    # Save the summary table
+    summary_table.to_csv(output_path, encoding='utf-8')
+    print(f"\n✓ Summary table saved to: {output_path}")
+    
+    # Print summary statistics
+    print("\n" + "="*50)
+    print("APPOINTMENT COUNTS BY ORGANIZATION")
+    print("="*50)
+    
+    # Show top organizations by total appointments
+    print("\nTop 10 Organizations by Total Appointments:")
+    top_orgs = summary_table.head(10)
+    print(top_orgs)
+    
+    # Calculate yearly totals
+    yearly_totals = summary_table.drop('Total', axis=1).sum()
+    print("\nTotal Appointments by Year:")
+    for year, total in yearly_totals.items():
+        print(f"  {year}: {total:,} appointments")
+    
+    # Data validation - check for unusually high counts
+    print("\nData Validation Checks:")
+    max_count = summary_table.drop('Total', axis=1).max().max()
+    if max_count > 100:
+        print(f"⚠ Warning: Maximum appointments for a single org in one year: {max_count}")
+        # Find which org/year has this max
+        for col in summary_table.columns:
+            if col != 'Total':
+                max_in_year = summary_table[col].max()
+                if max_in_year == max_count:
+                    org_with_max = summary_table[summary_table[col] == max_count].index[0]
+                    print(f"  Organization: {org_with_max}, Year: {col}")
+    else:
+        print("✓ All appointment counts appear reasonable (≤100 per org per year)")
+    
+    # Check for organizations with sudden spikes
+    print("\nOrganizations with Significant Year-over-Year Changes:")
+    for org in summary_table.index[:20]:  # Check top 20 orgs
+        org_data = summary_table.loc[org].drop('Total')
+        yearly_values = org_data.values
+        
+        # Calculate year-over-year changes
+        changes = []
+        years = list(org_data.index)
+        for i in range(1, len(yearly_values)):
+            if yearly_values[i-1] > 0:
+                pct_change = ((yearly_values[i] - yearly_values[i-1]) / yearly_values[i-1]) * 100
+                if abs(pct_change) > 200:  # More than 200% change
+                    changes.append((years[i], pct_change, yearly_values[i-1], yearly_values[i]))
+        
+        if changes:
+            print(f"\n  {org}:")
+            for year, pct, prev, curr in changes:
+                print(f"    {year}: {prev} → {curr} ({pct:+.0f}%)")
+    
+    # Summary statistics
+    print("\nSummary Statistics:")
+    print(f"  Total organizations: {len(summary_table)}")
+    print(f"  Total appointments across all years: {summary_table['Total'].sum():,}")
+    print(f"  Average appointments per organization: {summary_table['Total'].mean():.1f}")
+    print(f"  Median appointments per organization: {summary_table['Total'].median():.1f}")
+    
+    # Organizations with consistent activity
+    active_all_years = summary_table.drop('Total', axis=1)
+    consistently_active = active_all_years[(active_all_years > 0).all(axis=1)]
+    print(f"\nOrganizations with appointments every year: {len(consistently_active)}")
+    if len(consistently_active) > 0:
+        print("Examples:")
+        for org in consistently_active.index[:5]:
+            print(f"  - {org}")
+    
+    return summary_table
+
+def main():
+    """
+    Main execution function
+    """
+    print("New Brunswick Government Appointments Analysis")
+    print("Step 4: Counting Appointments by Organization and Year")
+    print("-" * 50)
+    
+    # Create appointment counts summary
+    summary_table = load_and_count_appointments()
+    
+    print("\n✓ Step 4 completed successfully!")
+
+if __name__ == "__main__":
+    main()

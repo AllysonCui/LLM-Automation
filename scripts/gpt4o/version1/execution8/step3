@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def clean_string(s):
+    """Lowercase and strip punctuation/whitespace to help normalize strings."""
+    if pd.isna(s):
+        return ''
+    return ''.join(e for e in str(s).lower() if e.isalnum())
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/gpt4o/version1/execution8/analysis_data/step3_repeats_marked.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except Exception as e:
+        print(f"[ERROR] Could not load dataset: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if df.empty:
+        print("[ERROR] Input dataset is empty.", file=sys.stderr)
+        sys.exit(1)
+
+    required_columns = ["name", "position", "org", "year", "reappointed"]
+    for col in required_columns:
+        if col not in df.columns:
+            print(f"[ERROR] Required column missing: {col}", file=sys.stderr)
+            sys.exit(1)
+
+    # Normalize strings for matching
+    df["_name_key"] = df["name"].apply(clean_string)
+    df["_position_key"] = df["position"].apply(clean_string)
+    df["_org_key"] = df["org"].apply(clean_string)
+
+    # Ensure correct data type for year
+    try:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    except Exception as e:
+        print(f"[ERROR] Failed to convert 'year' column to numeric: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Mark reappointments: all but the first in chronological order
+    df.sort_values(by=["_name_key", "_position_key", "_org_key", "year"], kind="stable", inplace=True)
+
+    new_reappointments = 0
+
+    def mark_reappointments(group):
+        nonlocal new_reappointments
+        if group.empty:
+            return group
+
+        if group["year"].isnull().all():
+            print("[WARNING] All years missing in a group. Skipping.", file=sys.stderr)
+            return group
+
+        valid_group = group.dropna(subset=["year"])
+        if valid_group.empty:
+            return group
+
+        first_idx = valid_group.index[0]
+        repeat_idxs = valid_group.index[1:].tolist()
+
+        # Only mark as reappointed if not already True
+        for idx in repeat_idxs:
+            if not group.loc[idx, "reappointed"]:
+                group.loc[idx, "reappointed"] = True
+                new_reappointments += 1
+
+        return group
+
+    if not pd.api.types.is_bool_dtype(df["reappointed"]):
+        df["reappointed"] = df["reappointed"].astype(bool)
+
+    df = df.groupby(["_name_key", "_position_key", "_org_key"], group_keys=False).apply(mark_reappointments)
+
+    # Drop helper columns
+    df.drop(columns=["_name_key", "_position_key", "_org_key"], inplace=True)
+
+    try:
+        df.to_csv(output_file, index=False)
+        print(f"[INFO] Updated dataset with reappointments saved to: {output_file}")
+    except Exception as e:
+        print(f"[ERROR] Could not save output file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[INFO] Additional reappointments identified and marked: {new_reappointments}")
+    print("[INFO] Final dataset shape:", df.shape)
+
+if __name__ == "__main__":
+    main()

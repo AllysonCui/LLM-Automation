@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Key Columns Extractor
+
+This script loads the combined appointments dataset and extracts key columns
+with robust handling of column name variations.
+
+Author: Claude Sonnet 4
+Date: June 30, 2025
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_column_match(df, target_columns, column_name):
+    """
+    Find the best matching column name from a list of possible variations.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame to search in
+        target_columns (list): List of possible column name variations
+        column_name (str): The logical name of the column (for error messages)
+    
+    Returns:
+        str: The actual column name found in the DataFrame
+    """
+    available_columns = df.columns.tolist()
+    
+    # First try exact matches (case-sensitive)
+    for target in target_columns:
+        if target in available_columns:
+            return target
+    
+    # Then try case-insensitive matches
+    available_lower = [col.lower() for col in available_columns]
+    for target in target_columns:
+        target_lower = target.lower()
+        if target_lower in available_lower:
+            # Find the original case version
+            for orig_col in available_columns:
+                if orig_col.lower() == target_lower:
+                    return orig_col
+    
+    # If no match found, return None
+    return None
+
+def extract_key_columns(df):
+    """
+    Extract key columns from the dataset with robust column name matching.
+    
+    Args:
+        df (pd.DataFrame): The combined appointments dataset
+    
+    Returns:
+        pd.DataFrame: Filtered dataset with key columns
+    """
+    
+    # Define possible column name variations for each key column
+    column_mappings = {
+        'reappointed': ['reappointed', 'reappoint', 're-appointed', 'reappointment'],
+        'name': ['name', 'full_name', 'person_name', 'appointee_name', 'individual_name'],
+        'position': ['position', 'appointment', 'role', 'title', 'job_title', 'post'],
+        'org': ['org', 'organization', 'organisation', 'agency', 'department', 'body', 'entity'],
+        'year': ['year', 'appointment_year', 'fiscal_year']
+    }
+    
+    # Find actual column names
+    actual_columns = {}
+    missing_columns = []
+    
+    print("Searching for key columns...")
+    
+    for key_col, variations in column_mappings.items():
+        found_col = find_column_match(df, variations, key_col)
+        if found_col:
+            actual_columns[key_col] = found_col
+            print(f"✓ Found '{key_col}' as column '{found_col}'")
+        else:
+            missing_columns.append(key_col)
+            print(f"✗ Could not find column for '{key_col}'. Tried: {variations}")
+    
+    if missing_columns:
+        print(f"\nAvailable columns in dataset:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"  {i:2d}. {col}")
+        
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Extract the columns and rename them to standard names
+    selected_data = df[list(actual_columns.values())].copy()
+    
+    # Rename columns to standard names
+    rename_mapping = {v: k for k, v in actual_columns.items()}
+    selected_data.rename(columns=rename_mapping, inplace=True)
+    
+    # Ensure columns are in the desired order
+    column_order = ['name', 'position', 'org', 'reappointed', 'year']
+    selected_data = selected_data[column_order]
+    
+    return selected_data
+
+def main():
+    """Main execution function."""
+    
+    try:
+        # Define input file path
+        input_file = Path("scripts/claudesonnet4/version1/execution2/analysis_data/step1_combined_appointments.csv")
+        
+        # Check if input file exists
+        if not input_file.exists():
+            raise FileNotFoundError(f"Input file not found: {input_file}")
+        
+        # Load the combined dataset
+        print(f"Loading combined dataset from: {input_file}")
+        df = pd.read_csv(input_file)
+        print(f"Loaded dataset with shape: {df.shape}")
+        
+        # Extract key columns
+        key_data = extract_key_columns(df)
+        
+        # Define output file path
+        output_dir = Path("scripts/claudesonnet4/version1/execution2/analysis_data")
+        output_file = output_dir / "step2_key_columns_data.csv"
+        
+        # Save the filtered dataset
+        print(f"\nSaving key columns dataset to: {output_file}")
+        key_data.to_csv(output_file, index=False)
+        
+        # Print dataset information
+        print("\n" + "="*50)
+        print("KEY COLUMNS DATASET SUMMARY")
+        print("="*50)
+        print(f"Filtered dataset shape: {key_data.shape}")
+        print(f"Total rows: {key_data.shape[0]:,}")
+        print(f"Total columns: {key_data.shape[1]}")
+        
+        print(f"\nExtracted columns:")
+        for i, col in enumerate(key_data.columns, 1):
+            print(f"  {i}. {col}")
+        
+        print(f"\nData types:")
+        for col, dtype in key_data.dtypes.items():
+            print(f"  {col}: {dtype}")
+        
+        print(f"\nMissing values analysis:")
+        missing_analysis = key_data.isnull().sum()
+        total_rows = len(key_data)
+        
+        for col in key_data.columns:
+            missing_count = missing_analysis[col]
+            if missing_count > 0:
+                percentage = (missing_count / total_rows) * 100
+                print(f"  {col}: {missing_count:,} missing ({percentage:.1f}%)")
+            else:
+                print(f"  {col}: No missing values")
+        
+        print(f"\nUnique value counts:")
+        for col in key_data.columns:
+            unique_count = key_data[col].nunique()
+            if col == 'year':
+                print(f"  {col}: {unique_count} unique values {sorted(key_data[col].unique())}")
+            elif col == 'reappointed':
+                value_counts = key_data[col].value_counts()
+                print(f"  {col}: {unique_count} unique values {dict(value_counts)}")
+            else:
+                print(f"  {col}: {unique_count:,} unique values")
+        
+        print(f"\nFirst few rows of filtered data:")
+        print(key_data.head())
+        
+        print(f"\nKey columns dataset successfully saved to: {output_file}")
+        
+    except Exception as e:
+        print(f"Error in main execution: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Document assumptions
+    print("COLUMN EXTRACTION ASSUMPTIONS:")
+    print("1. Input file 'step1_combined_appointments.csv' exists in analysis_data/")
+    print("2. Key columns may have slight naming variations")
+    print("3. All required columns (name, position, org, reappointed, year) must be present")
+    print("4. Output will maintain the same number of rows as input")
+    print("5. Column order will be: name, position, org, reappointed, year")
+    print("-" * 50)
+    
+    main()

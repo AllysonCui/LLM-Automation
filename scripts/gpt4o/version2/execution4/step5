@@ -1,0 +1,46 @@
+import pandas as pd
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution4/analysis_data/step3_repeats_marked.csv")
+output_dir = Path("scripts/gpt4o/version2/execution4/analysis_data")
+output_file = output_dir / "step5_reappointment_counts.csv"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    # Load data with reappointment flags
+    df = pd.read_csv(input_file)
+    print(f"Loaded input data: {df.shape[0]} rows.")
+
+    # Normalize column names
+    df.columns = df.columns.str.strip().str.lower()
+
+    # Validate columns
+    required_columns = {'org', 'year', 'reappointed'}
+    if not required_columns.issubset(df.columns):
+        raise KeyError(f"Missing one or more required columns: {required_columns}")
+
+    # Clean up data
+    df = df.dropna(subset=['org', 'year', 'reappointed'])
+
+    # Convert 'reappointed' to boolean if it's string-based
+    df['reappointed'] = df['reappointed'].astype(str).str.lower().isin(['true', '1', 'yes'])
+
+    # Count reappointments per org-year
+    reappointment_counts = (
+        df[df['reappointed']]
+        .groupby(['org', 'year'])
+        .size()
+        .reset_index(name='reappointment_count')
+    )
+
+    # Save output
+    reappointment_counts.to_csv(output_file, index=False)
+    print(f"Saved reappointment counts: {reappointment_counts.shape[0]} rows to {output_file}")
+
+except FileNotFoundError:
+    print(f"Error: Input file not found at {input_file}")
+except Exception as e:
+    print(f"An error occurred: {e}")

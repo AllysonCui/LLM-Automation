@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step1_combined_appointments.csv")
+    output_file = Path("scripts/gpt4o/version1/execution9/analysis_data/step2_key_columns_data.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except pd.errors.ParserError as e:
+        print(f"Error parsing {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Define possible name variants for each key column
+    column_variants = {
+        'reappointed': ['reappointed'],
+        'name': ['name'],
+        'position': ['position', 'appointment'],
+        'org': ['org', 'organization'],
+        'year': ['year']
+    }
+
+    selected_columns = {}
+
+    for std_name, variants in column_variants.items():
+        for variant in variants:
+            if variant in df.columns:
+                selected_columns[std_name] = variant
+                break
+        else:
+            print(f"Warning: Could not find column for '{std_name}'", file=sys.stderr)
+
+    missing_columns = [col for col in column_variants if col not in selected_columns]
+    if missing_columns:
+        print(f"Error: Missing required columns: {missing_columns}", file=sys.stderr)
+        sys.exit(1)
+
+    filtered_df = df[[selected_columns[col] for col in ['reappointed', 'name', 'position', 'org', 'year']]].copy()
+    filtered_df.columns = ['reappointed', 'name', 'position', 'org', 'year']  # Rename to standard names
+
+    filtered_df.to_csv(output_file, index=False)
+
+    print("Filtered DataFrame Info:")
+    print(filtered_df.info())
+    print("\nMissing values per column:")
+    print(filtered_df.isnull().sum())
+
+if __name__ == "__main__":
+    main()

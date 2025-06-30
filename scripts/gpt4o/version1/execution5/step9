@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from scipy import stats
+from pathlib import Path
+import os
+
+# Define the input and output paths
+input_file_path = Path("scripts/gpt4o/version1/execution5/analysis_data/step8_annual_proportions.csv")
+output_dir = Path("scripts/gpt4o/version1/execution5/analysis_data")
+
+# Create output directory if it doesn't exist
+output_dir.mkdir(parents=True, exist_ok=True)
+
+def perform_regression_analysis(df):
+    try:
+        # Prepare data for regression (X: year, Y: reappointment proportion)
+        X = df['year'].values
+        Y = df['reappointment_proportion'].values
+        
+        # Fit linear regression model using scipy.stats.linregress
+        slope, intercept, r_value, p_value, std_err = stats.linregress(X, Y)
+
+        # Calculate R-squared
+        r_squared = r_value**2
+
+        # Calculate 95% confidence intervals
+        n = len(df)  # number of data points
+        t_stat = stats.t.ppf(0.975, n - 2)  # t-statistic for 95% confidence
+        conf_interval_slope = t_stat * std_err
+        conf_interval_intercept = t_stat * std_err
+        
+        # Regression equation: Y = slope * X + intercept
+        regression_equation = f"Y = {slope:.4f} * X + {intercept:.4f}"
+        
+        # Durbin-Watson test for autocorrelation (first order)
+        residuals = Y - (slope * X + intercept)
+        durbin_watson_stat = np.sum(np.diff(residuals)**2) / np.sum(residuals**2)
+
+        # Outlier detection (using 2 standard deviations as threshold)
+        residuals_std = np.std(residuals)
+        outliers = np.where(np.abs(residuals) > 2 * residuals_std)[0]
+        
+        # Check if trend is statistically significant (p < 0.05)
+        significance = "Significant" if p_value < 0.05 else "Not Significant"
+
+        # Trend direction: Increasing (positive slope) or decreasing (negative slope)
+        trend_direction = "Increasing" if slope > 0 else "Decreasing"
+        
+        # Calculate annual change in percentage points and total change over the 12 years
+        annual_change = slope * 100  # Change per year in percentage points
+        total_change = slope * 100 * (2024 - 2013)  # Total change over 12 years in percentage points
+
+        # Print the regression results
+        print("\nRegression Results:")
+        print(f"Regression Equation: {regression_equation}")
+        print(f"Slope: {slope:.4f}, Intercept: {intercept:.4f}")
+        print(f"R-squared: {r_squared:.4f}, p-value: {p_value:.4f}")
+        print(f"Standard Error: {std_err:.4f}")
+        print(f"95% Confidence Interval for Slope: ({slope - conf_interval_slope:.4f}, {slope + conf_interval_slope:.4f})")
+        print(f"95% Confidence Interval for Intercept: ({intercept - conf_interval_intercept:.4f}, {intercept + conf_interval_intercept:.4f})")
+        print(f"Durbin-Watson Statistic: {durbin_watson_stat:.4f}")
+        print(f"Outliers: {outliers}")
+        print(f"Trend: {trend_direction} (p-value: {significance})")
+        print(f"Annual Change in Percentage Points: {annual_change:.4f}")
+        print(f"Total Change over 12 Years: {total_change:.4f} percentage points")
+
+        # Save results to a text file
+        output_file_path = output_dir / "step9_regression_results.txt"
+        with open(output_file_path, 'w') as f:
+            f.write("Regression Analysis Results\n")
+            f.write("==========================\n")
+            f.write(f"Regression Equation: Y = {slope:.4f} * X + {intercept:.4f}\n")
+            f.write(f"Slope: {slope:.4f}, Intercept: {intercept:.4f}\n")
+            f.write(f"R-squared: {r_squared:.4f}, p-value: {p_value:.4f}\n")
+            f.write(f"Standard Error: {std_err:.4f}\n")
+            f.write(f"95% Confidence Interval for Slope: ({slope - conf_interval_slope:.4f}, {slope + conf_interval_slope:.4f})\n")
+            f.write(f"95% Confidence Interval for Intercept: ({intercept - conf_interval_intercept:.4f}, {intercept + conf_interval_intercept:.4f})\n")
+            f.write(f"Durbin-Watson Statistic: {durbin_watson_stat:.4f}\n")
+            f.write(f"Outliers: {outliers}\n")
+            f.write(f"Trend: {trend_direction} (p-value: {significance})\n")
+            f.write(f"Annual Change in Percentage Points: {annual_change:.4f}\n")
+            f.write(f"Total Change over 12 Years: {total_change:.4f} percentage points\n")
+
+        return slope, intercept, r_squared, p_value, trend_direction, annual_change, total_change
+
+    except Exception as e:
+        print(f"An error occurred during regression analysis: {e}")
+
+def load_and_process_data():
+    try:
+        # Load the annual government-wide proportions from step 8
+        df = pd.read_csv(input_file_path)
+
+        # Check if 'year' and 'reappointment_proportion' columns are present
+        if 'year' not in df.columns or 'reappointment_proportion' not in df.columns:
+            raise ValueError("Missing 'year' or 'reappointment_proportion' columns in the dataset.")
+
+        # Perform regression analysis
+        return perform_regression_analysis(df)
+
+    except FileNotFoundError:
+        print(f"Error: File {input_file_path} not found.")
+    except pd.errors.EmptyDataError:
+        print(f"Error: The file {input_file_path} is empty.")
+    except ValueError as e:
+        print(f"ValueError: {e}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    load_and_process_data()

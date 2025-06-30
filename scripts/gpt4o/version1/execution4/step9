@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.stats.stattools import durbin_watson
+
+def main():
+    # Define file path for the input data and output results
+    input_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step8_annual_proportions.csv")
+    output_txt = Path("scripts/gpt4o/version1/execution4/analysis_data/step9_regression_results.txt")
+    
+    try:
+        # Load the annual reappointment proportions dataset
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        return
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty or corrupted: {input_file}", file=sys.stderr)
+        return
+    except Exception as e:
+        print(f"Error loading data: {e}", file=sys.stderr)
+        return
+
+    # Prepare data for regression (X = year, Y = reappointment proportion)
+    X = df['year']
+    Y = df['reappointment_proportion']
+
+    # Perform linear regression using scipy.stats.linregress
+    slope, intercept, r_value, p_value, std_err = stats.linregress(X, Y)
+
+    # Calculate R-squared
+    r_squared = r_value ** 2
+
+    # Calculate 95% confidence intervals for slope and intercept
+    n = len(X)  # Number of data points
+    t_value = stats.t.ppf(0.975, df=n-2)  # 95% confidence level
+    slope_se = std_err
+    intercept_se = np.std(Y) / np.sqrt(n)
+
+    slope_ci = (slope - t_value * slope_se, slope + t_value * slope_se)
+    intercept_ci = (intercept - t_value * intercept_se, intercept + t_value * intercept_se)
+
+    # Regression diagnostics: Durbin-Watson test for autocorrelation
+    model = sm.OLS(Y, sm.add_constant(X)).fit()
+    dw_stat = durbin_watson(model.resid)
+
+    # Calculate the annual change in percentage points and total change
+    annual_change = slope * 100  # Convert slope to percentage points
+    total_change = slope * 100 * (2024 - 2013)  # Total change over 12 years
+
+    # Determine if the trend is statistically significant (p-value < 0.05)
+    trend_significant = p_value < 0.05
+    trend_direction = "increasing" if slope > 0 else "decreasing"
+
+    # Prepare the summary and results
+    results = {
+        'slope': slope,
+        'intercept': intercept,
+        'r_squared': r_squared,
+        'p_value': p_value,
+        'std_err': std_err,
+        'slope_ci': slope_ci,
+        'intercept_ci': intercept_ci,
+        'dw_stat': dw_stat,
+        'annual_change': annual_change,
+        'total_change': total_change,
+        'trend_significant': trend_significant,
+        'trend_direction': trend_direction
+    }
+
+    # Save the detailed regression results to a text file
+    try:
+        with open(output_txt, 'w') as f:
+            f.write("Regression Results for Government-Wide Reappointment Proportion Trend\n")
+            f.write("-------------------------------------------------\n")
+            f.write(f"Slope: {slope:.4f}\n")
+            f.write(f"Intercept: {intercept:.4f}\n")
+            f.write(f"R-squared: {r_squared:.4f}\n")
+            f.write(f"P-value: {p_value:.4f}\n")
+            f.write(f"Standard Error of the Slope: {std_err:.4f}\n")
+            f.write(f"Slope 95% Confidence Interval: {slope_ci}\n")
+            f.write(f"Intercept 95% Confidence Interval: {intercept_ci}\n")
+            f.write(f"Durbin-Watson Statistic: {dw_stat:.4f}\n")
+            f.write(f"Annual Change (percentage points): {annual_change:.4f}\n")
+            f.write(f"Total Change (percentage points) over 12 years: {total_change:.4f}\n")
+            f.write(f"Trend is statistically significant: {'Yes' if trend_significant else 'No'}\n")
+            f.write(f"Trend direction: {trend_direction}\n")
+            f.write("-------------------------------------------------\n")
+        
+        print(f"Detailed regression results saved to: {output_txt}")
+    except Exception as e:
+        print(f"Error saving regression results: {e}", file=sys.stderr)
+
+    # Print the final conclusion
+    print("\nFinal Answer:")
+    if trend_significant:
+        print(f"The government-wide reappointment proportion trend is {trend_direction} and is statistically significant (p < 0.05).")
+    else:
+        print(f"The government-wide reappointment proportion trend is {trend_direction} but is not statistically significant (p >= 0.05).")
+
+if __name__ == "__main__":
+    main()

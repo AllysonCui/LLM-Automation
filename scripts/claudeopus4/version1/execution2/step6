@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""
+Script to calculate reappointment rates by merging employee counts and reappointment counts.
+Diagnostic version with enhanced path checking.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def check_paths():
+    """
+    Check and display all relevant paths for debugging.
+    """
+    print("Path Diagnostics:")
+    print(f"Current working directory: {os.getcwd()}")
+    
+    data_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+    print(f"Data directory path: {data_dir}")
+    print(f"Data directory absolute path: {data_dir.absolute()}")
+    print(f"Data directory exists: {data_dir.exists()}")
+    
+    if data_dir.exists():
+        print("\nFiles in data directory:")
+        for file in sorted(data_dir.iterdir()):
+            print(f"  - {file.name}")
+    
+    return data_dir
+
+def load_datasets():
+    """
+    Load employee counts (step 4) and reappointment counts (step 5).
+    """
+    data_dir = check_paths()
+    
+    employee_file = data_dir / "step4_employee_counts.csv"
+    reappointment_file = data_dir / "step5_reappointment_counts.csv"
+    
+    print(f"\nLooking for employee file: {employee_file}")
+    print(f"Employee file exists: {employee_file.exists()}")
+    
+    print(f"\nLooking for reappointment file: {reappointment_file}")
+    print(f"Reappointment file exists: {reappointment_file.exists()}")
+    
+    # Check if files exist
+    if not employee_file.exists():
+        print(f"\nError: Employee counts file not found: {employee_file}")
+        print("Please ensure step 4 has been run successfully.")
+        sys.exit(1)
+    
+    if not reappointment_file.exists():
+        print(f"\nError: Reappointment counts file not found: {reappointment_file}")
+        print("Please ensure step 5 has been run successfully.")
+        sys.exit(1)
+    
+    print("\nLoading datasets...")
+    
+    try:
+        # Load employee counts
+        df_employees = pd.read_csv(employee_file, index_col=0)
+        print(f"✓ Loaded employee counts: {df_employees.shape[0]} organizations × {df_employees.shape[1]} years")
+        
+        # Load reappointment counts
+        df_reappointments = pd.read_csv(reappointment_file, index_col=0)
+        print(f"✓ Loaded reappointment counts: {df_reappointments.shape[0]} organizations × {df_reappointments.shape[1]} years")
+        
+        return df_employees, df_reappointments
+        
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+def validate_datasets(df_employees, df_reappointments):
+    """
+    Validate that datasets are compatible for merging.
+    """
+    print("\nValidating datasets...")
+    
+    # Check column types (should be years as integers)
+    emp_cols = sorted(df_employees.columns.tolist())
+    reapp_cols = sorted(df_reappointments.columns.tolist())
+    
+    print(f"Employee counts years: {emp_cols}")
+    print(f"Reappointment counts years: {reapp_cols}")
+    
+    # Find common years
+    common_years = sorted(set(emp_cols) & set(reapp_cols))
+    print(f"Common years: {common_years}")
+    
+    if not common_years:
+        print("Error: No common years between datasets!")
+        sys.exit(1)
+    
+    # Check for data integrity
+    print(f"\nEmployee counts range: {df_employees.min().min()} - {df_employees.max().max()}")
+    print(f"Reappointment counts range: {df_reappointments.min().min()} - {df_reappointments.max().max()}")
+    
+    return common_years
+
+def merge_and_calculate_rates(df_employees, df_reappointments, common_years):
+    """
+    Merge datasets and calculate reappointment rates.
+    """
+    print("\nMerging datasets and calculating rates...")
+    
+    # Convert to long format for easier merging
+    # Employee counts
+    emp_long = df_employees[common_years].reset_index()
+    emp_long = emp_long.melt(id_vars=['org'], var_name='year', value_name='total_employees')
+    emp_long['year'] = emp_long['year'].astype(int)
+    
+    # Reappointment counts
+    reapp_long = df_reappointments[common_years].reset_index()
+    reapp_long = reapp_long.melt(id_vars=['org'], var_name='year', value_name='reappointments')
+    reapp_long['year'] = reapp_long['year'].astype(int)
+    
+    # Merge on org and year
+    merged = pd.merge(emp_long, reapp_long, on=['org', 'year'], how='left')
+    
+    # Fill missing reappointments with 0 (organizations with no reappointments)
+    merged['reappointments'] = merged['reappointments'].fillna(0).astype(int)
+    
+    # Calculate reappointment rate with division by zero handling
+    merged['reappointment_rate'] = merged.apply(
+        lambda row: row['reappointments'] / row['total_employees'] 
+        if row['total_employees'] > 0 else np.nan,
+        axis=1
+    )
+    
+    # Handle edge cases
+    print(f"\nData quality checks:")
+    zero_employees = (merged['total_employees'] == 0).sum()
+    print(f"  Org-year combinations with 0 employees: {zero_employees}")
+    
+    invalid_rates = merged['reappointment_rate'].isna().sum()
+    print(f"  Invalid reappointment rates (NaN): {invalid_rates}")
+    
+    rates_over_one = (merged['reappointment_rate'] > 1).sum()
+    if rates_over_one > 0:
+        print(f"  Warning: {rates_over_one} cases with reappointment rate > 1")
+        print("  (This can occur if reappointments exceed total appointments)")
+    
+    # Sort by org and year
+    merged = merged.sort_values(['org', 'year'])
+    
+    print(f"\n✓ Created merged dataset with {len(merged):,} rows")
+    
+    return merged
+
+def save_and_analyze(merged_df, output_path):
+    """
+    Save results and print top organizations by reappointment rate.
+    """
+    # Create output directory if it doesn't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save to CSV
+    try:
+        merged_df.to_csv(output_path, index=False)
+        print(f"\n✓ Saved reappointment rates to: {output_path}")
+        print(f"  File size: {output_path.stat().st_size:,} bytes")
+        
+        # Verify file was created
+        if output_path.exists():
+            print(f"  Verified: File exists at {output_path.absolute()}")
+        else:
+            print(f"  ERROR: File was not created!")
+            
+    except Exception as e:
+        print(f"\nError saving file: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    # Calculate average reappointment rates by organization
+    print("\n" + "="*70)
+    print("ORGANIZATIONS WITH HIGHEST AVERAGE REAPPOINTMENT RATES")
+    print("="*70)
+    
+    # Group by org and calculate statistics
+    org_stats = merged_df.groupby('org').agg({
+        'total_employees': 'sum',
+        'reappointments': 'sum',
+        'reappointment_rate': 'mean',
+        'year': 'count'
+    }).rename(columns={'year': 'years_count'})
+    
+    # Calculate overall rate (total reappointments / total employees)
+    org_stats['overall_rate'] = org_stats['reappointments'] / org_stats['total_employees']
+    
+    # Sort by average reappointment rate
+    org_stats = org_stats.sort_values('reappointment_rate', ascending=False)
+    
+    # Print top 20 organizations
+    print("\nTop 20 Organizations by Average Reappointment Rate:")
+    print("-" * 85)
+    print(f"{'Organization':<45} {'Avg Rate':>10} {'Overall':>10} {'Total Emp':>10} {'Years':>8}")
+    print("-" * 85)
+    
+    for i, (org, row) in enumerate(org_stats.head(20).iterrows(), 1):
+        org_display = org[:42] + "..." if len(str(org)) > 45 else str(org)
+        avg_rate = row['reappointment_rate'] * 100  # Convert to percentage
+        overall_rate = row['overall_rate'] * 100
+        print(f"{i:2d}. {org_display:<42} {avg_rate:>9.1f}% {overall_rate:>9.1f}% "
+              f"{int(row['total_employees']):>10,} {int(row['years_count']):>8}")
+    
+    # Summary statistics
+    print("\nSummary Statistics:")
+    valid_rates = merged_df['reappointment_rate'].dropna()
+    print(f"  Mean reappointment rate: {valid_rates.mean()*100:.2f}%")
+    print(f"  Median reappointment rate: {valid_rates.median()*100:.2f}%")
+    print(f"  Max reappointment rate: {valid_rates.max()*100:.2f}%")
+    print(f"  Organizations analyzed: {merged_df['org'].nunique()}")
+    
+    # Year trends
+    print("\nAverage Reappointment Rate by Year:")
+    yearly_avg = merged_df.groupby('year')['reappointment_rate'].mean() * 100
+    for year, rate in yearly_avg.items():
+        print(f"  {year}: {rate:.2f}%")
+
+def main():
+    """
+    Main execution function.
+    """
+    print("Reappointment Rate Calculation Script (Diagnostic Version)")
+    print("Merging employee and reappointment counts")
+    print("-" * 50)
+    
+    try:
+        # Define output path
+        output_dir = Path("scripts/claudeopus4/version1/execution2/analysis_data")
+        output_file = output_dir / "step6_reappointment_rates.csv"
+        
+        print(f"\nPlanned output file: {output_file}")
+        print(f"Output directory exists: {output_dir.exists()}")
+        
+        # Load datasets
+        df_employees, df_reappointments = load_datasets()
+        
+        # Validate datasets
+        common_years = validate_datasets(df_employees, df_reappointments)
+        
+        # Merge and calculate rates
+        merged_df = merge_and_calculate_rates(df_employees, df_reappointments, common_years)
+        
+        # Save and analyze
+        save_and_analyze(merged_df, output_file)
+        
+        print("\n✓ Script completed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

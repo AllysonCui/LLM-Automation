@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.stats.stattools import durbin_watson
+
+def main():
+    input_csv = Path("scripts/gpt4o/version1/execution8/analysis_data/step8_annual_proportions.csv")
+    output_txt = Path("scripts/gpt4o/version1/execution8/analysis_data/step9_regression_results.txt")
+
+    try:
+        df = pd.read_csv(input_csv)
+    except Exception as e:
+        print(f"[ERROR] Failed to load input CSV: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if df.empty or "year" not in df.columns or "reappointment_proportion" not in df.columns:
+        print("[ERROR] Missing required columns.", file=sys.stderr)
+        sys.exit(1)
+
+    # Drop missing values
+    df = df.dropna(subset=["year", "reappointment_proportion"])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df = df.sort_values("year")
+
+    valid_df = df[["year", "reappointment_proportion"]].dropna()
+    X = valid_df["year"].astype(float).values
+    Y = valid_df["reappointment_proportion"].astype(float).values
+
+    if len(X) < 3:
+        print("[ERROR] Not enough data points for regression.", file=sys.stderr)
+        sys.exit(1)
+
+    # Fit linear regression
+    slope, intercept, r_value, p_value, std_err = stats.linregress(X, Y)
+
+    # 95% confidence interval
+    dof = len(X) - 2
+    t_crit = stats.t.ppf(0.975, df=dof)
+    ci_low = slope - t_crit * std_err
+    ci_high = slope + t_crit * std_err
+
+    # Durbin-Watson test for autocorrelation
+    model = sm.OLS(Y, sm.add_constant(X)).fit()
+    dw_stat = durbin_watson(model.resid)
+
+    # Outlier detection (standardized residuals > 2)
+    influence = model.get_influence()
+    standardized_residuals = influence.resid_studentized_internal
+    outliers = df[np.abs(standardized_residuals) > 2]
+
+    # Trend direction and significance
+    trend = "increasing" if slope > 0 else "decreasing"
+    significant = p_value < 0.05
+    annual_change_pct = slope * 100
+    total_change_pct = annual_change_pct * (X[-1] - X[0])
+
+    # Save results to text file
+    try:
+        with open(output_txt, "w") as f:
+            f.write("Government-Wide Reappointment Rate Trend Analysis (2013–2024)\n")
+            f.write("=" * 60 + "\n")
+            f.write("Data Summary:\n")
+            f.write(df.to_string(index=False))
+            f.write("\n\nLinear Regression Results:\n")
+            f.write(f"  Equation: reappointment_rate = {intercept:.4f} + {slope:.4f} * year\n")
+            f.write(f"  R-squared: {r_value**2:.4f}\n")
+            f.write(f"  p-value: {p_value:.6f} {'(significant)' if significant else '(not significant)'}\n")
+            f.write(f"  Standard Error: {std_err:.6f}\n")
+            f.write(f"  95% Confidence Interval for slope: ({ci_low:.6f}, {ci_high:.6f})\n")
+            f.write(f"  Durbin-Watson Statistic: {dw_stat:.4f} (close to 2.0 indicates no autocorrelation)\n")
+            f.write(f"  Annual Change: {annual_change_pct:.3f} percentage points\n")
+            f.write(f"  Total Change (2013–2024): {total_change_pct:.2f} percentage points\n\n")
+
+            f.write("Outlier Years (standardized residual > 2):\n")
+            if not outliers.empty:
+                f.write(outliers[["year", "reappointment_proportion"]].to_string(index=False))
+            else:
+                f.write("  None\n")
+
+            f.write("\nConclusion:\n")
+            f.write(f"  The trend in reappointment rate is {trend}.\n")
+            f.write(f"  This trend is {'statistically significant' if significant else 'not statistically significant'} (p = {p_value:.4f}).\n")
+        print(f"[INFO] Regression results saved to: {output_txt}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save results: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Final printed answer
+    print(f"\n[RESULT] The government-wide reappointment rate is {trend} over the 12-year period.")
+    if significant:
+        print("         This trend is statistically significant (p < 0.05).")
+    else:
+        print("         However, this trend is not statistically significant (p ≥ 0.05).")
+
+if __name__ == "__main__":
+    main()

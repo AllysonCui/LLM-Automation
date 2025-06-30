@@ -1,0 +1,50 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+# Define paths
+input_file = Path("scripts/gpt4o/version2/execution7/analysis_data/step6_reappointment_rates.csv")
+output_dir = Path("scripts/gpt4o/version2/execution7/analysis_data")
+output_csv = output_dir / "step7_yearly_max_rates.csv"
+output_plot = output_dir / "step7_yearly_max_reappointment_rates.png"
+
+# Ensure output directory exists
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print("Starting Step 7: Identifying org with highest reappointment rate per year...")
+
+# Load reappointment rate data
+if not input_file.exists():
+    raise FileNotFoundError(f"[ERROR] Input file not found: {input_file}")
+
+df = pd.read_csv(input_file)
+print(f"[INFO] Loaded {len(df)} records from reappointment rates data.")
+
+# Filter out records with zero or null total appointments (invalid rates)
+df = df[df["total_appointments"] > 0].dropna(subset=["reappointment_rate"])
+
+# Identify top org by year
+max_by_year = (
+    df.sort_values(["source_year", "reappointment_rate"], ascending=[True, False])
+    .groupby("source_year")
+    .first()
+    .reset_index()
+)
+
+# Save to CSV
+max_by_year.to_csv(output_csv, index=False)
+print(f"[SUCCESS] Saved top reappointing orgs per year to {output_csv}")
+
+# Plot
+plt.figure(figsize=(12, 6))
+plt.plot(max_by_year["source_year"], max_by_year["reappointment_rate"], marker='o')
+for _, row in max_by_year.iterrows():
+    plt.text(row["source_year"], row["reappointment_rate"], row["org"], fontsize=8, ha='right')
+plt.title("Highest Reappointment Rate by Organization per Year")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Rate")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig(output_plot)
+plt.close()
+print(f"[SUCCESS] Plot saved to {output_plot}")

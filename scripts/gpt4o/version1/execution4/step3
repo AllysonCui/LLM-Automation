@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step2_key_columns_data.csv")
+    output_file = Path("scripts/gpt4o/version1/execution4/analysis_data/step3_repeats_marked.csv")
+    
+    try:
+        # Load the dataset
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        return
+    except pd.errors.EmptyDataError:
+        print(f"Error: File is empty or corrupted: {input_file}", file=sys.stderr)
+        return
+    except Exception as e:
+        print(f"Error loading data: {e}", file=sys.stderr)
+        return
+
+    # Handle potential variations in column names
+    columns_mapping = {
+        "org": ["organization", "org"],
+        "position": ["position", "appointment"],
+        "name": ["name"],
+        "reappointed": ["reappointed"]
+    }
+
+    # Standardize column names to ensure we always have these columns
+    for standard_col, possible_cols in columns_mapping.items():
+        matched_cols = [col for col in possible_cols if col in df.columns]
+        if matched_cols:
+            df[standard_col] = df[matched_cols[0]]
+        else:
+            print(f"Warning: Column for '{standard_col}' not found.", file=sys.stderr)
+            return
+
+    # Sort by year for chronological order (use 'stable' to maintain consistent sorting)
+    df.sort_values(by=["year"], kind="stable", inplace=True)
+
+    # Initialize the 'reappointed' column if it doesn't already exist
+    if 'reappointed' not in df.columns:
+        df['reappointed'] = np.nan
+
+    # Create a function to mark reappointments
+    def mark_reappointments(group):
+        group_sorted = group.sort_values(by="year", kind="stable")
+        group_sorted.loc[group_sorted.index[1:], "reappointed"] = True  # Mark all but the first as reappointments
+        return group_sorted
+
+    # Group by "name", "position", and "org", and apply the mark_reappointments function
+    df_updated = df.groupby(["name", "position", "org"], group_keys=False).apply(mark_reappointments)
+
+    # Print statistics about how many additional reappointments were identified
+    reappointments_count = df_updated["reappointed"].sum()
+    print(f"Total reappointments identified: {reappointments_count}")
+
+    # Save the updated DataFrame
+    try:
+        df_updated.to_csv(output_file, index=False)
+        print(f"Updated data saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving updated CSV: {e}", file=sys.stderr)
+
+    # Print information about the dataset
+    print("\nUpdated DataFrame Info:")
+    print(df_updated.shape)
+    print(df_updated.info())
+
+if __name__ == "__main__":
+    main()

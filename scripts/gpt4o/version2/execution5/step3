@@ -1,0 +1,35 @@
+import pandas as pd
+from pathlib import Path
+
+# File paths
+INPUT_FILE = Path("scripts/gpt4o/version2/execution5/analysis_data/step2_key_columns_data.csv")
+OUTPUT_FILE = Path("scripts/gpt4o/version2/execution5/analysis_data/step3_repeats_marked.csv")
+
+# Load input data
+try:
+    df = pd.read_csv(INPUT_FILE)
+    print(f"Loaded data with {df.shape[0]} records.")
+except Exception as e:
+    raise RuntimeError(f"Failed to load {INPUT_FILE}: {e}")
+
+# Normalize 'reappointed' values (handle booleans, strings, missing values)
+df['reappointed'] = df['reappointed'].astype(str).str.lower().str.strip().map({
+    'true': True, 'yes': True, '1': True,
+    'false': False, 'no': False, '0': False
+})
+
+# Sort to ensure consistent repeat detection
+df = df.sort_values(by=['name', 'position', 'org', 'source_year'])
+
+# Identify repeats
+df['repeated_combo'] = df.duplicated(subset=['name', 'position', 'org'], keep='first')
+
+# Mark reappointments as True if repeated, else retain existing value
+df['reappointed'] = df['reappointed'].fillna(False) | df['repeated_combo']
+
+# Drop helper column
+df = df.drop(columns=['repeated_combo'])
+
+# Save output
+df.to_csv(OUTPUT_FILE, index=False)
+print(f"Marked reappointments and saved to {OUTPUT_FILE.name} with {df.shape[0]} records.")

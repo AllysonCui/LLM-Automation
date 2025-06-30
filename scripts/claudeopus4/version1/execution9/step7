@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""
+Script to identify the organization with the highest reappointment rate
+for each year and visualize the trend over time.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from pathlib import Path
+import sys
+
+def load_and_find_yearly_max():
+    """
+    Load reappointment rates and find the organization with highest rate each year
+    """
+    # Define paths
+    data_dir = Path("scripts/claudeopus4/version1/execution9/analysis_data")
+    input_path = data_dir / "step6_reappointment_rates.csv"
+    output_csv_path = data_dir / "step7_yearly_max_rates.csv"
+    output_png_path = data_dir / "step7_yearly_max_rates.png"
+    
+    # Check if input file exists
+    if not input_path.exists():
+        print(f"Error: Input file not found at {input_path}")
+        sys.exit(1)
+    
+    # Load reappointment rates
+    print("Loading reappointment rates...")
+    try:
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Loaded data: {len(df)} rows")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_cols = ['org', 'year', 'total_employees', 'reappointments', 'reappointment_rate']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    # Filter out organizations with very few employees to avoid noise
+    # Only consider organizations with at least 3 employees in a given year
+    print("\nFiltering for organizations with at least 3 employees...")
+    df_filtered = df[df['total_employees'] >= 3].copy()
+    print(f"Filtered data: {len(df_filtered)} rows")
+    
+    # Find maximum rate for each year
+    print("\nFinding organization with highest reappointment rate each year...")
+    print("Tie-breaking approach: When multiple organizations have the same rate,")
+    print("select the one with more total employees (more statistically significant)")
+    
+    yearly_max = []
+    
+    for year in sorted(df_filtered['year'].unique()):
+        year_data = df_filtered[df_filtered['year'] == year]
+        
+        if len(year_data) == 0:
+            print(f"Warning: No data for year {year}")
+            continue
+        
+        # Find maximum rate
+        max_rate = year_data['reappointment_rate'].max()
+        
+        # Get all organizations with the maximum rate
+        max_rate_orgs = year_data[year_data['reappointment_rate'] == max_rate]
+        
+        # Handle ties: select organization with most employees
+        if len(max_rate_orgs) > 1:
+            # Sort by total_employees descending, then by org name for consistency
+            max_rate_orgs = max_rate_orgs.sort_values(
+                ['total_employees', 'org'], 
+                ascending=[False, True]
+            )
+            print(f"  {year}: Tie between {len(max_rate_orgs)} organizations at {max_rate:.2%}")
+        
+        # Select the top organization
+        top_org = max_rate_orgs.iloc[0]
+        
+        yearly_max.append({
+            'year': year,
+            'top_org': top_org['org'],
+            'max_rate': max_rate,
+            'total_employees': top_org['total_employees'],
+            'reappointments': top_org['reappointments']
+        })
+    
+    # Create DataFrame from results
+    yearly_max_df = pd.DataFrame(yearly_max)
+    
+    # Save results
+    yearly_max_df[['year', 'top_org', 'max_rate']].to_csv(output_csv_path, index=False, encoding='utf-8')
+    print(f"\n✓ Yearly maximum rates saved to: {output_csv_path}")
+    
+    # Print year-by-year results
+    print("\n" + "="*70)
+    print("YEAR-BY-YEAR HIGHEST REAPPOINTMENT RATES")
+    print("="*70)
+    print(f"{'Year':<6} {'Organization':<40} {'Rate':<8} {'Details'}")
+    print("-"*70)
+    
+    for _, row in yearly_max_df.iterrows():
+        print(f"{row['year']:<6} {row['top_org'][:39]:<40} {row['max_rate']:>6.1%}  "
+              f"({row['reappointments']}/{row['total_employees']} appointments)")
+    
+    # Create visualization
+    print("\nCreating visualization...")
+    
+    # Set up the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Plot the maximum rate over time
+    plt.plot(yearly_max_df['year'], yearly_max_df['max_rate'] * 100, 
+             'b-o', linewidth=2, markersize=8, label='Maximum Rate')
+    
+    # Add organization labels at each point
+    for idx, row in yearly_max_df.iterrows():
+        # Alternate label positions to avoid overlap
+        y_offset = 2 if idx % 2 == 0 else -2
+        plt.annotate(
+            row['top_org'][:20] + ('...' if len(row['top_org']) > 20 else ''),
+            xy=(row['year'], row['max_rate'] * 100),
+            xytext=(0, y_offset),
+            textcoords='offset points',
+            ha='center',
+            fontsize=8,
+            rotation=45 if idx % 2 == 0 else -45
+        )
+    
+    # Customize the plot
+    plt.title('Highest Reappointment Rate by Year\nNew Brunswick Government Organizations', 
+              fontsize=16, fontweight='bold')
+    plt.xlabel('Year', fontsize=12)
+    plt.ylabel('Reappointment Rate (%)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    # Set y-axis to percentage format
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
+    
+    # Set x-axis to show all years
+    plt.xticks(yearly_max_df['year'])
+    
+    # Add a horizontal line at 50% for reference
+    plt.axhline(y=50, color='r', linestyle='--', alpha=0.5, label='50% threshold')
+    
+    # Add legend
+    plt.legend(loc='best')
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig(output_png_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Visualization saved to: {output_png_path}")
+    
+    # Additional analysis
+    print("\n" + "="*50)
+    print("ADDITIONAL INSIGHTS")
+    print("="*50)
+    
+    # Organizations that appear most frequently
+    org_counts = yearly_max_df['top_org'].value_counts()
+    print("\nOrganizations appearing most frequently as yearly maximum:")
+    for org, count in org_counts.head(5).items():
+        years = yearly_max_df[yearly_max_df['top_org'] == org]['year'].tolist()
+        print(f"  - {org}: {count} years ({', '.join(map(str, years))})")
+    
+    # Trend analysis
+    if len(yearly_max_df) > 1:
+        first_rate = yearly_max_df.iloc[0]['max_rate']
+        last_rate = yearly_max_df.iloc[-1]['max_rate']
+        overall_change = (last_rate - first_rate) / first_rate * 100
+        
+        print(f"\nOverall trend:")
+        print(f"  First year ({yearly_max_df.iloc[0]['year']}): {first_rate:.1%}")
+        print(f"  Last year ({yearly_max_df.iloc[-1]['year']}): {last_rate:.1%}")
+        print(f"  Change: {overall_change:+.1f}%")
+    
+    # Statistics
+    print(f"\nStatistics across all years:")
+    print(f"  Average maximum rate: {yearly_max_df['max_rate'].mean():.1%}")
+    print(f"  Lowest maximum rate: {yearly_max_df['max_rate'].min():.1%} ({yearly_max_df.loc[yearly_max_df['max_rate'].idxmin(), 'year']})")
+    print(f"  Highest maximum rate: {yearly_max_df['max_rate'].max():.1%} ({yearly_max_df.loc[yearly_max_df['max_rate'].idxmax(), 'year']})")
+    
+    return yearly_max_df
+
+def main():
+    """
+    Main execution function
+    """
+    print("New Brunswick Government Appointments Analysis")
+    print("Step 7: Identifying Yearly Maximum Reappointment Rates")
+    print("-" * 50)
+    
+    # Find and visualize yearly maximum rates
+    yearly_max_df = load_and_find_yearly_max()
+    
+    print("\n✓ Step 7 completed successfully!")
+
+if __name__ == "__main__":
+    main()

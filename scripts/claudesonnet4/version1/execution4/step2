@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""
+Script to extract key columns from combined New Brunswick government appointment data.
+Handles variations in column naming and creates filtered dataset.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def find_column_match(columns, target_variations):
+    """
+    Find the best matching column name from a list of variations.
+    
+    Args:
+        columns (list): List of actual column names in the dataset
+        target_variations (list): List of possible column name variations
+    
+    Returns:
+        str or None: The matching column name, or None if no match found
+    """
+    # Convert all to lowercase for case-insensitive matching
+    columns_lower = [col.lower() for col in columns]
+    
+    for variation in target_variations:
+        variation_lower = variation.lower()
+        if variation_lower in columns_lower:
+            # Return the original column name (with original case)
+            return columns[columns_lower.index(variation_lower)]
+    
+    return None
+
+def identify_key_columns(df):
+    """
+    Identify key columns in the dataset, handling naming variations.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        dict: Dictionary mapping standard names to actual column names
+    """
+    # Define possible variations for each key column
+    column_variations = {
+        'reappointed': ['reappointed', 'reappointed_flag', 'is_reappointed', 'reappointment'],
+        'name': ['name', 'person_name', 'appointee_name', 'full_name'],
+        'position': ['position', 'appointment', 'role', 'title', 'job_title'],
+        'org': ['org', 'organization', 'organisation', 'department', 'agency', 'ministry'],
+        'year': ['year', 'appointment_year', 'fiscal_year']
+    }
+    
+    # Find matching columns
+    column_mapping = {}
+    available_columns = list(df.columns)
+    
+    print("Identifying key columns...")
+    
+    for standard_name, variations in column_variations.items():
+        matched_column = find_column_match(available_columns, variations)
+        
+        if matched_column:
+            column_mapping[standard_name] = matched_column
+            print(f"✓ {standard_name:<12} -> '{matched_column}'")
+        else:
+            print(f"✗ {standard_name:<12} -> No match found")
+            print(f"  Searched for: {', '.join(variations)}")
+    
+    return column_mapping
+
+def load_and_filter_data(input_file):
+    """
+    Load the combined dataset and extract key columns.
+    
+    Args:
+        input_file (str): Path to the input CSV file
+    
+    Returns:
+        pd.DataFrame: Filtered dataset with key columns
+    """
+    print(f"Loading data from: {input_file}")
+    
+    try:
+        # Load the combined dataset
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+        
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    except Exception as e:
+        raise Exception(f"Error loading data: {str(e)}")
+    
+    # Identify key columns
+    column_mapping = identify_key_columns(df)
+    
+    # Check if all required columns were found
+    missing_columns = []
+    for standard_name in ['reappointed', 'name', 'position', 'org', 'year']:
+        if standard_name not in column_mapping:
+            missing_columns.append(standard_name)
+    
+    if missing_columns:
+        print(f"\nWarning: Missing required columns: {', '.join(missing_columns)}")
+        print("Available columns in dataset:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"  {i:2d}. {col}")
+    
+    # Extract available key columns
+    filtered_columns = []
+    rename_mapping = {}
+    
+    for standard_name, actual_name in column_mapping.items():
+        filtered_columns.append(actual_name)
+        if standard_name != actual_name:
+            rename_mapping[actual_name] = standard_name
+    
+    # Create filtered dataset
+    filtered_df = df[filtered_columns].copy()
+    
+    # Rename columns to standard names
+    if rename_mapping:
+        filtered_df.rename(columns=rename_mapping, inplace=True)
+        print(f"\nRenamed columns: {rename_mapping}")
+    
+    return filtered_df
+
+def analyze_filtered_data(df):
+    """
+    Analyze the filtered dataset and print information about columns and missing values.
+    
+    Args:
+        df (pd.DataFrame): Filtered dataset
+    """
+    print("\n" + "="*50)
+    print("FILTERED DATASET ANALYSIS")
+    print("="*50)
+    
+    print(f"Dataset shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    
+    # Column information and missing values
+    print(f"\nColumn information:")
+    for col in df.columns:
+        non_null = df[col].notna().sum()
+        null_count = df[col].isna().sum()
+        null_pct = (null_count / len(df)) * 100
+        
+        print(f"  {col:<15} : {non_null:,} non-null, {null_count:,} missing ({null_pct:.1f}%)")
+    
+    # Data types
+    print(f"\nData types:")
+    for col in df.columns:
+        print(f"  {col:<15} : {df[col].dtype}")
+    
+    # Year distribution (if year column exists)
+    if 'year' in df.columns:
+        print(f"\nYear distribution:")
+        year_counts = df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} records")
+    
+    # Reappointed distribution (if reappointed column exists)
+    if 'reappointed' in df.columns:
+        print(f"\nReappointment distribution:")
+        reappointed_counts = df['reappointed'].value_counts()
+        for value, count in reappointed_counts.items():
+            print(f"  {value}: {count:,} records")
+    
+    # Sample data
+    print(f"\nSample data (first 3 rows):")
+    print(df.head(3).to_string(index=False))
+
+def save_filtered_data(df, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
+    """
+    Save filtered DataFrame to CSV file.
+    
+    Args:
+        df (pd.DataFrame): Filtered dataset
+        output_dir (str): Output directory path
+    
+    Returns:
+        str: Path to saved file
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Define output file path
+    output_file = os.path.join(output_dir, "step2_key_columns_data.csv")
+    
+    # Save to CSV
+    df.to_csv(output_file, index=False)
+    print(f"\n✓ Filtered dataset saved to: {output_file}")
+    
+    return output_file
+
+def main():
+    """Main execution function."""
+    try:
+        print("New Brunswick Appointments Data - Key Columns Extractor")
+        print("="*58)
+        
+        # Define input file path
+        input_file = "scripts/claudesonnet4/version1/execution4/analysis_data/step1_combined_appointments.csv"
+        
+        # Load and filter data
+        filtered_df = load_and_filter_data(input_file)
+        
+        # Analyze filtered data
+        analyze_filtered_data(filtered_df)
+        
+        # Save filtered data
+        output_file = save_filtered_data(filtered_df)
+        
+        print(f"\n✓ Process completed successfully!")
+        print(f"Key columns dataset available at: {output_file}")
+        
+    except Exception as e:
+        print(f"\n✗ Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

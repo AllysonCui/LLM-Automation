@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Script to combine New Brunswick government appointment data from 2013-2024.
+Loads 12 CSV files, adds year column, combines into single dataset.
+"""
+
+import pandas as pd
+import os
+from pathlib import Path
+import sys
+
+def main():
+    # Define paths
+    base_path = Path("raw_data")
+    output_dir = Path("scripts/claudeopus4/version1/execution8/analysis_data")
+    output_file = output_dir / "step1_combined_appointments.csv"
+    
+    # Create output directory if it doesn't exist
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Error creating output directory: {e}")
+        sys.exit(1)
+    
+    # Initialize list to store DataFrames
+    all_dfs = []
+    
+    # Years to process
+    years = range(2013, 2025)  # 2013 through 2024
+    
+    # Load each CSV file
+    for year in years:
+        filename = f"raw_data/appointments_{year}.csv"
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(filename, encoding='utf-8')
+            
+            # Add year column
+            df['year'] = year
+            
+            # Append to list
+            all_dfs.append(df)
+            
+            print(f"Successfully loaded {filename}: {len(df)} rows")
+            
+        except FileNotFoundError:
+            print(f"Warning: File {filename} not found, skipping...")
+            continue
+        except Exception as e:
+            print(f"Error loading {filename}: {e}")
+            continue
+    
+    # Check if any files were loaded
+    if not all_dfs:
+        print("Error: No CSV files were successfully loaded")
+        sys.exit(1)
+    
+    # Combine all DataFrames
+    try:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        print(f"\nSuccessfully combined {len(all_dfs)} files")
+    except Exception as e:
+        print(f"Error combining DataFrames: {e}")
+        sys.exit(1)
+    
+    # Save combined dataset
+    try:
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nCombined dataset saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving combined dataset: {e}")
+        sys.exit(1)
+    
+    # Print dataset information
+    print("\n" + "="*50)
+    print("COMBINED DATASET INFORMATION")
+    print("="*50)
+    print(f"\nShape: {combined_df.shape}")
+    print(f"Total rows: {len(combined_df)}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    
+    print("\nColumn names:")
+    for col in combined_df.columns:
+        print(f"  - {col}")
+    
+    print("\nData types:")
+    print(combined_df.dtypes)
+    
+    print("\nYears included:")
+    if 'year' in combined_df.columns:
+        year_counts = combined_df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count} appointments")
+    
+    print("\nFirst few rows:")
+    print(combined_df.head())
+    
+    print("\nBasic statistics:")
+    print(combined_df.describe(include='all'))
+    
+    # Check for any null values
+    print("\nNull values per column:")
+    null_counts = combined_df.isnull().sum()
+    for col, count in null_counts.items():
+        if count > 0:
+            print(f"  {col}: {count} ({count/len(combined_df)*100:.2f}%)")
+    
+    print("\nScript completed successfully!")
+
+if __name__ == "__main__":
+    main()

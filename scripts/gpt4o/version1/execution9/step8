@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+from pathlib import Path
+
+# Define file paths
+base_dir = Path("scripts/gpt4o/version1/execution9")
+input_file = base_dir / "analysis_data" / "step3_repeats_marked.csv"
+output_csv = base_dir / "analysis_data" / "step8_annual_proportions.csv"
+output_plot = base_dir / "analysis_data" / "step8_annual_reappointment_proportions.png"
+
+# Step 1: Load the dataset
+try:
+    df = pd.read_csv(input_file)
+except FileNotFoundError:
+    print(f"Error: File not found at {input_file}", file=sys.stderr)
+    sys.exit(1)
+
+# Step 2: Ensure necessary columns exist and are properly formatted
+required_columns = ["year", "reappointed"]
+missing_cols = [col for col in required_columns if col not in df.columns]
+if missing_cols:
+    print(f"Error: Missing required columns: {missing_cols}", file=sys.stderr)
+    sys.exit(1)
+
+# Convert year to integer, reappointed to boolean
+df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+df["reappointed"] = df["reappointed"].astype(str).str.lower().isin(["true", "1", "yes"])
+
+# Drop rows with invalid year
+df = df.dropna(subset=["year"])
+df["year"] = df["year"].astype(int)
+
+# Step 3: Group by year and calculate totals
+summary = (
+    df.groupby("year")
+    .agg(
+        total_appointments=("reappointed", "count"),
+        total_reappointments=("reappointed", "sum")
+    )
+    .reset_index()
+)
+
+# Step 4: Calculate proportion
+summary["reappointment_proportion"] = (
+    summary["total_reappointments"] / summary["total_appointments"]
+)
+
+# Step 5: Save summary to CSV
+summary.to_csv(output_csv, index=False)
+
+# Step 6: Create visualization
+plt.figure(figsize=(10, 6))
+plt.plot(summary["year"], summary["reappointment_proportion"], marker="o", linestyle="-")
+plt.title("Annual Government-wide Reappointment Proportion (2013–2024)")
+plt.xlabel("Year")
+plt.ylabel("Reappointment Proportion")
+plt.ylim(0, 1)
+plt.grid(True)
+plt.xticks(summary["year"].tolist())
+plt.tight_layout()
+plt.savefig(output_plot)
+
+# Step 7: Print year-by-year proportions
+print("Year-by-year government-wide reappointment proportions:")
+print(summary)

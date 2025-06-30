@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution1/analysis_data/step6_reappointment_rates.csv")
+    output_csv = Path("steps/gpt4o/version1/execution1/analysis_data/step7_yearly_max_rates.csv")
+    output_png = Path("steps/gpt4o/version1/execution1/analysis_data/step7_yearly_max_rates.png")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not {'org', 'year', 'reappointment_rate'}.issubset(df.columns):
+        print("Error: Missing required columns in dataset.", file=sys.stderr)
+        sys.exit(1)
+
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    df = df.dropna(subset=['year', 'reappointment_rate'])
+    df['year'] = df['year'].astype(int)
+
+    # Find max reappointment rate per year, handle ties by selecting first sorted by org name
+    top_orgs = (
+        df.sort_values(['year', 'reappointment_rate', 'org'], ascending=[True, False, True])
+          .groupby('year')
+          .first()
+          .reset_index()[['year', 'org', 'reappointment_rate']]
+    )
+    top_orgs.columns = ['year', 'top_org', 'max_rate']
+
+    try:
+        top_orgs.to_csv(output_csv, index=False)
+        print(f"Yearly max reappointment rates saved to {output_csv}\n")
+        print(top_orgs)
+    except Exception as e:
+        print(f"Error saving output CSV: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Plotting
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(top_orgs['year'], top_orgs['max_rate'], marker='o')
+        plt.title("Yearly Max Reappointment Rates by Top Organization")
+        plt.xlabel("Year")
+        plt.ylabel("Max Reappointment Rate")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(output_png)
+        print(f"Visualization saved to {output_png}")
+    except Exception as e:
+        print(f"Error creating or saving plot: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

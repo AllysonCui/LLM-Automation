@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""
+Script to create a summary table of appointment counts by organization and year
+from NB government appointments data.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def create_employee_counts():
+    """
+    Load dataset and create summary table of appointment counts by organization and year.
+    """
+    
+    # Input and output paths
+    data_dir = Path("scripts/claudeopus4/version1/execution6/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file {input_file} not found.")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns
+    if 'org' not in df.columns or 'year' not in df.columns:
+        print("Error: Missing required columns 'org' or 'year'")
+        sys.exit(1)
+    
+    # Data validation
+    print("\nData validation:")
+    print(f"  Total records: {len(df)}")
+    print(f"  Records with valid org: {df['org'].notna().sum()}")
+    print(f"  Records with valid year: {df['year'].notna().sum()}")
+    
+    # Clean and prepare data
+    # Remove records with missing org or year
+    df_clean = df[df['org'].notna() & df['year'].notna()].copy()
+    print(f"  Records after removing missing org/year: {len(df_clean)}")
+    
+    # Ensure year is integer
+    df_clean['year'] = pd.to_numeric(df_clean['year'], errors='coerce').astype('Int64')
+    
+    # Remove any records where year conversion failed
+    df_clean = df_clean[df_clean['year'].notna()]
+    print(f"  Records with valid numeric year: {len(df_clean)}")
+    
+    # Standardize organization names (trim whitespace)
+    df_clean['org'] = df_clean['org'].astype(str).str.strip()
+    
+    # Group by organization and year, count appointments
+    print("\nCreating summary table...")
+    appointment_counts = df_clean.groupby(['org', 'year']).size().reset_index(name='count')
+    
+    # Pivot to create the summary table (orgs as rows, years as columns)
+    summary_table = appointment_counts.pivot(index='org', columns='year', values='count')
+    
+    # Fill NaN values with 0 (no appointments that year)
+    summary_table = summary_table.fillna(0).astype(int)
+    
+    # Sort organizations by total appointments (descending)
+    summary_table['Total'] = summary_table.sum(axis=1)
+    summary_table = summary_table.sort_values('Total', ascending=False)
+    
+    # Save the summary table
+    summary_table.to_csv(output_file)
+    print(f"\nSummary table saved to: {output_file}")
+    
+    # Print summary statistics
+    print(f"\nSummary Table Overview:")
+    print(f"  Number of organizations: {len(summary_table)}")
+    print(f"  Years covered: {sorted([col for col in summary_table.columns if col != 'Total'])}")
+    print(f"  Total appointments across all years: {summary_table['Total'].sum()}")
+    
+    # Display top organizations
+    print("\nTop 10 Organizations by Total Appointments:")
+    print("-" * 60)
+    for idx, (org, row) in enumerate(summary_table.head(10).iterrows(), 1):
+        print(f"{idx:2d}. {org[:50]:<50} {int(row['Total']):>6} appointments")
+    
+    # Year-by-year statistics
+    print("\nAppointments by Year:")
+    print("-" * 40)
+    yearly_totals = {}
+    for col in summary_table.columns:
+        if col != 'Total':
+            yearly_total = summary_table[col].sum()
+            yearly_totals[col] = yearly_total
+            print(f"  {col}: {int(yearly_total):>6} appointments")
+    
+    # Identify organizations with unusual patterns
+    print("\nData Quality Checks:")
+    
+    # Check for organizations with very high single-year counts
+    high_threshold = 50  # Adjust based on expected data
+    unusual_counts = []
+    
+    for org in summary_table.index:
+        for year in summary_table.columns:
+            if year != 'Total' and summary_table.loc[org, year] > high_threshold:
+                unusual_counts.append((org, year, int(summary_table.loc[org, year])))
+    
+    if unusual_counts:
+        print(f"\nOrganizations with high appointment counts (>{high_threshold}):")
+        for org, year, count in sorted(unusual_counts, key=lambda x: x[2], reverse=True)[:5]:
+            print(f"  - {org[:40]:<40} in {year}: {count} appointments")
+    else:
+        print("  No unusually high appointment counts detected")
+    
+    # Calculate average appointments per organization per year
+    total_org_years = (summary_table.drop('Total', axis=1) > 0).sum().sum()
+    total_appointments = summary_table['Total'].sum()
+    avg_appointments = total_appointments / total_org_years if total_org_years > 0 else 0
+    print(f"\nAverage appointments per organization per active year: {avg_appointments:.1f}")
+    
+    # Show sample of the summary table
+    print("\nSample of Summary Table (first 5 orgs, last 5 years):")
+    print("-" * 80)
+    recent_years = sorted([col for col in summary_table.columns if col != 'Total'])[-5:]
+    if recent_years:
+        sample_df = summary_table.head(5)[recent_years + ['Total']]
+        print(sample_df.to_string())
+    
+    return summary_table
+
+if __name__ == "__main__":
+    # Run the employee counts analysis
+    summary_data = create_employee_counts()
+    
+    print("\nEmployee counts analysis completed successfully!")

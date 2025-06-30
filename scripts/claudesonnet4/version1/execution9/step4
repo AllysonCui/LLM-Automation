@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""
+New Brunswick Government Appointments Count Generator
+Creates a summary table of appointment counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def clean_organization_name(org):
+    """
+    Clean and standardize organization names for better grouping.
+    
+    Args:
+        org: The organization string to clean
+    
+    Returns:
+        str: Cleaned organization string
+    """
+    if pd.isna(org) or org == '':
+        return 'Unknown Organization'
+    
+    # Convert to string and strip whitespace
+    org = str(org).strip()
+    
+    # Handle empty strings after stripping
+    if org == '':
+        return 'Unknown Organization'
+    
+    # Basic cleaning - remove extra spaces
+    org = ' '.join(org.split())
+    
+    return org
+
+def validate_data_quality(df):
+    """
+    Validate data quality and identify potential issues.
+    
+    Args:
+        df: DataFrame to validate
+    
+    Returns:
+        dict: Dictionary containing validation results
+    """
+    validation_results = {
+        'total_records': len(df),
+        'missing_org': df['org'].isna().sum(),
+        'missing_year': df['year'].isna().sum(),
+        'empty_org': (df['org'] == '').sum(),
+        'duplicate_records': df.duplicated().sum(),
+        'year_range': None,
+        'org_count': df['org'].nunique(),
+        'outliers': []
+    }
+    
+    # Check year range
+    if not df['year'].isna().all():
+        min_year = df['year'].min()
+        max_year = df['year'].max()
+        validation_results['year_range'] = (min_year, max_year)
+        
+        # Check for unreasonable years
+        current_year = 2024
+        if min_year < 1900 or max_year > current_year + 5:
+            validation_results['outliers'].append(f"Unusual year range: {min_year}-{max_year}")
+    
+    # Check for organizations with unusually high appointment counts
+    org_counts = df['org'].value_counts()
+    if len(org_counts) > 0:
+        max_appointments = org_counts.max()
+        if max_appointments > 1000:  # Threshold for unusual activity
+            top_org = org_counts.index[0]
+            validation_results['outliers'].append(f"High appointment count: {top_org} ({max_appointments} appointments)")
+    
+    return validation_results
+
+def main():
+    """Main function to generate appointment counts by organization and year."""
+    
+    # Define paths
+    script_dir = Path(__file__).parent
+    analysis_data_dir = script_dir / "analysis_data"
+    input_file = analysis_data_dir / "step3_repeats_marked.csv"
+    output_file = analysis_data_dir / "step4_employee_counts.csv"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"✗ Error: Input file not found - {input_file}")
+        print("Please ensure step3_repeats_marked.csv exists in the analysis_data directory")
+        sys.exit(1)
+    
+    try:
+        # Load the dataset
+        print(f"Loading dataset from: {input_file}")
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded dataset: {df.shape[0]:,} rows, {df.shape[1]} columns")
+        
+        # Check required columns
+        required_columns = ['org', 'year']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            print(f"✗ Error: Missing required columns: {missing_columns}")
+            sys.exit(1)
+        
+        # Validate data quality
+        print("\nValidating data quality...")
+        validation = validate_data_quality(df)
+        
+        print(f"  Total records: {validation['total_records']:,}")
+        print(f"  Missing organizations: {validation['missing_org']:,}")
+        print(f"  Missing years: {validation['missing_year']:,}")
+        print(f"  Empty organizations: {validation['empty_org']:,}")
+        print(f"  Duplicate records: {validation['duplicate_records']:,}")
+        print(f"  Unique organizations: {validation['org_count']:,}")
+        
+        if validation['year_range']:
+            print(f"  Year range: {validation['year_range'][0]} - {validation['year_range'][1]}")
+        
+        if validation['outliers']:
+            print("  Data quality warnings:")
+            for outlier in validation['outliers']:
+                print(f"    ⚠ {outlier}")
+        
+        # Create a copy for processing
+        df_processed = df.copy()
+        
+        # Clean organization names
+        print("\nCleaning organization names...")
+        df_processed['org_cleaned'] = df_processed['org'].apply(clean_organization_name)
+        
+        # Handle missing years
+        missing_years = df_processed['year'].isna().sum()
+        if missing_years > 0:
+            print(f"Handling {missing_years} records with missing years...")
+            # Option 1: Fill with median year
+            median_year = df_processed['year'].median()
+            df_processed['year'] = df_processed['year'].fillna(median_year)
+            print(f"  Filled missing years with median year: {median_year}")
+        
+        # Ensure year is integer
+        df_processed['year'] = df_processed['year'].astype(int)
+        
+        # Group by organization and year, count appointments
+        print("\nGenerating appointment counts...")
+        counts_df = df_processed.groupby(['org_cleaned', 'year']).size().reset_index(name='appointment_count')
+        
+        # Create pivot table with organizations as rows, years as columns
+        pivot_table = counts_df.pivot(index='org_cleaned', columns='year', values='appointment_count')
+        
+        # Fill missing values with 0 (no appointments)
+        pivot_table = pivot_table.fillna(0).astype(int)
+        
+        # Sort columns (years) and index (organizations)
+        pivot_table = pivot_table.sort_index(axis=1)  # Sort years
+        pivot_table = pivot_table.sort_index(axis=0)  # Sort organizations
+        
+        # Add total column for each organization
+        pivot_table['Total'] = pivot_table.sum(axis=1)
+        
+        # Sort by total appointments (descending)
+        pivot_table = pivot_table.sort_values('Total', ascending=False)
+        
+        # Save the counts table
+        pivot_table.to_csv(output_file)
+        print(f"✓ Saved appointment counts to: {output_file}")
+        
+        # Print summary statistics
+        print("\n" + "="*60)
+        print("APPOINTMENT COUNTS SUMMARY")
+        print("="*60)
+        
+        print(f"Organizations analyzed: {len(pivot_table):,}")
+        print(f"Years covered: {pivot_table.columns[:-1].min()} - {pivot_table.columns[:-1].max()}")
+        print(f"Total appointments: {pivot_table['Total'].sum():,}")
+        
+        # Show top organizations by total appointments
+        print(f"\nTop 10 organizations by total appointments:")
+        top_orgs = pivot_table.head(10)
+        for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
+            print(f"  {i:2d}. {org[:50]:<50} {row['Total']:,}")
+        
+        # Show year-by-year totals
+        print(f"\nAppointments by year:")
+        year_totals = pivot_table.drop('Total', axis=1).sum(axis=0).sort_index()
+        for year, total in year_totals.items():
+            print(f"  {year}: {total:,}")
+        
+        # Show organizations with highest activity in recent years
+        recent_years = pivot_table.columns[:-1][-3:]  # Last 3 years of data
+        if len(recent_years) > 0:
+            print(f"\nMost active organizations in recent years ({recent_years.min()}-{recent_years.max()}):")
+            recent_activity = pivot_table[recent_years].sum(axis=1).sort_values(ascending=False)
+            for i, (org, count) in enumerate(recent_activity.head(5).items(), 1):
+                print(f"  {i}. {org[:50]:<50} {count:,}")
+        
+        # Display sample of the pivot table
+        print(f"\nSample of appointment counts table (first 10 organizations):")
+        display_cols = list(pivot_table.columns[-6:])  # Show last 5 years + total
+        sample_table = pivot_table.head(10)[display_cols]
+        print(sample_table.to_string())
+        
+        # Data quality summary
+        print(f"\nData quality summary:")
+        zero_appointment_orgs = (pivot_table['Total'] == 0).sum()
+        single_appointment_orgs = (pivot_table['Total'] == 1).sum()
+        high_activity_orgs = (pivot_table['Total'] > 100).sum()
+        
+        print(f"  Organizations with zero appointments: {zero_appointment_orgs}")
+        print(f"  Organizations with single appointment: {single_appointment_orgs}")
+        print(f"  Organizations with >100 appointments: {high_activity_orgs}")
+        
+        # Check for reasonable count ranges
+        max_count = pivot_table['Total'].max()
+        avg_count = pivot_table['Total'].mean()
+        print(f"  Average appointments per organization: {avg_count:.1f}")
+        print(f"  Maximum appointments (single org): {max_count:,}")
+        
+        if max_count > 500:
+            max_org = pivot_table['Total'].idxmax()
+            print(f"    ⚠ High activity organization: {max_org}")
+        
+        print("\n✓ Appointment counts generation completed successfully!")
+        
+    except Exception as e:
+        print(f"✗ Error processing dataset: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

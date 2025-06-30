@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""
+Script to calculate annual government-wide reappointment proportions
+for New Brunswick government appointments from 2013-2024.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+
+def calculate_annual_proportions():
+    """
+    Load dataset and calculate overall reappointment proportions by year.
+    """
+    
+    # Input and output paths
+    data_dir = Path("scripts/claudeopus4/version1/execution6/analysis_data")
+    input_file = data_dir / "step3_repeats_marked.csv"
+    output_file = data_dir / "step8_annual_proportions.csv"
+    output_plot = data_dir / "step8_annual_reappointment_proportions.png"
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"Error: Input file {input_file} not found.")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded dataset with shape: {df.shape}")
+    except Exception as e:
+        print(f"Error loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Check required columns
+    if 'year' not in df.columns or 'reappointed' not in df.columns:
+        print("Error: Missing required columns 'year' or 'reappointed'")
+        sys.exit(1)
+    
+    # Convert reappointed to boolean if needed
+    if df['reappointed'].dtype == 'object':
+        df['reappointed'] = df['reappointed'].astype(str).str.lower().isin(['true', '1', 'yes'])
+    
+    # Ensure year is numeric
+    df['year'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Remove records with invalid year
+    df = df[df['year'].notna()]
+    print(f"Records with valid year: {len(df)}")
+    
+    # Get unique years and sort them
+    years = sorted(df['year'].unique().astype(int))
+    print(f"\nYears in dataset: {years}")
+    
+    # Calculate proportions for each year
+    annual_results = []
+    
+    print("\nCalculating annual reappointment proportions...")
+    print("=" * 70)
+    print(f"{'Year':<6} {'Total Appointments':<20} {'Reappointments':<15} {'Proportion':<10}")
+    print("-" * 70)
+    
+    for year in years:
+        year_data = df[df['year'] == year]
+        
+        # Count total appointments for the year
+        total_appointments = len(year_data)
+        
+        # Count total reappointments for the year
+        total_reappointments = year_data['reappointed'].sum()
+        
+        # Calculate proportion
+        if total_appointments > 0:
+            reappointment_proportion = total_reappointments / total_appointments
+        else:
+            reappointment_proportion = 0.0
+        
+        # Store results
+        annual_results.append({
+            'year': int(year),
+            'total_appointments': int(total_appointments),
+            'total_reappointments': int(total_reappointments),
+            'reappointment_proportion': reappointment_proportion
+        })
+        
+        # Print results
+        print(f"{year:<6} {total_appointments:<20} {total_reappointments:<15} {reappointment_proportion:<10.1%}")
+    
+    # Create results DataFrame
+    results_df = pd.DataFrame(annual_results)
+    
+    # Save results
+    results_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\nResults saved to: {output_file}")
+    
+    # Create visualization
+    print(f"\nCreating visualization...")
+    
+    # Set up the plot with a clean style
+    plt.style.use('seaborn-whitegrid')
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Plot 1: Reappointment proportion trend
+    ax1.plot(results_df['year'], results_df['reappointment_proportion'] * 100, 
+             marker='o', linewidth=3, markersize=10, color='darkblue', label='Reappointment Rate')
+    
+    # Add trend line
+    z = np.polyfit(results_df['year'], results_df['reappointment_proportion'] * 100, 1)
+    p = np.poly1d(z)
+    ax1.plot(results_df['year'], p(results_df['year']), "--", color='red', 
+             linewidth=2, alpha=0.7, label=f'Trend (slope: {z[0]:.2f}% per year)')
+    
+    ax1.set_title('New Brunswick Government-wide Reappointment Rate (2013-2024)', 
+                  fontsize=16, fontweight='bold', pad=20)
+    ax1.set_xlabel('Year', fontsize=12)
+    ax1.set_ylabel('Reappointment Rate (%)', fontsize=12)
+    ax1.set_ylim(0, max(results_df['reappointment_proportion'] * 100) * 1.2)
+    ax1.legend(loc='best', fontsize=10)
+    ax1.grid(True, alpha=0.3)
+    
+    # Add value labels
+    for idx, row in results_df.iterrows():
+        ax1.text(row['year'], row['reappointment_proportion'] * 100 + 0.5, 
+                f"{row['reappointment_proportion']:.1%}", 
+                ha='center', va='bottom', fontsize=9)
+    
+    # Plot 2: Total appointments and reappointments
+    x = np.arange(len(results_df['year']))
+    width = 0.35
+    
+    bars1 = ax2.bar(x - width/2, results_df['total_appointments'], width, 
+                     label='Total Appointments', color='lightblue', edgecolor='darkblue')
+    bars2 = ax2.bar(x + width/2, results_df['total_reappointments'], width, 
+                     label='Reappointments', color='darkgreen', alpha=0.8)
+    
+    ax2.set_title('Annual Appointment Volumes', fontsize=14, fontweight='bold', pad=20)
+    ax2.set_xlabel('Year', fontsize=12)
+    ax2.set_ylabel('Number of Appointments', fontsize=12)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(results_df['year'])
+    ax2.legend(loc='best', fontsize=10)
+    ax2.grid(True, axis='y', alpha=0.3)
+    
+    # Add value labels on bars
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:
+                ax2.text(bar.get_x() + bar.get_width()/2., height + 1,
+                        f'{int(height)}', ha='center', va='bottom', fontsize=8)
+    
+    plt.tight_layout()
+    plt.savefig(output_plot, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to: {output_plot}")
+    plt.close()
+    
+    # Print summary statistics
+    print("\nSummary Statistics:")
+    print(f"  Total appointments (2013-2024): {results_df['total_appointments'].sum():,}")
+    print(f"  Total reappointments (2013-2024): {results_df['total_reappointments'].sum():,}")
+    print(f"  Overall reappointment rate: {results_df['total_reappointments'].sum() / results_df['total_appointments'].sum():.1%}")
+    print(f"  Average annual reappointment rate: {results_df['reappointment_proportion'].mean():.1%}")
+    print(f"  Highest rate: {results_df['reappointment_proportion'].max():.1%} in {results_df.loc[results_df['reappointment_proportion'].idxmax(), 'year']}")
+    print(f"  Lowest rate: {results_df['reappointment_proportion'].min():.1%} in {results_df.loc[results_df['reappointment_proportion'].idxmin(), 'year']}")
+    
+    # Trend analysis
+    if len(results_df) > 1:
+        rate_change = (results_df['reappointment_proportion'].iloc[-1] - results_df['reappointment_proportion'].iloc[0]) * 100
+        print(f"\nTrend: Reappointment rate changed by {rate_change:+.1f} percentage points from 2013 to 2024")
+        
+        # Calculate if trend is increasing or decreasing
+        if z[0] > 0:
+            print(f"The reappointment rate shows an increasing trend of {z[0]:.2f}% per year")
+        else:
+            print(f"The reappointment rate shows a decreasing trend of {abs(z[0]):.2f}% per year")
+    
+    return results_df
+
+if __name__ == "__main__":
+    # Run the annual proportions analysis
+    proportions_data = calculate_annual_proportions()
+    
+    print("\nAnnual proportions analysis completed successfully!")

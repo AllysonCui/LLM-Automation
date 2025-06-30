@@ -1,0 +1,58 @@
+import os
+import subprocess
+import time
+from collections import defaultdict
+from pathlib import Path
+
+# Base directories
+base_dirs = [
+    "scripts/gpt4o/version1",
+    "scripts/gpt4o/version2",
+    "scripts/gpt4o/version3",
+    "scripts/claudeopus4/version1",
+    "scripts/claudesonnet4/version1"
+]
+
+# Runtime tracking
+timing_results = defaultdict(list)
+
+for base_dir in base_dirs:
+    model = base_dir.split("/")[1]
+    version = base_dir.split("/")[2]
+
+    for subfolder in sorted(os.listdir(base_dir)):
+        if not subfolder.startswith("execution"):
+            continue
+        execution_path = os.path.join(base_dir, subfolder)
+
+        if not os.path.isdir(execution_path):
+            continue
+
+        for script_name in sorted(os.listdir(execution_path)):
+            if script_name.startswith("step") :
+                script_path = os.path.join(execution_path, script_name)
+                start = time.time()
+                try:
+                    for script_name in sorted(os.listdir(execution_path)):
+                        if script_name.startswith("step") and script_name.endswith(".py"):
+                            script_path = os.path.join(execution_path, script_name)
+                            print(f"Running: {script_path}")
+
+                    subprocess.run(
+                        ["python3", script_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                    )
+                    elapsed = time.time() - start
+                    timing_results[(model, version)].append(elapsed)
+                except subprocess.CalledProcessError:
+                    continue  # skip failed scripts
+
+# Print markdown table
+print("| Model | Version | Average Running Time (s) |")
+print("|--------|---------|---------------------------|")
+for (model, version), times in sorted(timing_results.items()):
+    if times:
+        avg_time = sum(times) / len(times)
+        print(f"| {model} | {version} | {avg_time:.3f} |")

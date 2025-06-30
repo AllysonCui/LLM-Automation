@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def main():
+    emp_counts_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step4_employee_counts.csv")
+    reapp_counts_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step5_reappointment_counts.csv")
+    output_file = Path("scripts/gpt4o/version1/execution7/analysis_data/step6_reappointment_rates.csv")
+
+    try:
+        emp_df = pd.read_csv(emp_counts_file, index_col=0)
+        reapp_df = pd.read_csv(reapp_counts_file, index_col=0)
+    except Exception as e:
+        print(f"Error loading input files: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Unpivot to long format for merge
+    emp_long = emp_df.reset_index().melt(id_vars='org', var_name='year', value_name='total_employees')
+    reapp_long = reapp_df.reset_index().melt(id_vars='org', var_name='year', value_name='reappointments')
+
+    # Convert year to int
+    emp_long['year'] = pd.to_numeric(emp_long['year'], errors='coerce').astype('Int64')
+    reapp_long['year'] = pd.to_numeric(reapp_long['year'], errors='coerce').astype('Int64')
+
+    # Merge both datasets
+    merged = pd.merge(emp_long, reapp_long, on=['org', 'year'], how='outer')
+
+    # Fill missing counts with 0
+    merged['total_employees'] = merged['total_employees'].fillna(0).astype(int)
+    merged['reappointments'] = merged['reappointments'].fillna(0).astype(int)
+
+    # Calculate reappointment rate safely
+    merged['reappointment_rate'] = np.where(
+        merged['total_employees'] > 0,
+        merged['reappointments'] / merged['total_employees'],
+        np.nan
+    )
+
+    # Save output
+    try:
+        merged.to_csv(output_file, index=False)
+        print(f"Reappointment rate table saved to {output_file}")
+    except Exception as e:
+        print(f"Error saving output file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Summary: top orgs by average reappointment rate
+    avg_rates = merged.groupby('org')['reappointment_rate'].mean().dropna().sort_values(ascending=False)
+    print("\nTop 5 Organizations by Average Reappointment Rate:")
+    print(avg_rates.head(5))
+
+if __name__ == "__main__":
+    main()

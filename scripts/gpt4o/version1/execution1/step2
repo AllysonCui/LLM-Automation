@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import pandas as pd
+import numpy as np
+import os
+from pathlib import Path
+import sys
+
+def normalize_columns(columns):
+    """Normalize column names to make it easier to match key fields."""
+    col_map = {}
+    for col in columns:
+        norm = col.strip().lower()
+        if norm in ['org', 'organization']:
+            col_map['org'] = col
+        elif norm in ['position', 'appointment']:
+            col_map['position'] = col
+        elif norm in ['name']:
+            col_map['name'] = col
+        elif norm in ['reappointed']:
+            col_map['reappointed'] = col
+        elif norm in ['year']:
+            col_map['year'] = col
+    return col_map
+
+def main():
+    input_file = Path("steps/gpt4o/version1/execution1/analysis_data/step1_combined_appointments.csv")
+    output_file = Path("steps/gpt4o/version1/execution1/analysis_data/step2_key_columns_data.csv")
+
+    try:
+        df = pd.read_csv(input_file)
+    except FileNotFoundError:
+        print(f"Error: Input file not found: {input_file}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading input file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    col_map = normalize_columns(df.columns)
+
+    required_keys = ['reappointed', 'name', 'position', 'org', 'year']
+    missing_keys = [key for key in required_keys if key not in col_map]
+    if missing_keys:
+        print(f"Error: Missing required columns: {missing_keys}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        filtered_df = df[[col_map[key] for key in required_keys]].copy()
+        filtered_df.columns = required_keys  # Rename to standard names
+        filtered_df.to_csv(output_file, index=False)
+        print(f"Filtered dataset saved to {output_file}")
+        print("Extracted columns:", filtered_df.columns.tolist())
+        print("Missing values per column:\n", filtered_df.isnull().sum())
+    except Exception as e:
+        print(f"Error processing and saving filtered dataset: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
