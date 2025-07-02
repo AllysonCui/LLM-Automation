@@ -1,48 +1,62 @@
-import os
+#!/usr/bin/env python3
+"""
+Script to identify repeat appointments based on name, position, and org.
+
+Author: Allyson Cui
+Date: 2025-06-09
+"""
+
 import pandas as pd
 from pathlib import Path
+import sys
 
-# Load correct answer
-correct_path = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
-correct_answer = pd.read_csv(correct_path)
+def main():
+    input_path = Path("scripts/human/version1/analysis_data/step2_key_columns_data.csv")
+    output_path = Path("scripts/human/version1/analysis_data/step3_repeats_marked.csv")
 
-# Extract and round correct float values
-correct_col = correct_answer.select_dtypes(include=['float']).iloc[:, 0].round(3).tolist()
+    df = pd.read_csv(input_path)
 
-# Define base paths and result collection
-base_paths = [
-    ("chatgpt4o", "version1"),
-    ("chatgpt4o", "version2"),
-    ("chatgpt4o", "version3"),
-    ("claudeopus4", "version1"),
-    ("claudesonnet4", "version1")
-]
+    # Prepare data
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df["reappointed"] = df["reappointed"].astype(bool)
+    df = df[df["org"].astype(str).str.strip() != '"']
 
-results = []
+    # Original reappointment count
+    original_reappointed_count = df["reappointed"].sum()
 
-# Traverse each model and version
-for model, version in base_paths:
-    base_dir = Path(f"scripts/{model}/{version}")
-    total = 0
-    correct = 0
+    df["__name_norm"] = df["name"].astype(str).str.strip().str.lower()
+    df["__position_norm"] = df["position"].astype(str).str.strip().str.lower()
+    df["__org_norm"] = df["org"].astype(str).str.strip().str.lower()
+    df = df.sort_values(by=["__name_norm", "__position_norm", "__org_norm", "year"], kind="stable")
+    new_reappointed_mask = pd.Series(False, index=df.index)
 
-    for subdir in base_dir.glob("execution*/analysis_data"):
-        file_path = subdir / "step7_yearly_max_rates.csv"
-        if file_path.exists():
-            try:
-                df = pd.read_csv(file_path)
-                values = df.select_dtypes(include=['float']).iloc[:, 0].round(3).tolist()
-                if len(values) == len(correct_col) and all(v in correct_col for v in values):
-                    correct += 1
-                total += 1
-            except Exception:
-                continue
+    # Mark reappointments
+    # Group by normalized name, position, and org
+    # and check if there are multiple entries for the same person in the same position at the same org
+    # with different years
+    group_cols = ["__name_norm", "__position_norm", "__org_norm"]
+    grouped = df.groupby(group_cols)
+    for group_key, group_df in grouped:
+        if group_df.empty or group_df["year"].isnull().all():
+            continue
+        sorted_group = group_df.sort_values(by="year", kind="stable")
+        idx_to_mark = sorted_group.iloc[1:].index.tolist()  # all but first
+        new_reappointed_mask.loc[idx_to_mark] = True
 
-    accuracy = correct / total if total > 0 else 0
-    results.append((model, version, round(accuracy, 3)))
+    # Combine with existing reappointment info
+    updates_to_apply = new_reappointed_mask & (~df["reappointed"])
+    df.loc[updates_to_apply, "reappointed"] = True
 
-# Output markdown table
-print("| Model         | Version   | Avg Correct Rate |")
-print("|---------------|-----------|------------------|")
-for model, version, rate in results:
-    print(f"| {model:<13} | {version:<9} | {rate:<16} |")
+    # Final reappointed count
+    final_reappointed_count = df["reappointed"].sum()
+    additional_marked = final_reappointed_count - original_reappointed_count
+
+    df.drop(columns=["__name_norm", "__position_norm", "__org_norm"], inplace=True)
+    df.to_csv(output_path, index=False)
+    print(f"✓ Saved updated dataset to {output_path}")
+    print(f"\n→ Original reappointments: {original_reappointed_count:,}")
+    print(f"→ Additional marked as reappointments: {additional_marked:,}")
+    print(f"→ Total reappointments after update: {final_reappointed_count:,}")
+
+if __name__ == "__main__":
+    main()
