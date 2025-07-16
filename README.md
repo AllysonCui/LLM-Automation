@@ -77,3 +77,10 @@ LLMs answer the question by generating scripts in numerical order, all scripts e
       * `version3/`
     * `human/` — Contains correct answer verified manually
   * `summary/` — Summary analysis over correctness of intermediate results
+    * `claude_api/` - Ignore this for now
+    * `general/` - Tests that run through all executions
+    * `step_specific/` — Tests that are specific to each step
+      * `step1/`
+      * `step2/` 
+        * `length` - Examine how many different types of results are there in terms of the number of rows they have
+        * `correctness` - Examine whether the result is correct given its length
