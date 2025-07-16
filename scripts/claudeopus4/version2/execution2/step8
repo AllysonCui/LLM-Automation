@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+"""
+Step 8: Compute government-wide reappointment proportions
+This script calculates the overall reappointment proportion for each year
+across all government organizations.
+
+Author: Data Analysis Script
+Date: 2025-07-05
+Input: analysis_data/step6_reappointment_rates.csv
+Output: 
+  - analysis_data/step8_annual_proportions.csv
+  - analysis_data/step8_annual_reappointment_proportions.png
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import sys
+
+def setup_paths():
+    """Setup input and output paths."""
+    script_dir = Path(__file__).parent
+    analysis_dir = script_dir / "analysis_data"
+    
+    input_file = analysis_dir / "step6_reappointment_rates.csv"
+    output_file = analysis_dir / "step8_annual_proportions.csv"
+    plot_file = analysis_dir / "step8_annual_reappointment_proportions.png"
+    
+    return input_file, output_file, plot_file, analysis_dir
+
+def load_rate_data(input_file):
+    """Load reappointment rate data from step 6."""
+    print(f"\nLoading data from: {input_file}")
+    
+    try:
+        rates_data = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(rates_data):,} org-year rate records")
+        
+        # Ensure required columns exist
+        required_cols = ['year', 'reappointment_count', 'total_employees', 'org']
+        missing_cols = [col for col in required_cols if col not in rates_data.columns]
+        
+        if missing_cols:
+            print(f"✗ ERROR: Missing required columns: {missing_cols}")
+            return None
+            
+        return rates_data
+        
+    except Exception as e:
+        print(f"✗ ERROR loading file: {str(e)}")
+        return None
+
+def compute_annual_proportions(rates_data):
+    """Compute government-wide reappointment proportions by year."""
+    print("\nComputing annual government-wide proportions...")
+    
+    # Aggregate by year
+    annual_stats = rates_data.groupby('year').agg({
+        'reappointment_count': 'sum',
+        'total_employees': 'sum',
+        'org': 'nunique'
+    }).reset_index()
+    
+    # Calculate proportion (as percentage)
+    annual_stats['reappointment_proportion'] = (
+        annual_stats['reappointment_count'] / annual_stats['total_employees'] * 100
+    )
+    
+    # Add additional statistics
+    annual_stats['appointments_per_org'] = (
+        annual_stats['total_employees'] / annual_stats['org']
+    )
+    
+    # Rename columns for clarity
+    annual_stats = annual_stats.rename(columns={
+        'org': 'active_organizations',
+        'reappointment_count': 'total_reappointments',
+        'total_employees': 'total_appointments'
+    })
+    
+    # Sort by year
+    annual_stats = annual_stats.sort_values('year')
+    
+    print(f"✓ Computed proportions for {len(annual_stats)} years")
+    
+    return annual_stats
+
+def analyze_proportion_trends(annual_stats):
+    """Analyze trends in government-wide reappointment proportions."""
+    print("\n" + "-"*60)
+    print("GOVERNMENT-WIDE REAPPOINTMENT PROPORTION ANALYSIS:")
+    print("-"*60)
+    
+    # Display annual proportions
+    print("\nAnnual reappointment proportions:")
+    print(f"{'Year':>6} {'Proportion':>12} {'Reappointments':>16} {'Total Appts':>14} {'Active Orgs':>13}")
+    print("-" * 63)
+    
+    for _, row in annual_stats.iterrows():
+        print(f"{row['year']:>6.0f} {row['reappointment_proportion']:>11.1f}% "
+              f"{row['total_reappointments']:>16,} {row['total_appointments']:>14,} "
+              f"{row['active_organizations']:>13}")
+    
+    # Calculate overall statistics
+    print("\nSummary statistics:")
+    print(f"  - Average annual proportion: {annual_stats['reappointment_proportion'].mean():.1f}%")
+    print(f"  - Median annual proportion: {annual_stats['reappointment_proportion'].median():.1f}%")
+    print(f"  - Standard deviation: {annual_stats['reappointment_proportion'].std():.1f}%")
+    print(f"  - Range: {annual_stats['reappointment_proportion'].min():.1f}% - "
+          f"{annual_stats['reappointment_proportion'].max():.1f}%")
+    
+    # Trend analysis
+    print("\nTrend analysis:")
+    
+    # Calculate linear trend
+    from scipy import stats as scipy_stats
+    slope, intercept, r_value, p_value, std_err = scipy_stats.linregress(
+        annual_stats['year'], 
+        annual_stats['reappointment_proportion']
+    )
+    
+    print(f"  - Linear trend slope: {slope:.3f}% per year")
+    print(f"  - R-squared: {r_value**2:.3f}")
+    print(f"  - P-value: {p_value:.4f}")
+    
+    if p_value < 0.05:
+        trend_direction = "increasing" if slope > 0 else "decreasing"
+        print(f"  - Trend: Statistically significant {trend_direction} trend")
+    else:
+        print(f"  - Trend: No statistically significant trend")
+    
+    # Period comparison
+    mid_year = annual_stats['year'].median()
+    first_half = annual_stats[annual_stats['year'] <= mid_year]
+    second_half = annual_stats[annual_stats['year'] > mid_year]
+    
+    first_half_avg = first_half['reappointment_proportion'].mean()
+    second_half_avg = second_half['reappointment_proportion'].mean()
+    
+    print(f"\nPeriod comparison:")
+    print(f"  - First half average ({first_half['year'].min():.0f}-{first_half['year'].max():.0f}): {first_half_avg:.1f}%")
+    print(f"  - Second half average ({second_half['year'].min():.0f}-{second_half['year'].max():.0f}): {second_half_avg:.1f}%")
+    print(f"  - Change: {second_half_avg - first_half_avg:+.1f} percentage points")
+    
+    return slope, intercept, r_value
+
+def analyze_volume_changes(annual_stats):
+    """Analyze changes in appointment volumes over time."""
+    print("\n" + "-"*60)
+    print("APPOINTMENT VOLUME ANALYSIS:")
+    print("-"*60)
+    
+    # Year-over-year changes
+    print("\nYear-over-year changes in total appointments:")
+    
+    for i in range(1, len(annual_stats)):
+        prev_row = annual_stats.iloc[i-1]
+        curr_row = annual_stats.iloc[i]
+        
+        appt_change = curr_row['total_appointments'] - prev_row['total_appointments']
+        appt_pct_change = (appt_change / prev_row['total_appointments']) * 100
+        
+        reapp_change = curr_row['total_reappointments'] - prev_row['total_reappointments']
+        reapp_pct_change = (reapp_change / prev_row['total_reappointments']) * 100
+        
+        print(f"  {prev_row['year']:.0f} → {curr_row['year']:.0f}:")
+        print(f"    - Total appointments: {appt_change:+,} ({appt_pct_change:+.1f}%)")
+        print(f"    - Reappointments: {reapp_change:+,} ({reapp_pct_change:+.1f}%)")
+    
+    # Overall growth
+    first_year = annual_stats.iloc[0]
+    last_year = annual_stats.iloc[-1]
+    
+    total_growth = ((last_year['total_appointments'] - first_year['total_appointments']) / 
+                   first_year['total_appointments'] * 100)
+    reapp_growth = ((last_year['total_reappointments'] - first_year['total_reappointments']) / 
+                   first_year['total_reappointments'] * 100)
+    
+    print(f"\nOverall growth ({first_year['year']:.0f}-{last_year['year']:.0f}):")
+    print(f"  - Total appointments: {total_growth:+.1f}%")
+    print(f"  - Reappointments: {reapp_growth:+.1f}%")
+    
+    if reapp_growth > total_growth:
+        print(f"  - Reappointments growing faster than total appointments")
+    else:
+        print(f"  - Total appointments growing faster than reappointments")
+
+def create_comprehensive_visualization(annual_stats, slope, intercept, plot_file):
+    """Create comprehensive visualization of annual proportions."""
+    print("\nCreating visualization...")
+    
+    # Set up the plot style
+    try:
+        plt.style.use('seaborn-darkgrid')
+    except:
+        try:
+            plt.style.use('seaborn')
+        except:
+            plt.style.use('default')
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    
+    # Plot 1: Reappointment proportion over time with trend line
+    ax1.plot(annual_stats['year'], annual_stats['reappointment_proportion'], 
+             marker='o', linewidth=2.5, markersize=10, color='darkblue', label='Actual')
+    
+    # Add trend line
+    trend_years = annual_stats['year']
+    trend_values = slope * trend_years + intercept
+    ax1.plot(trend_years, trend_values, '--', color='red', linewidth=2, 
+             label=f'Trend ({slope:.2f}% per year)')
+    
+    # Add average line
+    avg_proportion = annual_stats['reappointment_proportion'].mean()
+    ax1.axhline(y=avg_proportion, color='green', linestyle=':', alpha=0.7, 
+                label=f'Average: {avg_proportion:.1f}%')
+    
+    ax1.set_xlabel('Year', fontsize=12)
+    ax1.set_ylabel('Reappointment Proportion (%)', fontsize=12)
+    ax1.set_title('Government-wide Reappointment Proportion by Year', fontsize=14, fontweight='bold')
+    ax1.legend(loc='best')
+    ax1.grid(True, alpha=0.3)
+    
+    # Annotate significant years
+    max_idx = annual_stats['reappointment_proportion'].idxmax()
+    max_row = annual_stats.loc[max_idx]
+    ax1.annotate(f'Peak: {max_row["reappointment_proportion"]:.1f}%', 
+                 xy=(max_row['year'], max_row['reappointment_proportion']),
+                 xytext=(max_row['year']-1, max_row['reappointment_proportion']+2),
+                 arrowprops=dict(arrowstyle='->', color='red', alpha=0.5))
+    
+    # Plot 2: Total appointments and reappointments
+    ax2_twin = ax2.twinx()
+    
+    bars = ax2.bar(annual_stats['year'], annual_stats['total_appointments'], 
+                    alpha=0.6, color='lightblue', label='Total Appointments')
+    line = ax2_twin.plot(annual_stats['year'], annual_stats['total_reappointments'], 
+                         color='darkred', linewidth=2.5, marker='o', markersize=8, 
+                         label='Reappointments')[0]
+    
+    ax2.set_xlabel('Year', fontsize=12)
+    ax2.set_ylabel('Total Appointments', fontsize=12, color='darkblue')
+    ax2_twin.set_ylabel('Total Reappointments', fontsize=12, color='darkred')
+    ax2.set_title('Appointment Volumes Over Time', fontsize=14, fontweight='bold')
+    ax2.tick_params(axis='y', labelcolor='darkblue')
+    ax2_twin.tick_params(axis='y', labelcolor='darkred')
+    
+    # Combined legend
+    ax2.legend([bars, line], ['Total Appointments', 'Reappointments'], loc='upper left')
+    
+    # Plot 3: Active organizations over time
+    ax3.bar(annual_stats['year'], annual_stats['active_organizations'], 
+            color='darkgreen', alpha=0.7)
+    ax3.set_xlabel('Year', fontsize=12)
+    ax3.set_ylabel('Number of Active Organizations', fontsize=12)
+    ax3.set_title('Active Organizations by Year', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    
+    # Add average line
+    avg_orgs = annual_stats['active_organizations'].mean()
+    ax3.axhline(y=avg_orgs, color='red', linestyle='--', alpha=0.7, 
+                label=f'Average: {avg_orgs:.0f}')
+    ax3.legend()
+    
+    # Plot 4: Box plot of proportions by period
+    # Divide into 3 periods
+    period_size = len(annual_stats) // 3
+    annual_stats['period'] = pd.cut(annual_stats.index, 
+                                   bins=3, 
+                                   labels=[f'Period 1\n({annual_stats.iloc[0]["year"]:.0f}-{annual_stats.iloc[period_size]["year"]:.0f})',
+                                          f'Period 2\n({annual_stats.iloc[period_size+1]["year"]:.0f}-{annual_stats.iloc[2*period_size]["year"]:.0f})',
+                                          f'Period 3\n({annual_stats.iloc[2*period_size+1]["year"]:.0f}-{annual_stats.iloc[-1]["year"]:.0f})'])
+    
+    # Create box plot
+    box_data = [annual_stats[annual_stats['period'] == period]['reappointment_proportion'].values 
+                for period in annual_stats['period'].unique()]
+    
+    bp = ax4.boxplot(box_data, labels=annual_stats['period'].unique(), patch_artist=True)
+    
+    # Color the boxes
+    colors = ['lightblue', 'lightgreen', 'lightcoral']
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
+    
+    ax4.set_ylabel('Reappointment Proportion (%)', fontsize=12)
+    ax4.set_title('Distribution of Proportions by Period', fontsize=14, fontweight='bold')
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved visualization to: {plot_file}")
+    
+    plt.close()
+
+def create_comparison_table(annual_stats, rates_data):
+    """Create a comparison table with organization-level statistics."""
+    print("\nCreating organization comparison table...")
+    
+    # Calculate organization-level averages
+    org_stats = rates_data.groupby('org').agg({
+        'reappointment_count': 'sum',
+        'total_employees': 'sum',
+        'year': 'count'
+    })
+    
+    org_stats['org_proportion'] = (
+        org_stats['reappointment_count'] / org_stats['total_employees'] * 100
+    )
+    
+    org_stats = org_stats.sort_values('org_proportion', ascending=False)
+    
+    # Compare with government-wide average
+    govt_avg = annual_stats['reappointment_proportion'].mean()
+    
+    print(f"\nOrganizations compared to government-wide average ({govt_avg:.1f}%):")
+    print("\nTop 10 organizations above average:")
+    above_avg = org_stats[org_stats['org_proportion'] > govt_avg].head(10)
+    
+    for org, row in above_avg.iterrows():
+        print(f"  {org[:50]:<50} {row['org_proportion']:>6.1f}% "
+              f"(+{row['org_proportion']-govt_avg:>4.1f}pp)")
+    
+    print(f"\nOrganizations below average: {(org_stats['org_proportion'] < govt_avg).sum()}")
+    print(f"Organizations above average: {(org_stats['org_proportion'] > govt_avg).sum()}")
+    
+    return org_stats
+
+def save_outputs(annual_stats, org_stats, output_file):
+    """Save all outputs."""
+    # Save annual proportions
+    annual_stats.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\n✓ Saved annual proportions to: {output_file}")
+    
+    # Save organization comparison
+    org_file = output_file.parent / "step8_organization_proportions.csv"
+    org_stats.to_csv(org_file, encoding='utf-8')
+    print(f"✓ Saved organization proportions to: {org_file}")
+    
+    # Save summary report
+    report_file = output_file.parent / "step8_summary_report.txt"
+    
+    with open(report_file, 'w', encoding='utf-8') as f:
+        f.write("STEP 8: GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS - SUMMARY REPORT\n")
+        f.write("="*60 + "\n\n")
+        
+        f.write("ANNUAL PROPORTIONS\n")
+        f.write("-"*30 + "\n")
+        for _, row in annual_stats.iterrows():
+            f.write(f"{row['year']:.0f}: {row['reappointment_proportion']:.1f}% "
+                   f"({row['total_reappointments']:.0f}/{row['total_appointments']:.0f})\n")
+        
+        f.write(f"\nOVERALL STATISTICS\n")
+        f.write("-"*30 + "\n")
+        f.write(f"Average proportion: {annual_stats['reappointment_proportion'].mean():.1f}%\n")
+        f.write(f"Trend: {annual_stats['reappointment_proportion'].iloc[-1] - annual_stats['reappointment_proportion'].iloc[0]:+.1f} "
+               f"percentage points over {len(annual_stats)} years\n")
+        f.write(f"Total appointments analyzed: {annual_stats['total_appointments'].sum():,}\n")
+        f.write(f"Total reappointments: {annual_stats['total_reappointments'].sum():,}\n")
+    
+    print(f"✓ Saved summary report to: {report_file}")
+
+def process_annual_proportions(input_file, output_file, plot_file):
+    """Main processing function to compute annual reappointment proportions."""
+    print("\n" + "="*60)
+    print("STEP 8: COMPUTING GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS")
+    print("="*60)
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"\n✗ ERROR: Input file not found: {input_file}")
+        print("Please run Step 6 first to calculate reappointment rates.")
+        return False
+    
+    # Load rate data
+    rates_data = load_rate_data(input_file)
+    if rates_data is None:
+        return False
+    
+    # Compute annual proportions
+    annual_stats = compute_annual_proportions(rates_data)
+    
+    # Analyze trends
+    slope, intercept, r_value = analyze_proportion_trends(annual_stats)
+    
+    # Analyze volume changes
+    analyze_volume_changes(annual_stats)
+    
+    # Create organization comparison
+    org_stats = create_comparison_table(annual_stats, rates_data)
+    
+    # Create visualization
+    create_comprehensive_visualization(annual_stats, slope, intercept, plot_file)
+    
+    # Save outputs
+    save_outputs(annual_stats, org_stats, output_file)
+    
+    # Final summary
+    print("\n" + "-"*60)
+    print("PROCESSING SUMMARY:")
+    print("-"*60)
+    print(f"Years analyzed: {len(annual_stats)}")
+    print(f"Total appointments: {annual_stats['total_appointments'].sum():,}")
+    print(f"Total reappointments: {annual_stats['total_reappointments'].sum():,}")
+    print(f"Overall proportion: {(annual_stats['total_reappointments'].sum() / annual_stats['total_appointments'].sum() * 100):.1f}%")
+    
+    # Key findings
+    print("\nKey findings:")
+    
+    # Highest and lowest years
+    max_idx = annual_stats['reappointment_proportion'].idxmax()
+    min_idx = annual_stats['reappointment_proportion'].idxmin()
+    max_year = annual_stats.loc[max_idx]
+    min_year = annual_stats.loc[min_idx]
+    
+    print(f"  - Highest proportion: {max_year['year']:.0f} ({max_year['reappointment_proportion']:.1f}%)")
+    print(f"  - Lowest proportion: {min_year['year']:.0f} ({min_year['reappointment_proportion']:.1f}%)")
+    
+    # Trend summary
+    if abs(slope) > 0.1:
+        trend = "increasing" if slope > 0 else "decreasing"
+        print(f"  - Overall trend: {trend} at {abs(slope):.2f}% per year")
+    else:
+        print(f"  - Overall trend: relatively stable")
+    
+    # Final answer to research question
+    print("\nAnswer to research question:")
+    print(f"  - Government-wide reappointment rate: {annual_stats['reappointment_proportion'].mean():.1f}%")
+    
+    first_year_prop = annual_stats.iloc[0]['reappointment_proportion']
+    last_year_prop = annual_stats.iloc[-1]['reappointment_proportion']
+    change = last_year_prop - first_year_prop
+    
+    if change > 5:
+        trend_answer = "significantly increasing"
+    elif change > 0:
+        trend_answer = "slightly increasing"
+    elif change < -5:
+        trend_answer = "significantly decreasing"
+    elif change < 0:
+        trend_answer = "slightly decreasing"
+    else:
+        trend_answer = "stable"
+    
+    print(f"  - Trend over 12 years: {trend_answer} ({change:+.1f} percentage points)")
+    
+    print("\n✓ Step 8 completed successfully!")
+    print(f"✓ All outputs saved to analysis_data/")
+    print("="*60)
+    
+    return True
+
+def main():
+    """Main execution function."""
+    try:
+        # Setup paths
+        input_file, output_file, plot_file, analysis_dir = setup_paths()
+        
+        # Ensure analysis directory exists
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Run the processing
+        success = process_annual_proportions(input_file, output_file, plot_file)
+        
+        if success:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"\n✗ CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

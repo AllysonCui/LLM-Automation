@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""
+Step 9: Linear regression analysis
+This script runs a linear regression on the annual reappointment proportions 
+to assess trend direction and significance.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_squared_error
+import statsmodels.api as sm
+
+def main():
+    """Main function to perform linear regression analysis on reappointment trends"""
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    output_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    
+    # Define input and output files
+    input_file = input_path / "step8_annual_proportions.csv"
+    output_file = output_path / "step9_regression_results.txt"
+    
+    print("=== Step 9: Linear Regression Analysis ===")
+    print(f"Input file: {input_file}")
+    print(f"Output file: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run step8_annual_proportions.py first.")
+        sys.exit(1)
+    
+    # Read the annual proportions data
+    try:
+        print("\nReading annual proportions data...")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✅ Successfully loaded data: {len(df)} years")
+        print(f"   Columns: {', '.join(df.columns)}")
+    except Exception as e:
+        print(f"❌ Error reading input file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_cols = ['year', 'reappointment_rate_percent', 'total_employees', 'total_reappointments']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"❌ ERROR: Missing required columns: {', '.join(missing_cols)}")
+        sys.exit(1)
+    
+    # Prepare data for regression
+    print("\n=== Preparing Data for Regression ===")
+    
+    # Sort by year to ensure proper ordering
+    df = df.sort_values('year').reset_index(drop=True)
+    
+    # Extract variables
+    X = df['year'].values.reshape(-1, 1)  # Independent variable (year)
+    y = df['reappointment_rate_percent'].values  # Dependent variable (rate)
+    
+    # Create normalized year variable (starts from 0)
+    X_normalized = X - X.min()
+    
+    print(f"Data points: {len(X)}")
+    print(f"Year range: {X.min()} to {X.max()}")
+    print(f"Rate range: {y.min():.2f}% to {y.max():.2f}%")
+    
+    # Simple Linear Regression using scipy
+    print("\n=== Simple Linear Regression (scipy.stats) ===")
+    
+    slope, intercept, r_value, p_value, std_err = stats.linregress(X.flatten(), y)
+    
+    print(f"Regression equation: Rate = {intercept:.4f} + {slope:.4f} * Year")
+    print(f"Slope: {slope:.4f}% per year")
+    print(f"Intercept: {intercept:.4f}%")
+    print(f"R-value: {r_value:.4f}")
+    print(f"R-squared: {r_value**2:.4f}")
+    print(f"P-value: {p_value:.4f}")
+    print(f"Standard error: {std_err:.4f}")
+    
+    # Interpret results
+    if p_value < 0.001:
+        significance = "highly significant (p < 0.001)"
+    elif p_value < 0.01:
+        significance = "very significant (p < 0.01)"
+    elif p_value < 0.05:
+        significance = "significant (p < 0.05)"
+    elif p_value < 0.10:
+        significance = "marginally significant (p < 0.10)"
+    else:
+        significance = "not significant (p >= 0.10)"
+    
+    trend_direction = "increasing" if slope > 0 else "decreasing" if slope < 0 else "flat"
+    
+    print(f"\nTrend: {trend_direction.upper()} and {significance}")
+    
+    # Linear Regression using sklearn for additional metrics
+    print("\n=== Linear Regression (sklearn) ===")
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
+    
+    mse = mean_squared_error(y, y_pred)
+    rmse = np.sqrt(mse)
+    mae = np.mean(np.abs(y - y_pred))
+    
+    print(f"Mean Squared Error: {mse:.4f}")
+    print(f"Root Mean Squared Error: {rmse:.4f}")
+    print(f"Mean Absolute Error: {mae:.4f}")
+    
+    # Calculate residuals
+    residuals = y - y_pred
+    
+    # OLS Regression using statsmodels for comprehensive statistics
+    print("\n=== OLS Regression (statsmodels) ===")
+    
+    # Add constant to X for intercept
+    X_with_const = sm.add_constant(X_normalized)
+    
+    # Fit OLS model
+    ols_model = sm.OLS(y, X_with_const).fit()
+    
+    print("\nDetailed Regression Summary:")
+    print("-" * 60)
+    print(f"Dependent Variable: Reappointment Rate (%)")
+    print(f"Independent Variable: Year (normalized)")
+    print(f"Number of Observations: {len(y)}")
+    print(f"Degrees of Freedom: {ols_model.df_resid}")
+    print("-" * 60)
+    
+    # Coefficients with confidence intervals
+    print("\nCoefficients and Confidence Intervals:")
+    conf_int = ols_model.conf_int(alpha=0.05)
+    print(f"Intercept: {ols_model.params[0]:.4f} (95% CI: [{conf_int[0][0]:.4f}, {conf_int[0][1]:.4f}])")
+    print(f"Slope: {ols_model.params[1]:.4f} (95% CI: [{conf_int[1][0]:.4f}, {conf_int[1][1]:.4f}])")
+    
+    # Model statistics
+    print("\nModel Statistics:")
+    print(f"R-squared: {ols_model.rsquared:.4f}")
+    print(f"Adjusted R-squared: {ols_model.rsquared_adj:.4f}")
+    print(f"F-statistic: {ols_model.fvalue:.4f}")
+    print(f"Prob (F-statistic): {ols_model.f_pvalue:.4f}")
+    print(f"AIC: {ols_model.aic:.4f}")
+    print(f"BIC: {ols_model.bic:.4f}")
+    
+    # Durbin-Watson test for autocorrelation
+    from statsmodels.stats.stattools import durbin_watson
+    dw = durbin_watson(residuals)
+    print(f"\nDurbin-Watson statistic: {dw:.4f}")
+    if dw < 1.5:
+        print("  → Indicates positive autocorrelation")
+    elif dw > 2.5:
+        print("  → Indicates negative autocorrelation")
+    else:
+        print("  → No significant autocorrelation detected")
+    
+    # Normality tests
+    print("\n=== Residual Analysis ===")
+    
+    # Shapiro-Wilk test for normality
+    shapiro_stat, shapiro_p = stats.shapiro(residuals)
+    print(f"Shapiro-Wilk test for normality:")
+    print(f"  - Statistic: {shapiro_stat:.4f}")
+    print(f"  - P-value: {shapiro_p:.4f}")
+    print(f"  - Residuals are {'normally' if shapiro_p > 0.05 else 'not normally'} distributed")
+    
+    # Breusch-Pagan test for heteroscedasticity
+    from statsmodels.stats.diagnostic import het_breuschpagan
+    bp_stat, bp_p, _, _ = het_breuschpagan(residuals, X_with_const)
+    print(f"\nBreusch-Pagan test for heteroscedasticity:")
+    print(f"  - Statistic: {bp_stat:.4f}")
+    print(f"  - P-value: {bp_p:.4f}")
+    print(f"  - {'No evidence' if bp_p > 0.05 else 'Evidence'} of heteroscedasticity")
+    
+    # Prediction and forecasting
+    print("\n=== Predictions and Forecasting ===")
+    
+    # Predict for future years
+    future_years = np.array([2025, 2026, 2027])
+    future_predictions = slope * future_years + intercept
+    
+    print("Projected reappointment rates:")
+    for year, rate in zip(future_years, future_predictions):
+        print(f"  - Year {year}: {rate:.2f}%")
+    
+    # Calculate prediction intervals
+    n = len(X)
+    t_critical = stats.t.ppf(0.975, n-2)  # 95% prediction interval
+    
+    # Standard error of prediction
+    x_mean = X.mean()
+    sxx = np.sum((X.flatten() - x_mean)**2)
+    
+    print("\nPrediction intervals (95%):")
+    for year in future_years:
+        y_pred = slope * year + intercept
+        se_pred = std_err * np.sqrt(1 + 1/n + (year - x_mean)**2 / sxx)
+        margin = t_critical * se_pred
+        print(f"  - Year {year}: {y_pred:.2f}% ± {margin:.2f}% [{y_pred-margin:.2f}%, {y_pred+margin:.2f}%]")
+    
+    # Time to reach certain thresholds
+    print("\n=== Threshold Analysis ===")
+    
+    if slope != 0:
+        # Calculate when rate might reach certain levels
+        thresholds = [15, 20, 25, 30]
+        current_rate = y[-1]
+        
+        print("Years to reach reappointment rate thresholds (if trend continues):")
+        for threshold in thresholds:
+            if (slope > 0 and threshold > current_rate) or (slope < 0 and threshold < current_rate):
+                years_needed = (threshold - intercept) / slope
+                year_reached = int(years_needed)
+                if X.min() <= year_reached <= 2050:  # Reasonable bounds
+                    print(f"  - {threshold}%: Year {year_reached}")
+                else:
+                    print(f"  - {threshold}%: Not reached within reasonable timeframe")
+            else:
+                print(f"  - {threshold}%: Already {'exceeded' if current_rate > threshold else 'below this level'}")
+    
+    # Save comprehensive results
+    print(f"\n=== Saving Regression Results ===")
+    
+    results_text = f"""LINEAR REGRESSION ANALYSIS RESULTS
+Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+================================================================================
+
+RESEARCH QUESTION:
+Is the government-wide reappointment trend increasing or declining over the past 12 years?
+
+ANSWER:
+The reappointment trend is {trend_direction.upper()} and {significance}.
+
+DATA SUMMARY:
+- Years analyzed: {int(X.min())} to {int(X.max())} ({len(X)} data points)
+- Reappointment rate range: {y.min():.2f}% to {y.max():.2f}%
+- Mean reappointment rate: {y.mean():.2f}%
+- Standard deviation: {y.std():.2f}%
+
+REGRESSION EQUATION:
+Reappointment Rate = {intercept:.4f} + {slope:.4f} × Year
+
+KEY FINDINGS:
+- Slope: {slope:.4f}% per year
+  → The reappointment rate {trend_direction} by approximately {abs(slope):.4f} percentage points each year
+- R-squared: {r_value**2:.4f}
+  → The linear model explains {r_value**2*100:.1f}% of the variation in reappointment rates
+- P-value: {p_value:.4f}
+  → The trend is {significance}
+
+STATISTICAL TESTS:
+1. Model Significance:
+   - F-statistic: {ols_model.fvalue:.4f} (p = {ols_model.f_pvalue:.4f})
+   - The model is {'statistically significant' if ols_model.f_pvalue < 0.05 else 'not statistically significant'}
+
+2. Residual Normality (Shapiro-Wilk test):
+   - Statistic: {shapiro_stat:.4f} (p = {shapiro_p:.4f})
+   - Residuals are {'normally' if shapiro_p > 0.05 else 'not normally'} distributed
+
+3. Heteroscedasticity (Breusch-Pagan test):
+   - Statistic: {bp_stat:.4f} (p = {bp_p:.4f})
+   - {'No evidence' if bp_p > 0.05 else 'Evidence'} of heteroscedasticity
+
+4. Autocorrelation (Durbin-Watson test):
+   - Statistic: {dw:.4f}
+   - {'Positive autocorrelation detected' if dw < 1.5 else 'Negative autocorrelation detected' if dw > 2.5 else 'No significant autocorrelation'}
+
+PREDICTIONS (if current trend continues):
+- 2025: {future_predictions[0]:.2f}%
+- 2026: {future_predictions[1]:.2f}%
+- 2027: {future_predictions[2]:.2f}%
+
+INTERPRETATION:
+"""
+    
+    # Add interpretation based on results
+    if p_value < 0.05:
+        if slope > 0:
+            interpretation = f"""The analysis reveals a statistically significant increasing trend in government-wide 
+reappointment rates. Over the 12-year period, reappointment rates have increased 
+by an average of {abs(slope):.4f} percentage points per year. This suggests that 
+the New Brunswick government is increasingly relying on reappointments rather than 
+new appointments to fill positions."""
+        else:
+            interpretation = f"""The analysis reveals a statistically significant decreasing trend in government-wide 
+reappointment rates. Over the 12-year period, reappointment rates have decreased 
+by an average of {abs(slope):.4f} percentage points per year. This suggests that 
+the New Brunswick government is moving toward more new appointments rather than 
+reappointments."""
+    else:
+        interpretation = f"""The analysis does not reveal a statistically significant trend in government-wide 
+reappointment rates. While the data shows a {trend_direction} pattern with a slope 
+of {slope:.4f}% per year, this trend is not statistically significant (p = {p_value:.4f}). 
+This suggests that reappointment rates have remained relatively stable over the 
+12-year period."""
+    
+    results_text += interpretation
+    
+    results_text += f"""
+
+CONCLUSION:
+Based on the linear regression analysis of {len(X)} years of data, the government-wide 
+reappointment rate in New Brunswick is {trend_direction} at a rate of {abs(slope):.4f} 
+percentage points per year. This trend is {significance}.
+
+================================================================================
+"""
+    
+    # Write results to file
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(results_text)
+        print(f"✅ Successfully saved regression results to {output_file}")
+    except Exception as e:
+        print(f"❌ Error saving results: {str(e)}")
+        sys.exit(1)
+    
+    # Display key findings
+    print("\n=== KEY FINDINGS ===")
+    print(f"1. Trend Direction: {trend_direction.upper()}")
+    print(f"2. Rate of Change: {abs(slope):.4f}% per year")
+    print(f"3. Statistical Significance: {significance}")
+    print(f"4. Model Fit: R-squared = {r_value**2:.4f}")
+    print(f"5. Prediction for 2025: {future_predictions[0]:.2f}%")
+    
+    print("\n✅ Step 9 completed successfully!")
+    print(f"Regression analysis complete. Results saved to {output_file}")
+    print("\n🎯 FINAL ANSWER: The reappointment trend is", trend_direction.upper(), "and", significance)
+
+if __name__ == "__main__":
+    main()

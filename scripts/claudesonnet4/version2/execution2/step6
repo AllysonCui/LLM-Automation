@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""
+Step 6: Calculate Reappointment Rates
+New Brunswick Government Appointments Analysis
+
+This script calculates the reappointment rate as reappointments divided by total appointments
+for each org-year pair, providing the core metric for analyzing which government branches
+most frequently reappoint past appointees.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def create_output_directory(output_path):
+    """Create output directory if it doesn't exist"""
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Output directory created/verified: {output_path}")
+        return True
+    except Exception as e:
+        print(f"✗ Error creating output directory: {e}")
+        return False
+
+def load_appointment_counts(input_path):
+    """Load appointment counts dataset from Step 4"""
+    input_file = input_path / "step4_appointment_counts.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Appointment counts file not found: {input_file}")
+    
+    print(f"Loading appointment counts from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Successfully loaded appointment counts")
+        print(f"  - Shape: {df.shape}")
+        print(f"  - Columns: {', '.join(df.columns)}")
+        
+        return df
+        
+    except Exception as e:
+        raise Exception(f"Error loading appointment counts: {e}")
+
+def load_reappointment_counts(input_path):
+    """Load reappointment counts dataset from Step 5"""
+    input_file = input_path / "step5_reappointment_counts.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Reappointment counts file not found: {input_file}")
+    
+    print(f"Loading reappointment counts from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Successfully loaded reappointment counts")
+        print(f"  - Shape: {df.shape}")
+        print(f"  - Columns: {', '.join(df.columns)}")
+        
+        return df
+        
+    except Exception as e:
+        raise Exception(f"Error loading reappointment counts: {e}")
+
+def analyze_input_datasets(appointment_counts, reappointment_counts):
+    """Analyze the input datasets before merging"""
+    print(f"\n" + "="*60)
+    print("INPUT DATASETS ANALYSIS")
+    print("="*60)
+    
+    # Appointment counts analysis
+    print(f"Appointment Counts Dataset:")
+    print(f"  - Shape: {appointment_counts.shape}")
+    print(f"  - Organizations: {appointment_counts['org'].nunique():,}")
+    print(f"  - Years: {appointment_counts['year'].nunique():,}")
+    print(f"  - Org-year combinations: {len(appointment_counts):,}")
+    print(f"  - Total appointments: {appointment_counts['total_appointments'].sum():,}")
+    
+    # Reappointment counts analysis
+    print(f"\nReappointment Counts Dataset:")
+    print(f"  - Shape: {reappointment_counts.shape}")
+    print(f"  - Organizations: {reappointment_counts['org'].nunique():,}")
+    print(f"  - Years: {reappointment_counts['year'].nunique():,}")
+    print(f"  - Org-year combinations: {len(reappointment_counts):,}")
+    print(f"  - Total reappointments: {reappointment_counts['reappointment_count'].sum():,}")
+    print(f"  - Combinations with reappointments: {(reappointment_counts['reappointment_count'] > 0).sum():,}")
+    
+    # Check for overlap
+    appointment_orgs = set(appointment_counts['org'].unique())
+    reappointment_orgs = set(reappointment_counts['org'].unique())
+    
+    appointment_years = set(appointment_counts['year'].astype(str).unique())
+    reappointment_years = set(reappointment_counts['year'].astype(str).unique())
+    
+    print(f"\nDataset Overlap Analysis:")
+    print(f"  Organizations in both datasets: {len(appointment_orgs & reappointment_orgs):,}")
+    print(f"  Organizations only in appointment counts: {len(appointment_orgs - reappointment_orgs):,}")
+    print(f"  Organizations only in reappointment counts: {len(reappointment_orgs - appointment_orgs):,}")
+    
+    print(f"  Years in both datasets: {len(appointment_years & reappointment_years):,}")
+    print(f"  Years only in appointment counts: {len(appointment_years - reappointment_years):,}")
+    print(f"  Years only in reappointment counts: {len(reappointment_years - appointment_years):,}")
+    
+    return appointment_counts, reappointment_counts
+
+def merge_datasets(appointment_counts, reappointment_counts):
+    """Merge appointment counts and reappointment counts datasets"""
+    print(f"\n" + "="*60)
+    print("MERGING DATASETS")
+    print("="*60)
+    
+    # Ensure year columns are the same type
+    appointment_counts['year'] = appointment_counts['year'].astype(str)
+    reappointment_counts['year'] = reappointment_counts['year'].astype(str)
+    
+    # Merge datasets on org and year
+    print("Merging appointment counts and reappointment counts...")
+    merged_df = appointment_counts.merge(
+        reappointment_counts[['org', 'year', 'reappointment_count']], 
+        on=['org', 'year'], 
+        how='left'
+    )
+    
+    # Fill missing reappointment counts with 0
+    merged_df['reappointment_count'] = merged_df['reappointment_count'].fillna(0).astype(int)
+    
+    print(f"Merge results:")
+    print(f"  Final dataset shape: {merged_df.shape}")
+    print(f"  Organizations: {merged_df['org'].nunique():,}")
+    print(f"  Years: {merged_df['year'].nunique():,}")
+    print(f"  Total appointments: {merged_df['total_appointments'].sum():,}")
+    print(f"  Total reappointments: {merged_df['reappointment_count'].sum():,}")
+    
+    # Check for any missing data
+    missing_appointment_counts = merged_df['total_appointments'].isna().sum()
+    missing_reappointment_counts = merged_df['reappointment_count'].isna().sum()
+    
+    if missing_appointment_counts > 0:
+        print(f"  ⚠ Missing appointment counts: {missing_appointment_counts:,}")
+    if missing_reappointment_counts > 0:
+        print(f"  ⚠ Missing reappointment counts: {missing_reappointment_counts:,}")
+    
+    return merged_df
+
+def calculate_reappointment_rates(df):
+    """Calculate reappointment rates for each org-year pair"""
+    print(f"\n" + "="*60)
+    print("CALCULATING REAPPOINTMENT RATES")
+    print("="*60)
+    
+    # Calculate reappointment rate
+    print("Calculating reappointment rates (reappointments / total_appointments)...")
+    
+    # Handle division by zero
+    df['reappointment_rate'] = np.where(
+        df['total_appointments'] > 0,
+        df['reappointment_count'] / df['total_appointments'],
+        0.0
+    )
+    
+    # Convert to percentage for easier interpretation
+    df['reappointment_rate_pct'] = df['reappointment_rate'] * 100
+    
+    # Check for any issues
+    zero_appointments = (df['total_appointments'] == 0).sum()
+    if zero_appointments > 0:
+        print(f"  ⚠ Found {zero_appointments:,} org-year pairs with zero total appointments")
+    
+    # Basic statistics
+    print(f"\nReappointment rate statistics:")
+    print(f"  Mean rate: {df['reappointment_rate_pct'].mean():.2f}%")
+    print(f"  Median rate: {df['reappointment_rate_pct'].median():.2f}%")
+    print(f"  Max rate: {df['reappointment_rate_pct'].max():.2f}%")
+    print(f"  Min rate: {df['reappointment_rate_pct'].min():.2f}%")
+    print(f"  Standard deviation: {df['reappointment_rate_pct'].std():.2f}%")
+    
+    # Distribution analysis
+    print(f"\nRate distribution:")
+    print(f"  0% (no reappointments): {(df['reappointment_rate_pct'] == 0).sum():,} org-years")
+    print(f"  0.1-10%: {((df['reappointment_rate_pct'] > 0) & (df['reappointment_rate_pct'] <= 10)).sum():,} org-years")
+    print(f"  10.1-25%: {((df['reappointment_rate_pct'] > 10) & (df['reappointment_rate_pct'] <= 25)).sum():,} org-years")
+    print(f"  25.1-50%: {((df['reappointment_rate_pct'] > 25) & (df['reappointment_rate_pct'] <= 50)).sum():,} org-years")
+    print(f"  50.1-75%: {((df['reappointment_rate_pct'] > 50) & (df['reappointment_rate_pct'] <= 75)).sum():,} org-years")
+    print(f"  75.1-100%: {(df['reappointment_rate_pct'] > 75).sum():,} org-years")
+    
+    return df
+
+def analyze_reappointment_rates(df):
+    """Analyze reappointment rate patterns"""
+    print(f"\n" + "="*60)
+    print("REAPPOINTMENT RATE ANALYSIS")
+    print("="*60)
+    
+    # Top organizations by average reappointment rate
+    print("Top 15 organizations by average reappointment rate:")
+    org_avg_rates = df.groupby('org').agg({
+        'reappointment_rate_pct': 'mean',
+        'total_appointments': 'sum',
+        'reappointment_count': 'sum',
+        'year': 'nunique'
+    }).round(2)
+    org_avg_rates.columns = ['avg_rate_pct', 'total_appointments', 'total_reappointments', 'years_active']
+    org_avg_rates = org_avg_rates.sort_values('avg_rate_pct', ascending=False)
+    
+    for i, (org, row) in enumerate(org_avg_rates.head(15).iterrows(), 1):
+        overall_rate = (row['total_reappointments'] / row['total_appointments']) * 100 if row['total_appointments'] > 0 else 0
+        print(f"  {i:2d}. {org}:")
+        print(f"      Avg rate: {row['avg_rate_pct']:.1f}% | Overall rate: {overall_rate:.1f}%")
+        print(f"      {row['total_reappointments']:.0f}/{row['total_appointments']:.0f} reappointments | {row['years_active']:.0f} years active")
+    
+    # Organizations with highest overall reappointment volumes
+    print(f"\nTop 15 organizations by total reappointment volume:")
+    org_totals = org_avg_rates.sort_values('total_reappointments', ascending=False)
+    for i, (org, row) in enumerate(org_totals.head(15).iterrows(), 1):
+        overall_rate = (row['total_reappointments'] / row['total_appointments']) * 100 if row['total_appointments'] > 0 else 0
+        print(f"  {i:2d}. {org}: {row['total_reappointments']:.0f} reappointments ({overall_rate:.1f}% rate)")
+    
+    # Year-over-year trends
+    print(f"\nReappointment rates by year (all organizations):")
+    year_analysis = df.groupby('year').agg({
+        'total_appointments': 'sum',
+        'reappointment_count': 'sum',
+        'org': 'nunique'
+    })
+    year_analysis['overall_rate_pct'] = (year_analysis['reappointment_count'] / year_analysis['total_appointments']) * 100
+    year_analysis['avg_rate_pct'] = df.groupby('year')['reappointment_rate_pct'].mean()
+    
+    for year, row in year_analysis.iterrows():
+        print(f"  {year}: {row['overall_rate_pct']:.1f}% overall rate ({row['reappointment_count']:.0f}/{row['total_appointments']:.0f})")
+        print(f"        {row['avg_rate_pct']:.1f}% avg org rate | {row['org']:.0f} organizations active")
+    
+    # Highest individual org-year rates
+    print(f"\nHighest individual org-year reappointment rates:")
+    highest_rates = df.nlargest(15, 'reappointment_rate_pct')
+    for _, row in highest_rates.iterrows():
+        print(f"  {row['org']} ({row['year']}): {row['reappointment_rate_pct']:.1f}% ({row['reappointment_count']}/{row['total_appointments']} reappointments)")
+    
+    # Organizations with consistent high rates
+    print(f"\nOrganizations with consistently high reappointment rates (avg >20%):")
+    high_rate_orgs = org_avg_rates[org_avg_rates['avg_rate_pct'] > 20]
+    for org, row in high_rate_orgs.iterrows():
+        print(f"  {org}: {row['avg_rate_pct']:.1f}% avg rate over {row['years_active']:.0f} years")
+    
+    return df
+
+def calculate_trend_analysis(df):
+    """Calculate trends in reappointment rates over time"""
+    print(f"\n" + "="*60)
+    print("TREND ANALYSIS")
+    print("="*60)
+    
+    # Overall trend across all organizations
+    print("Overall reappointment rate trends:")
+    year_trends = df.groupby('year').agg({
+        'reappointment_rate_pct': 'mean',
+        'total_appointments': 'sum',
+        'reappointment_count': 'sum'
+    }).round(2)
+    year_trends['overall_rate_pct'] = (year_trends['reappointment_count'] / year_trends['total_appointments']) * 100
+    year_trends = year_trends.sort_index()
+    
+    # Calculate year-over-year change
+    year_trends['avg_rate_change'] = year_trends['reappointment_rate_pct'].diff()
+    year_trends['overall_rate_change'] = year_trends['overall_rate_pct'].diff()
+    
+    print("\nYear-over-year changes:")
+    for year, row in year_trends.iterrows():
+        if not pd.isna(row['avg_rate_change']):
+            avg_change_sign = "+" if row['avg_rate_change'] >= 0 else ""
+            overall_change_sign = "+" if row['overall_rate_change'] >= 0 else ""
+            print(f"  {year}: Avg {avg_change_sign}{row['avg_rate_change']:.1f}pp | Overall {overall_change_sign}{row['overall_rate_change']:.1f}pp")
+    
+    # Calculate linear trend
+    try:
+        from scipy import stats
+        years_numeric = pd.to_numeric(year_trends.index, errors='coerce')
+        valid_mask = ~pd.isna(years_numeric)
+        
+        if valid_mask.sum() > 2:  # Need at least 3 points for trend
+            # Trend for average rates
+            slope_avg, intercept_avg, r_value_avg, p_value_avg, std_err_avg = stats.linregress(
+                years_numeric[valid_mask], 
+                year_trends['reappointment_rate_pct'][valid_mask]
+            )
+            
+            # Trend for overall rates
+            slope_overall, intercept_overall, r_value_overall, p_value_overall, std_err_overall = stats.linregress(
+                years_numeric[valid_mask], 
+                year_trends['overall_rate_pct'][valid_mask]
+            )
+            
+            print(f"\nLinear trend analysis:")
+            print(f"  Average org rates: {slope_avg:+.2f}pp per year (R²={r_value_avg**2:.3f}, p={p_value_avg:.3f})")
+            print(f"  Overall rates: {slope_overall:+.2f}pp per year (R²={r_value_overall**2:.3f}, p={p_value_overall:.3f})")
+            
+            # Interpretation
+            if abs(slope_avg) < 0.1:
+                trend_avg = "stable"
+            elif slope_avg > 0:
+                trend_avg = "increasing"
+            else:
+                trend_avg = "declining"
+                
+            if abs(slope_overall) < 0.1:
+                trend_overall = "stable"
+            elif slope_overall > 0:
+                trend_overall = "increasing"
+            else:
+                trend_overall = "declining"
+            
+            print(f"\nTrend interpretation:")
+            print(f"  Average org reappointment rates are {trend_avg}")
+            print(f"  Overall reappointment rates are {trend_overall}")
+            
+    except ImportError:
+        print("\nScipy not available - skipping linear trend analysis")
+    except Exception as e:
+        print(f"\nError in trend analysis: {e}")
+    
+    return df, year_trends
+
+def create_summary_statistics(df):
+    """Create comprehensive summary statistics"""
+    print(f"\n" + "="*60)
+    print("SUMMARY STATISTICS")
+    print("="*60)
+    
+    # Overall summary
+    total_org_years = len(df)
+    total_appointments = df['total_appointments'].sum()
+    total_reappointments = df['reappointment_count'].sum()
+    overall_rate = (total_reappointments / total_appointments) * 100 if total_appointments > 0 else 0
+    
+    print(f"Dataset Summary:")
+    print(f"  Total org-year combinations: {total_org_years:,}")
+    print(f"  Total appointments: {total_appointments:,}")
+    print(f"  Total reappointments: {total_reappointments:,}")
+    print(f"  Overall reappointment rate: {overall_rate:.2f}%")
+    print(f"  Organizations: {df['org'].nunique():,}")
+    print(f"  Years: {df['year'].nunique():,}")
+    
+    # Rate distribution summary
+    print(f"\nRate Distribution Summary:")
+    print(f"  Zero reappointment rate: {(df['reappointment_rate_pct'] == 0).sum():,} org-years ({(df['reappointment_rate_pct'] == 0).sum()/len(df)*100:.1f}%)")
+    print(f"  Non-zero reappointment rate: {(df['reappointment_rate_pct'] > 0).sum():,} org-years ({(df['reappointment_rate_pct'] > 0).sum()/len(df)*100:.1f}%)")
+    print(f"  High reappointment rate (>50%): {(df['reappointment_rate_pct'] > 50).sum():,} org-years ({(df['reappointment_rate_pct'] > 50).sum()/len(df)*100:.1f}%)")
+    
+    return df
+
+def save_reappointment_rates(df, output_path):
+    """Save the reappointment rates dataset"""
+    try:
+        output_file = output_path / "step6_reappointment_rates.csv"
+        df.to_csv(output_file, index=False)
+        
+        file_size_mb = output_file.stat().st_size / (1024*1024)
+        print(f"\n✓ Reappointment rates dataset saved successfully!")
+        print(f"  File: {output_file}")
+        print(f"  Size: {file_size_mb:.2f} MB")
+        print(f"  Rows: {len(df):,}")
+        print(f"  Columns: {len(df.columns)}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error saving reappointment rates dataset: {e}")
+        return False
+
+def main():
+    """Main execution function"""
+    print("="*80)
+    print("NEW BRUNSWICK GOVERNMENT APPOINTMENTS ANALYSIS")
+    print("Step 6: Calculate Reappointment Rates")
+    print("="*80)
+    
+    # Define paths
+    input_path = Path("scripts/claudesonnet4/version2/execution2/analysis_data")
+    output_path = Path("scripts/claudesonnet4/version2/execution2/analysis_data")
+    
+    # Create output directory
+    if not create_output_directory(output_path):
+        sys.exit(1)
+    
+    try:
+        # Load datasets from Steps 4 and 5
+        print(f"\n" + "="*60)
+        print("LOADING INPUT DATASETS")
+        print("="*60)
+        
+        appointment_counts = load_appointment_counts(input_path)
+        reappointment_counts = load_reappointment_counts(input_path)
+        
+        # Analyze input datasets
+        appointment_counts, reappointment_counts = analyze_input_datasets(appointment_counts, reappointment_counts)
+        
+        # Merge datasets
+        merged_df = merge_datasets(appointment_counts, reappointment_counts)
+        
+        # Calculate reappointment rates
+        rates_df = calculate_reappointment_rates(merged_df)
+        
+        # Analyze reappointment rate patterns
+        rates_df = analyze_reappointment_rates(rates_df)
+        
+        # Calculate trend analysis
+        rates_df, year_trends = calculate_trend_analysis(rates_df)
+        
+        # Create summary statistics
+        rates_df = create_summary_statistics(rates_df)
+        
+        # Save the reappointment rates dataset
+        if save_reappointment_rates(rates_df, output_path):
+            print(f"\n" + "="*60)
+            print("STEP 6 COMPLETED SUCCESSFULLY")
+            print("="*60)
+            print(f"✓ Calculated reappointment rates for each org-year pair")
+            print(f"✓ Total org-year combinations: {len(rates_df):,}")
+            print(f"✓ Organizations analyzed: {rates_df['org'].nunique():,}")
+            print(f"✓ Years analyzed: {rates_df['year'].nunique():,}")
+            print(f"✓ Overall reappointment rate: {(rates_df['reappointment_count'].sum() / rates_df['total_appointments'].sum()) * 100:.2f}%")
+            print(f"✓ Output saved to: {output_path / 'step6_reappointment_rates.csv'}")
+            
+            print(f"\n✓ Ready for Step 7: Identify organizations with highest maximum reappointment rates")
+            
+        else:
+            print("\n✗ Step 6 failed during save operation")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"\n✗ Step 6 failed with error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

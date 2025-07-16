@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis:
+- reappointed
+- name
+- position
+- org
+- year (from data_year)
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to extract key columns from combined dataset."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    output_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    
+    # Input and output files
+    input_file = input_dir / "step1_combined_appointments.csv"
+    output_file = output_dir / "step2_key_columns_data.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 2: EXTRACT KEY COLUMNS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 1 first to create the combined dataset.")
+        sys.exit(1)
+    
+    # Load the combined dataset
+    print(f"Loading combined dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows and {len(df.columns)} columns")
+    except Exception as e:
+        print(f"ERROR: Failed to load input file: {str(e)}")
+        sys.exit(1)
+    
+    # Define required columns
+    required_columns = {
+        'reappointed': 'reappointed',
+        'name': 'name',
+        'position': 'position',
+        'org': 'org',
+        'data_year': 'year'  # Rename data_year to year
+    }
+    
+    # Check for missing columns
+    print("\n" + "-"*60)
+    print("CHECKING FOR REQUIRED COLUMNS:")
+    print("-"*60)
+    
+    missing_columns = []
+    for old_col, new_col in required_columns.items():
+        if old_col in df.columns:
+            print(f"✓ Found column: {old_col}")
+        else:
+            print(f"✗ Missing column: {old_col}")
+            missing_columns.append(old_col)
+    
+    if missing_columns:
+        print(f"\nERROR: Missing required columns: {missing_columns}")
+        print("\nAvailable columns in dataset:")
+        for col in df.columns:
+            print(f"  - {col}")
+        sys.exit(1)
+    
+    # Extract key columns and rename
+    print("\n" + "-"*60)
+    print("EXTRACTING KEY COLUMNS:")
+    print("-"*60)
+    
+    try:
+        # Select and rename columns
+        key_columns_df = df[list(required_columns.keys())].copy()
+        key_columns_df.rename(columns=required_columns, inplace=True)
+        
+        print(f"\nExtracted {len(key_columns_df.columns)} columns:")
+        for col in key_columns_df.columns:
+            print(f"  - {col}")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to extract columns: {str(e)}")
+        sys.exit(1)
+    
+    # Data quality analysis
+    print("\n" + "-"*60)
+    print("DATA QUALITY ANALYSIS:")
+    print("-"*60)
+    
+    print("\nColumn statistics:")
+    for col in key_columns_df.columns:
+        dtype = str(key_columns_df[col].dtype)
+        non_null = key_columns_df[col].notna().sum()
+        null_count = key_columns_df[col].isna().sum()
+        null_pct = (null_count / len(key_columns_df)) * 100
+        unique_count = key_columns_df[col].nunique()
+        
+        print(f"\n{col}:")
+        print(f"  - Data type: {dtype}")
+        print(f"  - Non-null values: {non_null:,} ({100-null_pct:.1f}%)")
+        print(f"  - Null values: {null_count:,} ({null_pct:.1f}%)")
+        print(f"  - Unique values: {unique_count:,}")
+    
+    # Special analysis for 'reappointed' column
+    print("\n" + "-"*60)
+    print("REAPPOINTED COLUMN ANALYSIS:")
+    print("-"*60)
+    
+    if 'reappointed' in key_columns_df.columns:
+        print("\nValue distribution:")
+        value_counts = key_columns_df['reappointed'].value_counts(dropna=False).sort_index()
+        for value, count in value_counts.items():
+            pct = (count / len(key_columns_df)) * 100
+            if pd.isna(value):
+                print(f"  - NaN: {count:,} ({pct:.1f}%)")
+            else:
+                print(f"  - {value}: {count:,} ({pct:.1f}%)")
+        
+        # Standardize boolean values if needed
+        if key_columns_df['reappointed'].dtype == 'object':
+            print("\nStandardizing 'reappointed' values to boolean...")
+            
+            # Define mappings
+            true_values = ['True', 'true', 'TRUE', 'Yes', 'yes', 'YES', '1', 1, True]
+            false_values = ['False', 'false', 'FALSE', 'No', 'no', 'NO', '0', 0, False]
+            
+            # Create a copy to preserve original values for validation
+            original_values = key_columns_df['reappointed'].copy()
+            
+            # Apply standardization
+            key_columns_df['reappointed'] = key_columns_df['reappointed'].apply(
+                lambda x: True if x in true_values else (False if x in false_values else np.nan)
+            )
+            
+            # Validate conversion
+            print("\nConversion results:")
+            conversion_df = pd.DataFrame({
+                'original': original_values,
+                'standardized': key_columns_df['reappointed']
+            })
+            conversion_summary = conversion_df.groupby(['original', 'standardized']).size().reset_index(name='count')
+            print(conversion_summary.to_string(index=False))
+    
+    # Year distribution
+    print("\n" + "-"*60)
+    print("YEAR DISTRIBUTION:")
+    print("-"*60)
+    
+    year_counts = key_columns_df['year'].value_counts().sort_index()
+    print("\nAppointments by year:")
+    for year, count in year_counts.items():
+        print(f"  {int(year)}: {count:,} appointments")
+    
+    # Organization analysis
+    print("\n" + "-"*60)
+    print("TOP ORGANIZATIONS:")
+    print("-"*60)
+    
+    top_orgs = key_columns_df['org'].value_counts().head(10)
+    print("\nTop 10 organizations by appointment count:")
+    for i, (org, count) in enumerate(top_orgs.items(), 1):
+        print(f"  {i:2d}. {org[:50]:<50} : {count:,} appointments")
+    
+    # Check for duplicate records
+    print("\n" + "-"*60)
+    print("DUPLICATE CHECK:")
+    print("-"*60)
+    
+    # Check for exact duplicates
+    duplicate_rows = key_columns_df.duplicated().sum()
+    print(f"\nExact duplicate rows: {duplicate_rows:,}")
+    
+    # Check for duplicate appointments (same person, position, org, year)
+    duplicate_appointments = key_columns_df.duplicated(subset=['name', 'position', 'org', 'year']).sum()
+    print(f"Duplicate appointments (name+position+org+year): {duplicate_appointments:,}")
+    
+    if duplicate_appointments > 0:
+        print("\nSample of duplicate appointments:")
+        duplicates = key_columns_df[key_columns_df.duplicated(subset=['name', 'position', 'org', 'year'], keep=False)]
+        duplicates_sorted = duplicates.sort_values(['name', 'position', 'org', 'year']).head(10)
+        print(duplicates_sorted[['name', 'position', 'org', 'year', 'reappointed']].to_string(index=False))
+    
+    # Save the extracted data
+    print("\n" + "-"*60)
+    print("SAVING EXTRACTED DATA:")
+    print("-"*60)
+    
+    try:
+        key_columns_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nSuccessfully saved to: {output_file}")
+        print(f"Output file contains {len(key_columns_df):,} rows and {len(key_columns_df.columns)} columns")
+        
+    except Exception as e:
+        print(f"\nERROR: Failed to save output file: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("SUMMARY:")
+    print("="*60)
+    
+    print(f"\nOriginal dataset: {len(df):,} rows × {len(df.columns)} columns")
+    print(f"Extracted dataset: {len(key_columns_df):,} rows × {len(key_columns_df.columns)} columns")
+    print(f"Columns extracted: {', '.join(key_columns_df.columns)}")
+    
+    # Key statistics
+    if 'reappointed' in key_columns_df.columns:
+        reappointed_count = key_columns_df['reappointed'].sum()
+        reappointed_pct = (reappointed_count / len(key_columns_df[key_columns_df['reappointed'].notna()])) * 100
+        print(f"\nReappointments: {reappointed_count:,} ({reappointed_pct:.1f}% of non-null values)")
+    
+    print(f"Unique names: {key_columns_df['name'].nunique():,}")
+    print(f"Unique positions: {key_columns_df['position'].nunique():,}")
+    print(f"Unique organizations: {key_columns_df['org'].nunique():,}")
+    print(f"Years covered: {key_columns_df['year'].min()}-{key_columns_df['year'].max()}")
+    
+    print("\n" + "="*60)
+    print("Step 2 completed successfully!")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

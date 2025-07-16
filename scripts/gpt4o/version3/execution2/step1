@@ -1,108 +1,88 @@
 import os
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+from pathlib import Path
 from sklearn.linear_model import LinearRegression
-from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import numpy as np
 
-# Step 1: Combine the 12 raw datasets
-raw_data_path = "raw_data"
-years = list(range(2013, 2025))
-all_data = []
+# Define paths
+raw_data_path = Path("raw_data")
+analysis_data_path = Path("scripts/gpt4o/version3/execution2/analysis_data")
+analysis_data_path.mkdir(parents=True, exist_ok=True)
 
-for year in years:
-    file_path = os.path.join(raw_data_path, f"appointments_{year}.csv")
-    df = pd.read_csv(file_path)
-    df["year"] = year
-    all_data.append(df)
-
-combined_df = pd.concat(all_data, ignore_index=True)
-output_path = "scripts/gpt4o/version3/execution2/analysis_data/"
-os.makedirs(output_path, exist_ok=True)
-combined_df.to_csv(os.path.join(output_path, "step1_combined_appointments.csv"), index=False)
+# Step 1: Combine all datasets
+combined = pd.concat([
+    pd.read_csv(raw_data_path / f"appointments_{year}.csv").assign(year=year)
+    for year in range(2013, 2025)
+], ignore_index=True)
+combined.to_csv(analysis_data_path / "step1_combined_appointments.csv", index=False)
 
 # Step 2: Extract key columns
-key_columns = ["reappointed", "name", "position", "org", "year"]
-key_df = combined_df[key_columns].copy()
-key_df.to_csv(os.path.join(output_path, "step2_key_columns_data.csv"), index=False)
+key_cols = ["reappointed", "name", "position", "org", "year"]
+df = combined[key_cols].copy()
+df.to_csv(analysis_data_path / "step2_key_columns_data.csv", index=False)
 
-# Step 3: Mark reappointments based on repeated name-position-org
-key_df["reappointed"] = False
-key_df["combo"] = key_df["name"].str.lower().str.strip() + "|" + \
-                  key_df["position"].str.lower().str.strip() + "|" + \
-                  key_df["org"].str.lower().str.strip()
+# Step 3: Mark reappointments
+df["reappointed"] = False
+df.sort_values(by=["name", "position", "org", "year"], inplace=True)
+df["reappointed"] = df.duplicated(subset=["name", "position", "org"], keep="first")
+df.to_csv(analysis_data_path / "step3_repeats_marked.csv", index=False)
 
-seen = set()
-reappointed = []
-
-for _, row in key_df.iterrows():
-    combo = row["combo"]
-    if combo in seen:
-        reappointed.append(True)
-    else:
-        seen.add(combo)
-        reappointed.append(False)
-
-key_df["reappointed"] = reappointed
-key_df.drop(columns=["combo"], inplace=True)
-key_df.to_csv(os.path.join(output_path, "step3_repeats_marked.csv"), index=False)
-
-# Step 4: Count total employees per org-year
-employee_counts = key_df.groupby(["org", "year"]).size().reset_index(name="total_employees")
-employee_counts.to_csv(os.path.join(output_path, "step4_employee_counts.csv"), index=False)
+# Step 4: Count total appointments per org-year
+total_counts = df.groupby(["org", "year"]).size().reset_index(name="total_appointments")
+total_counts.to_csv(analysis_data_path / "step4_appointment_counts.csv", index=False)
 
 # Step 5: Count reappointments per org-year
-reappointments = key_df[key_df["reappointed"]].groupby(["org", "year"]).size().reset_index(name="reappointments")
-reappointments.to_csv(os.path.join(output_path, "step5_reappointment_counts.csv"), index=False)
+reappointment_counts = df[df["reappointed"]].groupby(["org", "year"]).size().reset_index(name="reappointment_count")
+reappointment_counts.to_csv(analysis_data_path / "step5_reappointment_counts.csv", index=False)
 
-# Step 6: Calculate reappointment rate
-merged = pd.merge(employee_counts, reappointments, on=["org", "year"], how="left")
-merged["reappointments"] = merged["reappointments"].fillna(0)
-merged["reappointment_rate"] = merged["reappointments"] / merged["total_employees"]
-merged.to_csv(os.path.join(output_path, "step6_reappointment_rates.csv"), index=False)
+# Step 6: Calculate reappointment rates
+merged = pd.merge(total_counts, reappointment_counts, on=["org", "year"], how="left")
+merged["reappointment_count"].fillna(0, inplace=True)
+merged["reappointment_rate"] = merged["reappointment_count"] / merged["total_appointments"]
+merged.to_csv(analysis_data_path / "step6_reappointment_rates.csv", index=False)
 
 # Step 7: Identify org with highest reappointment rate per year
-yearly_max = merged.loc[merged.groupby("year")["reappointment_rate"].idxmax()].reset_index(drop=True)
-yearly_max.to_csv(os.path.join(output_path, "step7_yearly_max_rates.csv"), index=False)
+max_rate_per_year = merged.loc[merged.groupby("year")["reappointment_rate"].idxmax()].reset_index(drop=True)
+max_rate_per_year.to_csv(analysis_data_path / "step7_yearly_max_rates.csv", index=False)
 
+# Plot max org reappointment rates per year
 plt.figure(figsize=(10, 6))
-sns.lineplot(data=yearly_max, x="year", y="reappointment_rate", marker="o")
-plt.title("Highest Org Reappointment Rates per Year")
-plt.ylabel("Reappointment Rate")
+plt.plot(max_rate_per_year["year"], max_rate_per_year["reappointment_rate"], marker='o')
+plt.title("Yearly Maximum Reappointment Rates by Organization")
 plt.xlabel("Year")
+plt.ylabel("Reappointment Rate")
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(os.path.join(output_path, "step7_yearly_max_reappointment_rates.png"))
+plt.savefig(analysis_data_path / "step7_yearly_max_reappointment_rates.png")
 plt.close()
 
-# Step 8: Government-wide reappointment proportion per year
-annual_totals = key_df.groupby("year").size().reset_index(name="total")
-annual_reappointments = key_df[key_df["reappointed"]].groupby("year").size().reset_index(name="reappointments")
-annual = pd.merge(annual_totals, annual_reappointments, on="year", how="left")
-annual["reappointments"] = annual["reappointments"].fillna(0)
-annual["reappointment_proportion"] = annual["reappointments"] / annual["total"]
-annual.to_csv(os.path.join(output_path, "step8_annual_proportions.csv"), index=False)
+# Step 8: Compute government-wide annual reappointment proportion
+annual_reappointments = df.groupby("year")["reappointed"].mean().reset_index(name="gov_reappointment_rate")
+annual_reappointments.to_csv(analysis_data_path / "step8_annual_proportions.csv", index=False)
 
+# Plot government-wide reappointment rate
 plt.figure(figsize=(10, 6))
-sns.lineplot(data=annual, x="year", y="reappointment_proportion", marker="o")
-plt.title("Annual Government-wide Reappointment Proportion")
-plt.ylabel("Proportion")
+plt.plot(annual_reappointments["year"], annual_reappointments["gov_reappointment_rate"], marker='o')
+plt.title("Government-Wide Annual Reappointment Proportion")
 plt.xlabel("Year")
+plt.ylabel("Reappointment Proportion")
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(os.path.join(output_path, "step8_annual_reappointment_proportions.png"))
+plt.savefig(analysis_data_path / "step8_annual_reappointment_proportions.png")
 plt.close()
 
 # Step 9: Linear regression on annual proportions
-X = annual["year"].values.reshape(-1, 1)
-y = annual["reappointment_proportion"].values
-reg = LinearRegression().fit(X, y)
-slope, intercept, r_value, p_value, std_err = linregress(annual["year"], annual["reappointment_proportion"])
+X = annual_reappointments["year"].values.reshape(-1, 1)
+y = annual_reappointments["gov_reappointment_rate"].values
+model = LinearRegression().fit(X, y)
+slope = model.coef_[0]
+intercept = model.intercept_
+r_squared = model.score(X, y)
 
-with open(os.path.join(output_path, "step9_regression_results.txt"), "w") as f:
-    f.write(f"Slope: {slope}\n")
-    f.write(f"Intercept: {intercept}\n")
-    f.write(f"R-squared: {r_value**2}\n")
-    f.write(f"P-value: {p_value}\n")
-    f.write(f"Standard Error: {std_err}\n")
+with open(analysis_data_path / "step9_regression_results.txt", "w") as f:
+    f.write(f"Slope: {slope:.6f}\n")
+    f.write(f"Intercept: {intercept:.6f}\n")
+    f.write(f"R-squared: {r_squared:.6f}\n")
+
+print("Analysis complete. Results saved in:", analysis_data_path)

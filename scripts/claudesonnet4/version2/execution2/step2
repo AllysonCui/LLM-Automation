@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+New Brunswick Government Appointments Analysis
+
+This script extracts and retains the key columns needed for reappointment analysis:
+"reappointed", "name", "position", "org", and "year".
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def create_output_directory(output_path):
+    """Create output directory if it doesn't exist"""
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Output directory created/verified: {output_path}")
+        return True
+    except Exception as e:
+        print(f"✗ Error creating output directory: {e}")
+        return False
+
+def load_combined_data(input_path):
+    """Load the combined dataset from Step 1"""
+    input_file = input_path / "step1_combined_appointments.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"Loading combined dataset from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Successfully loaded dataset")
+        print(f"  - Shape: {df.shape}")
+        print(f"  - Columns: {len(df.columns)}")
+        print(f"  - Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
+        return df
+        
+    except Exception as e:
+        raise Exception(f"Error loading combined dataset: {e}")
+
+def analyze_available_columns(df):
+    """Analyze available columns and their mapping to required key columns"""
+    print(f"\n" + "="*60)
+    print("COLUMN ANALYSIS")
+    print("="*60)
+    
+    print(f"Available columns ({len(df.columns)}):")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+    
+    # Define required key columns
+    required_columns = ["reappointed", "name", "position", "org", "year"]
+    
+    # Check for exact matches
+    print(f"\nRequired columns mapping:")
+    column_mapping = {}
+    
+    for req_col in required_columns:
+        if req_col in df.columns:
+            column_mapping[req_col] = req_col
+            print(f"  ✓ {req_col} -> {req_col} (exact match)")
+        else:
+            # Look for similar column names
+            similar_cols = []
+            for col in df.columns:
+                if req_col.lower() in col.lower() or col.lower() in req_col.lower():
+                    similar_cols.append(col)
+            
+            if similar_cols:
+                print(f"  ⚠ {req_col} -> Potential matches: {similar_cols}")
+                # Use the first similar column as default
+                column_mapping[req_col] = similar_cols[0]
+            else:
+                print(f"  ✗ {req_col} -> No match found")
+                column_mapping[req_col] = None
+    
+    return column_mapping
+
+def create_year_column(df, column_mapping):
+    """Create year column from available date columns or source_year"""
+    print(f"\n" + "-"*40)
+    print("CREATING YEAR COLUMN")
+    print("-"*40)
+    
+    # Check if year column already exists
+    if 'year' in df.columns:
+        print("✓ Year column already exists")
+        return df
+    
+    # Try to create year from various date columns
+    date_columns = ['posted_date', 'start_date', 'end_date', 'source_year']
+    year_created = False
+    
+    for date_col in date_columns:
+        if date_col in df.columns:
+            try:
+                if date_col == 'source_year':
+                    # Source year is already in year format
+                    df['year'] = df[date_col].astype(str)
+                    print(f"✓ Created year column from {date_col}")
+                    year_created = True
+                    break
+                else:
+                    # Try to extract year from date column
+                    df['year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year.astype(str)
+                    # Check if extraction was successful
+                    if df['year'].notna().sum() > 0:
+                        print(f"✓ Created year column from {date_col}")
+                        year_created = True
+                        break
+            except Exception as e:
+                print(f"  ⚠ Could not extract year from {date_col}: {e}")
+                continue
+    
+    if not year_created:
+        print("✗ Could not create year column from available data")
+        # Create a placeholder year column
+        df['year'] = 'Unknown'
+        print("  Created placeholder year column with 'Unknown' values")
+    
+    return df
+
+def standardize_reappointed_column(df):
+    """Standardize the reappointed column to boolean values"""
+    print(f"\n" + "-"*40)
+    print("STANDARDIZING REAPPOINTED COLUMN")
+    print("-"*40)
+    
+    if 'reappointed' not in df.columns:
+        print("✗ Reappointed column not found")
+        return df
+    
+    print(f"Original reappointed column analysis:")
+    print(f"  Data type: {df['reappointed'].dtype}")
+    print(f"  Unique values: {df['reappointed'].unique()}")
+    print(f"  Value counts:")
+    reappointed_counts = df['reappointed'].value_counts(dropna=False)
+    for value, count in reappointed_counts.items():
+        print(f"    {value}: {count:,}")
+    
+    # Standardize to boolean
+    try:
+        # Handle different possible values
+        def standardize_reappointed(value):
+            if pd.isna(value):
+                return False  # Assume False for missing values
+            
+            if isinstance(value, bool):
+                return value
+            
+            if isinstance(value, str):
+                value_lower = value.lower().strip()
+                if value_lower in ['true', 'yes', '1', 'reappointed']:
+                    return True
+                elif value_lower in ['false', 'no', '0', 'new']:
+                    return False
+                else:
+                    return False  # Default to False for unclear values
+            
+            if isinstance(value, (int, float)):
+                return bool(value)
+            
+            return False  # Default fallback
+        
+        df['reappointed'] = df['reappointed'].apply(standardize_reappointed)
+        
+        print(f"\nStandardized reappointed column:")
+        print(f"  Data type: {df['reappointed'].dtype}")
+        standardized_counts = df['reappointed'].value_counts(dropna=False)
+        for value, count in standardized_counts.items():
+            print(f"    {value}: {count:,}")
+            
+    except Exception as e:
+        print(f"✗ Error standardizing reappointed column: {e}")
+    
+    return df
+
+def extract_key_columns(df, column_mapping):
+    """Extract the key columns for analysis"""
+    print(f"\n" + "="*60)
+    print("EXTRACTING KEY COLUMNS")
+    print("="*60)
+    
+    # Define the required columns in order
+    key_columns = ["reappointed", "name", "position", "org", "year"]
+    
+    # Create the key columns dataframe
+    key_df = pd.DataFrame()
+    
+    for key_col in key_columns:
+        mapped_col = column_mapping.get(key_col)
+        
+        if mapped_col and mapped_col in df.columns:
+            key_df[key_col] = df[mapped_col]
+            print(f"✓ Extracted {key_col} from {mapped_col}")
+        else:
+            # Create placeholder column
+            key_df[key_col] = None
+            print(f"✗ Could not extract {key_col} - created placeholder")
+    
+    return key_df
+
+def validate_key_columns_data(df):
+    """Validate the extracted key columns data"""
+    print(f"\n" + "="*60)
+    print("KEY COLUMNS DATA VALIDATION")
+    print("="*60)
+    
+    print(f"Dataset shape: {df.shape}")
+    print(f"Columns: {', '.join(df.columns)}")
+    
+    # Analysis for each key column
+    for col in df.columns:
+        print(f"\n{col.upper()} Analysis:")
+        print(f"  Data type: {df[col].dtype}")
+        print(f"  Missing values: {df[col].isna().sum():,} ({df[col].isna().sum()/len(df)*100:.1f}%)")
+        print(f"  Unique values: {df[col].nunique():,}")
+        
+        # Show value counts for categorical columns
+        if col in ['reappointed', 'year']:
+            print(f"  Value distribution:")
+            value_counts = df[col].value_counts(dropna=False).head(10)
+            for value, count in value_counts.items():
+                print(f"    {value}: {count:,}")
+        
+        # Show sample values for text columns
+        elif col in ['name', 'position', 'org']:
+            print(f"  Sample values:")
+            sample_values = df[col].dropna().unique()[:5]
+            for value in sample_values:
+                print(f"    {value}")
+    
+    # Data quality summary
+    print(f"\n" + "-"*40)
+    print("DATA QUALITY SUMMARY")
+    print("-"*40)
+    
+    complete_rows = df.dropna().shape[0]
+    print(f"Complete rows (no missing values): {complete_rows:,} ({complete_rows/len(df)*100:.1f}%)")
+    
+    # Check for key analysis requirements
+    reappointed_available = df['reappointed'].notna().sum()
+    names_available = df['name'].notna().sum()
+    orgs_available = df['org'].notna().sum()
+    
+    print(f"\nKey analysis requirements:")
+    print(f"  Reappointment data available: {reappointed_available:,} rows")
+    print(f"  Names available: {names_available:,} rows")
+    print(f"  Organizations available: {orgs_available:,} rows")
+    
+    # Analysis readiness assessment
+    analysis_ready = reappointed_available > 0 and names_available > 0 and orgs_available > 0
+    print(f"\nAnalysis readiness: {'✓ Ready' if analysis_ready else '✗ Not ready'}")
+    
+    return analysis_ready
+
+def save_key_columns_data(df, output_path):
+    """Save the key columns dataset"""
+    try:
+        output_file = output_path / "step2_key_columns_data.csv"
+        df.to_csv(output_file, index=False)
+        
+        file_size_mb = output_file.stat().st_size / (1024*1024)
+        print(f"\n✓ Key columns dataset saved successfully!")
+        print(f"  File: {output_file}")
+        print(f"  Size: {file_size_mb:.2f} MB")
+        print(f"  Rows: {len(df):,}")
+        print(f"  Columns: {len(df.columns)}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error saving key columns dataset: {e}")
+        return False
+
+def main():
+    """Main execution function"""
+    print("="*80)
+    print("NEW BRUNSWICK GOVERNMENT APPOINTMENTS ANALYSIS")
+    print("Step 2: Extract Key Columns")
+    print("="*80)
+    
+    # Define paths
+    input_path = Path("scripts/claudesonnet4/version2/execution2/analysis_data")
+    output_path = Path("scripts/claudesonnet4/version2/execution2/analysis_data")
+    
+    # Create output directory
+    if not create_output_directory(output_path):
+        sys.exit(1)
+    
+    try:
+        # Load combined dataset from Step 1
+        print(f"\n" + "="*60)
+        print("LOADING COMBINED DATASET")
+        print("="*60)
+        
+        df = load_combined_data(input_path)
+        
+        # Analyze available columns
+        column_mapping = analyze_available_columns(df)
+        
+        # Create year column if needed
+        df = create_year_column(df, column_mapping)
+        
+        # Standardize reappointed column
+        df = standardize_reappointed_column(df)
+        
+        # Extract key columns
+        key_df = extract_key_columns(df, column_mapping)
+        
+        # Validate extracted data
+        analysis_ready = validate_key_columns_data(key_df)
+        
+        # Save key columns dataset
+        if save_key_columns_data(key_df, output_path):
+            print(f"\n" + "="*60)
+            print("STEP 2 COMPLETED SUCCESSFULLY")
+            print("="*60)
+            print(f"✓ Extracted key columns: {', '.join(key_df.columns)}")
+            print(f"✓ Dataset reduced from {df.shape[1]} to {key_df.shape[1]} columns")
+            print(f"✓ Preserved all {len(key_df):,} appointment records")
+            print(f"✓ Output saved to: {output_path / 'step2_key_columns_data.csv'}")
+            
+            if analysis_ready:
+                print(f"✓ Dataset is ready for reappointment analysis")
+            else:
+                print(f"⚠ Dataset may have data quality issues - review validation results")
+            
+            print(f"\n✓ Ready for Step 3: Mark repeat appointments")
+            
+        else:
+            print("\n✗ Step 2 failed during save operation")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"\n✗ Step 2 failed with error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

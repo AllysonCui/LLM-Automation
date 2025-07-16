@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine Raw Datasets
+============================
+
+This script combines 12 years of New Brunswick government appointment data (2013-2024)
+into a single consolidated dataset for analysis.
+
+Research Question: Which government branch in New Brunswick most frequently reappoints 
+past appointees, and is this trend increasing or declining over the past 12 years?
+
+Author: Claude Sonnet 4
+Version: 2
+Execution: 7
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution7/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def validate_file_exists(file_path):
+    """Check if a file exists and is readable."""
+    if not file_path.exists():
+        print(f"❌ WARNING: File not found: {file_path}")
+        return False
+    if not file_path.is_file():
+        print(f"❌ WARNING: Path is not a file: {file_path}")
+        return False
+    return True
+
+def load_single_dataset(file_path, year):
+    """
+    Load a single CSV file with error handling and validation.
+    
+    Args:
+        file_path (Path): Path to the CSV file
+        year (int): Year of the dataset for tracking
+    
+    Returns:
+        pd.DataFrame or None: Loaded dataset or None if failed
+    """
+    try:
+        print(f"📂 Loading {year} dataset...")
+        
+        # Load the CSV file
+        df = pd.read_csv(file_path)
+        
+        # Add year column for tracking
+        df['source_year'] = year
+        
+        # Basic validation
+        if df.empty:
+            print(f"⚠️  WARNING: {year} dataset is empty")
+            return None
+        
+        print(f"✅ {year}: Loaded {len(df)} records with {len(df.columns)} columns")
+        
+        # Display column info for first file to understand structure
+        if year == 2013:
+            print(f"📊 Column structure (from {year}):")
+            for i, col in enumerate(df.columns, 1):
+                print(f"   {i:2d}. {col} ({df[col].dtype})")
+        
+        return df
+        
+    except FileNotFoundError:
+        print(f"❌ ERROR: File not found: {file_path}")
+        return None
+    except pd.errors.EmptyDataError:
+        print(f"❌ ERROR: Empty or invalid CSV file: {file_path}")
+        return None
+    except pd.errors.ParserError as e:
+        print(f"❌ ERROR: Failed to parse CSV file {file_path}: {str(e)}")
+        return None
+    except Exception as e:
+        print(f"❌ ERROR: Unexpected error loading {file_path}: {str(e)}")
+        return None
+
+def standardize_columns(df_list):
+    """
+    Standardize column names and structure across all datasets.
+    
+    Args:
+        df_list (list): List of DataFrames to standardize
+    
+    Returns:
+        list: List of standardized DataFrames
+    """
+    print("\n🔧 Standardizing column structures...")
+    
+    # Get all unique columns across datasets
+    all_columns = set()
+    for df in df_list:
+        if df is not None:
+            all_columns.update(df.columns)
+    
+    print(f"📋 Found {len(all_columns)} unique columns across all datasets")
+    
+    # Standardize each dataset
+    standardized_dfs = []
+    for i, df in enumerate(df_list):
+        if df is not None:
+            # Ensure all datasets have the same columns
+            for col in all_columns:
+                if col not in df.columns:
+                    df[col] = np.nan
+            
+            # Reorder columns consistently (source_year first, then alphabetical)
+            ordered_cols = ['source_year'] + sorted([col for col in df.columns if col != 'source_year'])
+            df = df[ordered_cols]
+            
+            standardized_dfs.append(df)
+        else:
+            standardized_dfs.append(None)
+    
+    return standardized_dfs
+
+def combine_datasets():
+    """
+    Main function to combine all appointment datasets.
+    
+    Returns:
+        pd.DataFrame: Combined dataset
+    """
+    print("🚀 Starting Step 1: Combining Raw Datasets")
+    print("=" * 50)
+    
+    # Setup directories
+    output_dir = setup_directories()
+    raw_data_dir = Path("raw_data")
+    
+    # Check if raw_data directory exists
+    if not raw_data_dir.exists():
+        print(f"❌ ERROR: Raw data directory not found: {raw_data_dir}")
+        print("Please ensure the raw_data directory exists with appointment CSV files.")
+        return None
+    
+    # Define years and corresponding file paths
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    datasets = []
+    successful_loads = 0
+    
+    print(f"📁 Looking for datasets in: {raw_data_dir.absolute()}")
+    
+    # Load each dataset
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        
+        if validate_file_exists(file_path):
+            df = load_single_dataset(file_path, year)
+            datasets.append(df)
+            if df is not None:
+                successful_loads += 1
+        else:
+            datasets.append(None)
+    
+    print(f"\n📊 Load Summary: {successful_loads}/{len(years)} datasets loaded successfully")
+    
+    if successful_loads == 0:
+        print("❌ ERROR: No datasets were loaded successfully. Cannot proceed.")
+        return None
+    
+    # Filter out None values
+    valid_datasets = [df for df in datasets if df is not None]
+    
+    # Standardize column structures
+    standardized_datasets = standardize_columns(valid_datasets)
+    valid_standardized = [df for df in standardized_datasets if df is not None]
+    
+    if not valid_standardized:
+        print("❌ ERROR: No valid datasets after standardization.")
+        return None
+    
+    # Combine all datasets
+    print("\n🔗 Combining datasets...")
+    try:
+        combined_df = pd.concat(valid_standardized, ignore_index=True, sort=False)
+        print(f"✅ Successfully combined datasets!")
+        
+        # Display summary statistics
+        print(f"\n📈 Combined Dataset Summary:")
+        print(f"   Total Records: {len(combined_df):,}")
+        print(f"   Total Columns: {len(combined_df.columns)}")
+        print(f"   Date Range: {combined_df['source_year'].min()} - {combined_df['source_year'].max()}")
+        print(f"   Records per Year:")
+        
+        year_counts = combined_df['source_year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"     {year}: {count:,} records")
+        
+        # Check for critical columns
+        critical_columns = ['name', 'position', 'org', 'reappointed']
+        missing_critical = [col for col in critical_columns if col not in combined_df.columns]
+        
+        if missing_critical:
+            print(f"\n⚠️  WARNING: Missing critical columns: {missing_critical}")
+        else:
+            print(f"\n✅ All critical columns present: {critical_columns}")
+        
+        # Display data quality overview
+        print(f"\n🔍 Data Quality Overview:")
+        total_cells = len(combined_df) * len(combined_df.columns)
+        missing_cells = combined_df.isnull().sum().sum()
+        print(f"   Missing Values: {missing_cells:,} / {total_cells:,} ({missing_cells/total_cells*100:.1f}%)")
+        
+        # Save combined dataset
+        output_file = output_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(output_file, index=False)
+        print(f"\n💾 Combined dataset saved to: {output_file}")
+        
+        return combined_df
+        
+    except Exception as e:
+        print(f"❌ ERROR: Failed to combine datasets: {str(e)}")
+        return None
+
+def main():
+    """Main execution function."""
+    try:
+        combined_data = combine_datasets()
+        
+        if combined_data is not None:
+            print("\n🎉 Step 1 completed successfully!")
+            print("📁 Output: step1_combined_appointments.csv")
+            print("🔜 Ready for Step 2: Key Columns Extraction")
+        else:
+            print("\n❌ Step 1 failed. Please check the error messages above.")
+            sys.exit(1)
+            
+    except KeyboardInterrupt:
+        print("\n⏹️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main execution: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

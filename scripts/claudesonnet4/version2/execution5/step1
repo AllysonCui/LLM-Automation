@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets (2013-2024)
+New Brunswick Government Appointments Analysis
+
+This script combines all 12 CSV files containing appointment data from 2013-2024
+into a single consolidated dataset for further analysis.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def create_output_directory(output_path):
+    """Create output directory if it doesn't exist"""
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Output directory created/verified: {output_path}")
+    except Exception as e:
+        print(f"✗ Error creating output directory: {e}")
+        sys.exit(1)
+
+def validate_file_exists(file_path):
+    """Check if a file exists and is readable"""
+    if not file_path.exists():
+        print(f"✗ File not found: {file_path}")
+        return False
+    if not file_path.is_file():
+        print(f"✗ Path is not a file: {file_path}")
+        return False
+    print(f"✓ File found: {file_path}")
+    return True
+
+def load_csv_with_validation(file_path):
+    """Load CSV file with comprehensive error handling"""
+    try:
+        # Read CSV with various encoding attempts
+        encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']
+        df = None
+        
+        for encoding in encodings:
+            try:
+                df = pd.read_csv(file_path, encoding=encoding)
+                print(f"✓ Successfully loaded {file_path.name} with {encoding} encoding")
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if df is None:
+            raise ValueError(f"Could not decode file with any attempted encoding")
+            
+        # Basic validation
+        if df.empty:
+            print(f"⚠ Warning: {file_path.name} is empty")
+            return pd.DataFrame()
+            
+        print(f"  - Shape: {df.shape}")
+        print(f"  - Columns: {list(df.columns)}")
+        
+        # Add source year column for tracking
+        year = file_path.stem.split('_')[-1]  # Extract year from filename
+        df['source_year'] = year
+        df['source_file'] = file_path.name
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading {file_path}: {e}")
+        return pd.DataFrame()
+
+def standardize_column_names(df):
+    """Standardize column names across all datasets"""
+    # Convert to lowercase and replace spaces with underscores
+    df.columns = df.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
+    
+    # Handle common column name variations
+    column_mapping = {
+        'organisation': 'org',
+        'organization': 'org',
+        'reappointed?': 'reappointed',
+        're-appointed': 'reappointed',
+        'start': 'start_date',
+        'end': 'end_date',
+        'term': 'term_length',
+        'compensation': 'remuneration',
+        'salary': 'remuneration'
+    }
+    
+    df.rename(columns=column_mapping, inplace=True)
+    return df
+
+def combine_datasets():
+    """Main function to combine all 12 datasets"""
+    print("=" * 60)
+    print("STEP 1: COMBINING NEW BRUNSWICK APPOINTMENT DATASETS")
+    print("=" * 60)
+    
+    # Set up paths
+    raw_data_path = Path("raw_data")
+    output_path = Path("scripts/claudesonnet4/version2/execution5/analysis_data")
+    
+    # Create output directory
+    create_output_directory(output_path)
+    
+    # Define years and expected files
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    expected_files = [f"appointments_{year}.csv" for year in years]
+    
+    print(f"\nLooking for {len(expected_files)} files in: {raw_data_path}")
+    print("Expected files:", expected_files)
+    
+    # Check file existence
+    available_files = []
+    missing_files = []
+    
+    for filename in expected_files:
+        file_path = raw_data_path / filename
+        if validate_file_exists(file_path):
+            available_files.append(file_path)
+        else:
+            missing_files.append(filename)
+    
+    if missing_files:
+        print(f"\n⚠ Warning: {len(missing_files)} files are missing:")
+        for file in missing_files:
+            print(f"  - {file}")
+        print(f"\nProceeding with {len(available_files)} available files...")
+    
+    if not available_files:
+        print("✗ No files found. Please check the raw_data directory.")
+        sys.exit(1)
+    
+    # Load and combine datasets
+    print(f"\nLoading {len(available_files)} CSV files...")
+    all_dataframes = []
+    
+    for file_path in available_files:
+        print(f"\nProcessing: {file_path.name}")
+        df = load_csv_with_validation(file_path)
+        
+        if not df.empty:
+            # Standardize column names
+            df = standardize_column_names(df)
+            all_dataframes.append(df)
+            print(f"✓ Added {len(df)} records from {file_path.name}")
+        else:
+            print(f"⚠ Skipping empty file: {file_path.name}")
+    
+    if not all_dataframes:
+        print("✗ No valid data found in any files.")
+        sys.exit(1)
+    
+    # Combine all dataframes
+    print(f"\nCombining {len(all_dataframes)} datasets...")
+    try:
+        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+        print(f"✓ Successfully combined datasets")
+        print(f"  - Total records: {len(combined_df):,}")
+        print(f"  - Total columns: {len(combined_df.columns)}")
+        
+    except Exception as e:
+        print(f"✗ Error combining datasets: {e}")
+        sys.exit(1)
+    
+    # Data quality summary
+    print(f"\nDATA QUALITY SUMMARY:")
+    print(f"- Total records: {len(combined_df):,}")
+    print(f"- Columns: {len(combined_df.columns)}")
+    print(f"- Years covered: {sorted(combined_df['source_year'].unique())}")
+    print(f"- Records by year:")
+    year_counts = combined_df['source_year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count:,} records")
+    
+    # Check for critical columns
+    critical_columns = ['name', 'position', 'org', 'reappointed']
+    missing_critical = [col for col in critical_columns if col not in combined_df.columns]
+    if missing_critical:
+        print(f"\n⚠ Warning: Missing critical columns: {missing_critical}")
+    else:
+        print(f"\n✓ All critical columns present: {critical_columns}")
+    
+    # Handle missing values summary
+    print(f"\nMISSING VALUES SUMMARY:")
+    missing_summary = combined_df.isnull().sum()
+    missing_summary = missing_summary[missing_summary > 0].sort_values(ascending=False)
+    if len(missing_summary) > 0:
+        print("Columns with missing values:")
+        for col, count in missing_summary.items():
+            percentage = (count / len(combined_df)) * 100
+            print(f"  {col}: {count:,} ({percentage:.1f}%)")
+    else:
+        print("✓ No missing values found")
+    
+    # Save combined dataset
+    output_file = output_path / "step1_combined_appointments.csv"
+    try:
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\n✓ Combined dataset saved to: {output_file}")
+        print(f"  - File size: {output_file.stat().st_size / 1024:.1f} KB")
+        
+    except Exception as e:
+        print(f"✗ Error saving combined dataset: {e}")
+        sys.exit(1)
+    
+    # Final validation
+    print(f"\nFINAL VALIDATION:")
+    try:
+        # Re-read the saved file to verify
+        validation_df = pd.read_csv(output_file)
+        if len(validation_df) == len(combined_df):
+            print(f"✓ File saved successfully and validated")
+            print(f"✓ Step 1 completed successfully!")
+        else:
+            print(f"✗ Validation failed: record count mismatch")
+            
+    except Exception as e:
+        print(f"✗ Validation error: {e}")
+    
+    print("=" * 60)
+    return combined_df
+
+if __name__ == "__main__":
+    # Execute the combination process
+    combined_data = combine_datasets()
+    
+    # Print final summary
+    print(f"\nSUMMARY:")
+    print(f"- Combined dataset created with {len(combined_data):,} records")
+    print(f"- Data spans {len(combined_data['source_year'].unique())} years")
+    print(f"- Ready for Step 2: Key columns extraction")
+    print(f"- Output saved to: scripts/claudesonnet4/version2/execution5/analysis_data/step1_combined_appointments.csv")

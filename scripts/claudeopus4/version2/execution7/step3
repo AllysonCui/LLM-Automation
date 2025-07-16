@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark reappointments based on repeated name-position-org combinations
+This script identifies reappointments by marking True for any repeated 
+name-position-org combination (except the first appearance).
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to mark reappointments based on repeated combinations."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution7/analysis_data")
+    input_file = input_dir / "step2_key_columns_data.csv"
+    output_file = input_dir / "step3_repeats_marked.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 3: MARKING REAPPOINTMENTS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 2 first to generate the key columns dataset.")
+        sys.exit(1)
+    
+    # Read the data
+    print(f"Reading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows")
+    except Exception as e:
+        print(f"ERROR reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Display initial data info
+    print("\nInitial data summary:")
+    print(f"  - Total rows: {len(df):,}")
+    print(f"  - Columns: {', '.join(df.columns)}")
+    
+    # Check for required columns
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"\nERROR: Missing required columns: {', '.join(missing_cols)}")
+        sys.exit(1)
+    
+    # Analyze existing reappointed column if it exists
+    print("\n" + "-"*60)
+    print("EXISTING 'REAPPOINTED' COLUMN ANALYSIS:")
+    print("-"*60)
+    
+    if 'reappointed' in df.columns:
+        print("\nCurrent 'reappointed' values distribution:")
+        value_counts = df['reappointed'].value_counts(dropna=False)
+        for value, count in value_counts.items():
+            pct = (count / len(df)) * 100
+            print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    else:
+        print("No existing 'reappointed' column found. Creating new column.")
+    
+    # Store original reappointed column for comparison
+    original_reappointed = None
+    if 'reappointed' in df.columns:
+        original_reappointed = df['reappointed'].copy()
+    
+    # Sort by year to ensure chronological order
+    print("\n" + "-"*60)
+    print("PROCESSING REAPPOINTMENTS:")
+    print("-"*60)
+    
+    # Convert year to numeric for proper sorting
+    df['year_numeric'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Sort by year (chronologically)
+    df_sorted = df.sort_values('year_numeric', na_position='last').copy()
+    print(f"\nSorted data by year (earliest to latest)")
+    
+    # Create combination key
+    print("\nCreating name-position-org combination keys...")
+    
+    # Handle null values in key columns by converting to string
+    df_sorted['name_clean'] = df_sorted['name'].fillna('').astype(str).str.strip().str.lower()
+    df_sorted['position_clean'] = df_sorted['position'].fillna('').astype(str).str.strip().str.lower()
+    df_sorted['org_clean'] = df_sorted['org'].fillna('').astype(str).str.strip().str.lower()
+    
+    # Create combination key
+    df_sorted['combo_key'] = (df_sorted['name_clean'] + '|' + 
+                              df_sorted['position_clean'] + '|' + 
+                              df_sorted['org_clean'])
+    
+    # Remove empty combinations
+    empty_combos = (df_sorted['name_clean'] == '') & (df_sorted['position_clean'] == '') & (df_sorted['org_clean'] == '')
+    print(f"  - Empty combinations found: {empty_combos.sum():,}")
+    
+    # Initialize new reappointed column
+    df_sorted['reappointed_new'] = False
+    
+    # Track first appearances
+    first_appearances = {}
+    reappointment_count = 0
+    
+    # Process each row
+    print("\nProcessing appointments chronologically...")
+    for idx, row in df_sorted.iterrows():
+        combo = row['combo_key']
+        
+        # Skip empty combinations
+        if combo == '||' or pd.isna(combo):
+            continue
+        
+        if combo in first_appearances:
+            # This is a reappointment
+            df_sorted.at[idx, 'reappointed_new'] = True
+            reappointment_count += 1
+        else:
+            # This is the first appearance
+            first_appearances[combo] = idx
+            df_sorted.at[idx, 'reappointed_new'] = False
+    
+    print(f"  - Unique name-position-org combinations: {len(first_appearances):,}")
+    print(f"  - Reappointments identified: {reappointment_count:,}")
+    
+    # Copy the new reappointed column to the original column
+    df_sorted['reappointed'] = df_sorted['reappointed_new']
+    
+    # Drop temporary columns before saving
+    columns_to_drop = ['year_numeric', 'name_clean', 'position_clean', 'org_clean', 'combo_key', 'reappointed_new']
+    df_final = df_sorted.drop(columns=columns_to_drop)
+    
+    # Restore original order
+    df_final = df_final.sort_index()
+    
+    # Analysis of changes
+    print("\n" + "="*60)
+    print("REAPPOINTMENT ANALYSIS:")
+    print("="*60)
+    
+    # New distribution
+    print("\nNew 'reappointed' distribution:")
+    new_counts = df_final['reappointed'].value_counts()
+    for value, count in new_counts.items():
+        pct = (count / len(df_final)) * 100
+        print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Compare with original if it existed
+    if original_reappointed is not None:
+        print("\n" + "-"*60)
+        print("COMPARISON WITH ORIGINAL VALUES:")
+        print("-"*60)
+        
+        # Create comparison
+        comparison = pd.DataFrame({
+            'original': original_reappointed,
+            'new': df_final['reappointed']
+        })
+        
+        # Count changes
+        changed = (comparison['original'] != comparison['new']).sum()
+        print(f"\nTotal changes made: {changed:,} ({changed/len(df_final)*100:.1f}%)")
+        
+        # Detailed change analysis
+        print("\nChange details:")
+        # Original True -> New False
+        true_to_false = ((comparison['original'] == True) & (comparison['new'] == False)).sum()
+        print(f"  - True → False: {true_to_false:,}")
+        
+        # Original False -> New True
+        false_to_true = ((comparison['original'] == False) & (comparison['new'] == True)).sum()
+        print(f"  - False → True: {false_to_true:,}")
+        
+        # Original NaN -> New value
+        nan_to_value = (comparison['original'].isna() & comparison['new'].notna()).sum()
+        print(f"  - NaN → Value: {nan_to_value:,}")
+    
+    # Sample of reappointments
+    print("\n" + "-"*60)
+    print("SAMPLE REAPPOINTMENTS (first 10):")
+    print("-"*60)
+    reappointments = df_final[df_final['reappointed'] == True].head(10)
+    if len(reappointments) > 0:
+        print(reappointments[['name', 'position', 'org', 'year', 'reappointed']].to_string())
+    else:
+        print("No reappointments found in the data.")
+    
+    # Analysis by year
+    print("\n" + "-"*60)
+    print("REAPPOINTMENTS BY YEAR:")
+    print("-"*60)
+    year_analysis = df_final.groupby('year')['reappointed'].agg(['sum', 'count'])
+    year_analysis['percentage'] = (year_analysis['sum'] / year_analysis['count'] * 100).round(1)
+    year_analysis.columns = ['reappointments', 'total', 'percentage']
+    
+    for year, row in year_analysis.iterrows():
+        if pd.notna(year):
+            print(f"  {int(year)}: {int(row['reappointments']):,} / {int(row['total']):,} ({row['percentage']:.1f}%)")
+    
+    # Most frequently reappointed combinations
+    print("\n" + "-"*60)
+    print("TOP 10 MOST FREQUENTLY REAPPOINTED POSITIONS:")
+    print("-"*60)
+    
+    # Recreate combination for analysis
+    df_sorted['analysis_combo'] = (df_sorted['name'].astype(str) + ' - ' + 
+                                   df_sorted['position'].astype(str) + ' - ' + 
+                                   df_sorted['org'].astype(str))
+    
+    combo_counts = df_sorted[df_sorted['reappointed_new'] == True].groupby('combo_key').size()
+    if len(combo_counts) > 0:
+        top_combos = combo_counts.sort_values(ascending=False).head(10)
+        
+        for i, (combo_key, count) in enumerate(top_combos.items(), 1):
+            # Find a sample row for this combo
+            sample = df_sorted[df_sorted['combo_key'] == combo_key].iloc[0]
+            print(f"  {i}. {sample['name']} - {sample['position']} - {sample['org']}")
+            print(f"     Reappointed {count} time(s)")
+    
+    # Save the results
+    print("\n" + "-"*60)
+    print(f"Saving results to: {output_file}")
+    df_final.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Verify saved file
+    saved_df = pd.read_csv(output_file)
+    if len(saved_df) == len(df_final):
+        print(f"SUCCESS: Data saved successfully ({len(saved_df):,} rows)")
+    else:
+        print("WARNING: Row count mismatch in saved file!")
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 3 COMPLETED SUCCESSFULLY")
+    print("="*60)
+    print(f"\nSummary:")
+    print(f"  - Total appointments processed: {len(df_final):,}")
+    print(f"  - Unique positions: {len(first_appearances):,}")
+    print(f"  - Reappointments marked: {reappointment_count:,}")
+    print(f"  - Reappointment rate: {(reappointment_count/len(df_final)*100):.1f}%")
+    print(f"  - Output file: {output_file}")
+    
+    # Data quality notes
+    empty_names = df_final['name'].isna().sum() + (df_final['name'] == '').sum()
+    if empty_names > 0:
+        print(f"\n⚠️  WARNING: {empty_names:,} rows have empty names and were not considered for reappointments")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""
+Step 6: Calculate reappointment rates
+This script calculates the reappointment rate as reappointments divided by 
+total employees for each org-year pair.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to calculate reappointment rates for each org-year pair"""
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    output_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    
+    # Define input files
+    employee_counts_file = input_path / "step4_employee_counts.csv"
+    reappointment_counts_file = input_path / "step5_reappointment_counts.csv"
+    output_file = output_path / "step6_reappointment_rates.csv"
+    
+    print("=== Step 6: Calculate Reappointment Rates ===")
+    print(f"Appointment counts file: {employee_counts_file}")
+    print(f"Reappointment counts file: {reappointment_counts_file}")
+    print(f"Output file: {output_file}")
+    
+    # Check if input files exist
+    missing_files = []
+    if not employee_counts_file.exists():
+        missing_files.append(str(employee_counts_file))
+    if not reappointment_counts_file.exists():
+        missing_files.append(str(reappointment_counts_file))
+    
+    if missing_files:
+        print(f"\n❌ ERROR: Required input files not found:")
+        for f in missing_files:
+            print(f"  - {f}")
+        print("\nPlease run the following steps first:")
+        if not employee_counts_file.exists():
+            print("  - step4_count_employees.py")
+        if not reappointment_counts_file.exists():
+            print("  - step5_count_reappointments.py")
+        sys.exit(1)
+    
+    # Read the employee counts data
+    try:
+        print("\nReading employee counts data...")
+        employee_df = pd.read_csv(employee_counts_file, encoding='utf-8')
+        print(f"✅ Successfully loaded employee counts: {len(employee_df)} rows")
+        print(f"   Columns: {', '.join(employee_df.columns)}")
+    except Exception as e:
+        print(f"❌ Error reading employee counts file: {str(e)}")
+        sys.exit(1)
+    
+    # Read the reappointment counts data
+    try:
+        print("\nReading reappointment counts data...")
+        reappointment_df = pd.read_csv(reappointment_counts_file, encoding='utf-8')
+        print(f"✅ Successfully loaded reappointment counts: {len(reappointment_df)} rows")
+        print(f"   Columns: {', '.join(reappointment_df.columns)}")
+    except Exception as e:
+        print(f"❌ Error reading reappointment counts file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    print("\n=== Validating Data ===")
+    
+    # Check employee_df columns
+    employee_required = ['org', 'year', 'employee_count']
+    employee_missing = [col for col in employee_required if col not in employee_df.columns]
+    if employee_missing:
+        print(f"❌ ERROR: Missing columns in employee counts: {', '.join(employee_missing)}")
+        sys.exit(1)
+    
+    # Check reappointment_df columns
+    reappointment_required = ['org', 'year', 'reappointment_count']
+    reappointment_missing = [col for col in reappointment_required if col not in reappointment_df.columns]
+    if reappointment_missing:
+        print(f"❌ ERROR: Missing columns in reappointment counts: {', '.join(reappointment_missing)}")
+        sys.exit(1)
+    
+    print("✅ All required columns present")
+    
+    # Data overview
+    print("\n=== Data Overview ===")
+    print(f"Appointment counts: {len(employee_df)} org-year combinations")
+    print(f"Reappointment counts: {len(reappointment_df)} org-year combinations")
+    
+    # Merge the datasets
+    print("\n=== Merging Datasets ===")
+    
+    # Merge on org and year
+    merged_df = employee_df[['org', 'year', 'employee_count']].merge(
+        reappointment_df[['org', 'year', 'reappointment_count']],
+        on=['org', 'year'],
+        how='outer',
+        indicator=True
+    )
+    
+    # Check merge results
+    merge_summary = merged_df['_merge'].value_counts()
+    print("Merge results:")
+    print(f"  - Both datasets: {merge_summary.get('both', 0)}")
+    print(f"  - Only employee counts: {merge_summary.get('left_only', 0)}")
+    print(f"  - Only reappointment counts: {merge_summary.get('right_only', 0)}")
+    
+    # Handle missing values
+    print("\n=== Handling Missing Values ===")
+    
+    # Fill missing reappointment counts with 0 (no reappointments)
+    missing_reappointments = merged_df['reappointment_count'].isna().sum()
+    if missing_reappointments > 0:
+        print(f"Filling {missing_reappointments} missing reappointment counts with 0")
+        merged_df['reappointment_count'] = merged_df['reappointment_count'].fillna(0)
+    
+    # Check for missing employee counts
+    missing_employees = merged_df['employee_count'].isna().sum()
+    if missing_employees > 0:
+        print(f"⚠️  Warning: {missing_employees} org-year combinations have reappointments but no employee count")
+        print("   These will be excluded from rate calculations")
+    
+    # Remove the merge indicator
+    merged_df = merged_df.drop('_merge', axis=1)
+    
+    # Calculate reappointment rates
+    print("\n=== Calculating Reappointment Rates ===")
+    
+    # Calculate rate only where employee_count > 0
+    merged_df['reappointment_rate'] = np.where(
+        merged_df['employee_count'] > 0,
+        (merged_df['reappointment_count'] / merged_df['employee_count'] * 100).round(2),
+        np.nan
+    )
+    
+    # Count calculations
+    valid_rates = merged_df['reappointment_rate'].notna().sum()
+    zero_employees = (merged_df['employee_count'] == 0).sum()
+    
+    print(f"✅ Calculated {valid_rates} reappointment rates")
+    if zero_employees > 0:
+        print(f"⚠️  Skipped {zero_employees} org-year combinations with zero employees")
+    
+    # Add additional calculated fields
+    print("\n=== Adding Additional Metrics ===")
+    
+    # Calculate new appointments (employees - reappointments)
+    merged_df['new_appointments'] = merged_df['employee_count'] - merged_df['reappointment_count']
+    
+    # Validate calculations
+    invalid_calculations = (merged_df['new_appointments'] < 0).sum()
+    if invalid_calculations > 0:
+        print(f"⚠️  Warning: {invalid_calculations} org-year combinations have more reappointments than total employees")
+        print("   This may indicate data quality issues")
+        
+        # Show examples
+        problematic = merged_df[merged_df['new_appointments'] < 0].head(5)
+        if not problematic.empty:
+            print("\n   Examples of problematic data:")
+            print(problematic[['org', 'year', 'employee_count', 'reappointment_count', 'new_appointments']])
+    
+    # Sort by org and year
+    merged_df = merged_df.sort_values(['org', 'year']).reset_index(drop=True)
+    
+    # Summary statistics
+    print("\n=== Summary Statistics ===")
+    
+    # Overall statistics
+    total_employees = merged_df['employee_count'].sum()
+    total_reappointments = merged_df['reappointment_count'].sum()
+    overall_rate = (total_reappointments / total_employees * 100) if total_employees > 0 else 0
+    
+    print(f"Overall statistics (all years):")
+    print(f"  - Total employees: {total_employees:,}")
+    print(f"  - Total reappointments: {total_reappointments:,}")
+    print(f"  - Overall reappointment rate: {overall_rate:.2f}%")
+    
+    # Rate distribution
+    rates_stats = merged_df['reappointment_rate'].describe()
+    print(f"\nReappointment rate distribution:")
+    print(f"  - Mean: {rates_stats['mean']:.2f}%")
+    print(f"  - Median: {rates_stats['50%']:.2f}%")
+    print(f"  - Std Dev: {rates_stats['std']:.2f}%")
+    print(f"  - Min: {rates_stats['min']:.2f}%")
+    print(f"  - Max: {rates_stats['max']:.2f}%")
+    
+    # Organizations with highest rates
+    print("\n=== Top 15 Organizations by Average Reappointment Rate ===")
+    print("(Minimum 10 total employees across all years)")
+    
+    # Calculate organization-level statistics
+    org_stats = merged_df.groupby('org').agg({
+        'employee_count': 'sum',
+        'reappointment_count': 'sum',
+        'year': 'count'
+    }).reset_index()
+    
+    org_stats.columns = ['org', 'total_employees', 'total_reappointments', 'years_active']
+    
+    # Calculate overall rate for each org
+    org_stats['overall_rate'] = (
+        org_stats['total_reappointments'] / org_stats['total_employees'] * 100
+    ).round(2)
+    
+    # Filter for organizations with meaningful data
+    significant_orgs = org_stats[org_stats['total_employees'] >= 10].sort_values(
+        'overall_rate', ascending=False).head(15)
+    
+    for i, row in significant_orgs.iterrows():
+        print(f"{i+1:2d}. {row['org']}: {row['overall_rate']:.1f}% "
+              f"({int(row['total_reappointments'])}/{int(row['total_employees'])} "
+              f"over {int(row['years_active'])} years)")
+    
+    # Year-by-year analysis
+    print("\n=== Yearly Reappointment Rate Trends ===")
+    
+    yearly_stats = merged_df.groupby('year').agg({
+        'employee_count': 'sum',
+        'reappointment_count': 'sum',
+        'org': 'nunique'
+    }).reset_index()
+    
+    yearly_stats['yearly_rate'] = (
+        yearly_stats['reappointment_count'] / yearly_stats['employee_count'] * 100
+    ).round(2)
+    
+    print("\nYear | Appointments | Reappointments | Rate  | Active Orgs")
+    print("-" * 55)
+    for _, row in yearly_stats.iterrows():
+        print(f"{int(row['year'])} | {row['employee_count']:9,} | {row['reappointment_count']:14,} | "
+              f"{row['yearly_rate']:5.1f}% | {row['org']:11}")
+    
+    # Identify organizations with extreme rates
+    print("\n=== Organizations with Extreme Reappointment Rates ===")
+    
+    # High rates (>50%)
+    high_rate_orgs = merged_df[
+        (merged_df['reappointment_rate'] > 50) & 
+        (merged_df['employee_count'] >= 5)  # At least 5 employees for meaningful rate
+    ].sort_values('reappointment_rate', ascending=False).head(10)
+    
+    if not high_rate_orgs.empty:
+        print("\nHighest single-year reappointment rates (>50%, min 5 employees):")
+        for _, row in high_rate_orgs.iterrows():
+            print(f"  - {row['org']} ({int(row['year'])}): {row['reappointment_rate']:.1f}% "
+                  f"({int(row['reappointment_count'])}/{int(row['employee_count'])})")
+    
+    # Organizations with zero reappointments despite having employees
+    zero_reappointment_orgs = merged_df[
+        (merged_df['reappointment_count'] == 0) & 
+        (merged_df['employee_count'] >= 10)
+    ].groupby('org').size().sort_values(ascending=False).head(5)
+    
+    if not zero_reappointment_orgs.empty:
+        print("\nOrganizations with zero reappointments (min 10 employees in a year):")
+        for org, count in zero_reappointment_orgs.items():
+            total_employees = merged_df[
+                (merged_df['org'] == org) & 
+                (merged_df['reappointment_count'] == 0) & 
+                (merged_df['employee_count'] >= 10)
+            ]['employee_count'].sum()
+            print(f"  - {org}: {count} years with 0% rate ({total_employees} total employees)")
+    
+    # Rate volatility analysis
+    print("\n=== Organizations with Most Variable Reappointment Rates ===")
+    
+    # Calculate rate volatility for orgs with 5+ years of data
+    volatility_analysis = []
+    for org in merged_df['org'].unique():
+        org_data = merged_df[
+            (merged_df['org'] == org) & 
+            (merged_df['reappointment_rate'].notna())
+        ]
+        
+        if len(org_data) >= 5:  # Need sufficient data points
+            rate_std = org_data['reappointment_rate'].std()
+            rate_mean = org_data['reappointment_rate'].mean()
+            
+            if rate_mean > 0:  # Avoid division by zero
+                cv = rate_std / rate_mean  # Coefficient of variation
+                volatility_analysis.append({
+                    'org': org,
+                    'years': len(org_data),
+                    'mean_rate': rate_mean,
+                    'std_dev': rate_std,
+                    'cv': cv
+                })
+    
+    if volatility_analysis:
+        volatility_df = pd.DataFrame(volatility_analysis).sort_values('cv', ascending=False).head(10)
+        
+        print("\nMost variable organizations (by coefficient of variation):")
+        for _, row in volatility_df.iterrows():
+            print(f"  - {row['org']}: Mean {row['mean_rate']:.1f}% ± {row['std_dev']:.1f}% "
+                  f"(CV: {row['cv']:.2f})")
+    
+    # Save the reappointment rates dataset
+    print(f"\n=== Saving Reappointment Rates Dataset ===")
+    
+    # Select columns to save
+    output_columns = [
+        'org', 'year', 'employee_count', 'reappointment_count', 
+        'reappointment_rate', 'new_appointments'
+    ]
+    
+    output_df = merged_df[output_columns]
+    
+    try:
+        output_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✅ Successfully saved reappointment rates")
+        print(f"  - Output file: {output_file}")
+        print(f"  - File size: {output_file.stat().st_size / 1024:.2f} KB")
+        print(f"  - Total rows: {len(output_df)}")
+        print(f"  - Columns: {', '.join(output_df.columns)}")
+    except Exception as e:
+        print(f"❌ Error saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Display sample of the reappointment rates
+    print("\n=== Sample of Reappointment Rates (First 20 rows) ===")
+    display_df = output_df.head(20).copy()
+    display_df['reappointment_rate'] = display_df['reappointment_rate'].apply(
+        lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    )
+    print(display_df.to_string(index=False))
+    
+    print("\n✅ Step 6 completed successfully!")
+    print(f"Next step: Run step 7 to find organizations with maximum reappointment rates by year")
+
+if __name__ == "__main__":
+    main()

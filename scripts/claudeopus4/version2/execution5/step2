@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns from the combined dataset
+This script extracts the columns: "reappointed", "name", "position", "org", and "year"
+from the combined appointments dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+INPUT_DIR = Path("scripts/claudeopus4/version2/execution5/analysis_data")
+INPUT_FILE = INPUT_DIR / "step1_combined_appointments.csv"
+OUTPUT_FILE = INPUT_DIR / "step2_key_columns_data.csv"
+
+# Define the key columns to extract
+KEY_COLUMNS = ["reappointed", "name", "position", "org", "source_year"]
+# Note: "source_year" was added in step 1 to track the year
+
+def load_combined_data():
+    """Load the combined dataset from step 1"""
+    print(f"Loading combined dataset from: {INPUT_FILE}")
+    
+    if not INPUT_FILE.exists():
+        print(f"✗ ERROR: Input file not found: {INPUT_FILE}")
+        print("  Please run step 1 first to create the combined dataset.")
+        sys.exit(1)
+    
+    try:
+        df = pd.read_csv(INPUT_FILE, encoding='utf-8')
+        print(f"✓ Successfully loaded dataset")
+        print(f"  • Total rows: {len(df):,}")
+        print(f"  • Total columns: {len(df.columns)}")
+        return df
+    
+    except Exception as e:
+        print(f"✗ ERROR loading file: {str(e)}")
+        sys.exit(1)
+
+def validate_columns(df):
+    """Validate that required columns exist in the dataset"""
+    print("\nValidating required columns...")
+    
+    # Check which key columns exist
+    existing_columns = set(df.columns)
+    required_columns = set(KEY_COLUMNS)
+    
+    # Find missing columns
+    missing_columns = required_columns - existing_columns
+    
+    # Handle column name variations
+    column_mapping = {}
+    
+    # Check for "year" column if "source_year" is missing
+    if "source_year" in missing_columns and "year" in existing_columns:
+        column_mapping["year"] = "source_year"
+        missing_columns.remove("source_year")
+        print("  • Found 'year' column, will rename to 'source_year'")
+    
+    # Check for "organization" as alternative to "org"
+    if "org" in missing_columns and "organization" in existing_columns:
+        column_mapping["organization"] = "org"
+        missing_columns.remove("org")
+        print("  • Found 'organization' column, will rename to 'org'")
+    
+    # Apply column mappings
+    if column_mapping:
+        df = df.rename(columns=column_mapping)
+        print(f"  ✓ Renamed {len(column_mapping)} columns")
+    
+    # Report findings
+    if missing_columns:
+        print(f"\n✗ ERROR: Missing required columns: {missing_columns}")
+        print("\nAvailable columns in dataset:")
+        for col in sorted(df.columns):
+            print(f"  • {col}")
+        sys.exit(1)
+    
+    print("✓ All required columns found")
+    return df
+
+def extract_key_columns(df):
+    """Extract only the key columns from the dataset"""
+    print("\nExtracting key columns...")
+    
+    # Extract the key columns
+    df_key = df[KEY_COLUMNS].copy()
+    
+    # Rename source_year to year for clarity in subsequent steps
+    df_key = df_key.rename(columns={"source_year": "year"})
+    
+    print(f"✓ Extracted {len(df_key.columns)} key columns")
+    print(f"  Columns: {list(df_key.columns)}")
+    
+    return df_key
+
+def analyze_key_data(df):
+    """Analyze the extracted key columns data"""
+    print("\n" + "="*50)
+    print("KEY COLUMNS DATA ANALYSIS")
+    print("="*50)
+    
+    # Basic info
+    print(f"\nDataset shape: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    
+    # Column data types
+    print("\nColumn data types:")
+    for col in df.columns:
+        print(f"  • {col}: {df[col].dtype}")
+    
+    # Missing values analysis
+    print("\nMissing values analysis:")
+    null_counts = df.isnull().sum()
+    for col in df.columns:
+        null_count = null_counts[col]
+        null_pct = (null_count / len(df)) * 100
+        if null_count > 0:
+            print(f"  • {col}: {null_count:,} missing ({null_pct:.1f}%)")
+        else:
+            print(f"  • {col}: No missing values ✓")
+    
+    # Reappointed column analysis
+    print("\nReappointed column analysis:")
+    if df['reappointed'].dtype == 'object':
+        # Handle text values
+        unique_values = df['reappointed'].unique()
+        print(f"  • Data type: Text/Object")
+        print(f"  • Unique values: {unique_values}")
+        value_counts = df['reappointed'].value_counts(dropna=False)
+        for value, count in value_counts.items():
+            pct = (count / len(df)) * 100
+            print(f"    - {value}: {count:,} ({pct:.1f}%)")
+    else:
+        # Handle boolean values
+        print(f"  • Data type: Boolean")
+        value_counts = df['reappointed'].value_counts(dropna=False)
+        for value, count in value_counts.items():
+            pct = (count / len(df)) * 100
+            print(f"    - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Year distribution
+    print("\nYear distribution:")
+    year_counts = df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  • {year}: {count:,} appointments")
+    
+    # Organization analysis
+    print(f"\nOrganization analysis:")
+    print(f"  • Total unique organizations: {df['org'].nunique()}")
+    
+    # Find organizations with null values
+    org_nulls = df['org'].isnull().sum()
+    if org_nulls > 0:
+        print(f"  • Records with missing organization: {org_nulls:,}")
+    
+    # Top organizations
+    print("\n  Top 10 organizations by appointment count:")
+    top_orgs = df['org'].value_counts().head(10)
+    for org, count in top_orgs.items():
+        pct = (count / len(df)) * 100
+        print(f"    - {org}: {count:,} ({pct:.1f}%)")
+    
+    # Name analysis
+    print(f"\nName analysis:")
+    print(f"  • Total unique appointees: {df['name'].nunique()}")
+    
+    # Find names with null values
+    name_nulls = df['name'].isnull().sum()
+    if name_nulls > 0:
+        print(f"  • Records with missing names: {name_nulls:,}")
+    
+    # People with multiple appointments
+    name_counts = df['name'].value_counts()
+    multiple_appointments = name_counts[name_counts > 1]
+    if len(multiple_appointments) > 0:
+        print(f"  • People with multiple appointments: {len(multiple_appointments):,}")
+        print("\n  Top 10 people by appointment count:")
+        for name, count in multiple_appointments.head(10).items():
+            print(f"    - {name}: {count} appointments")
+    
+    # Position analysis
+    print(f"\nPosition analysis:")
+    print(f"  • Total unique positions: {df['position'].nunique()}")
+    position_nulls = df['position'].isnull().sum()
+    if position_nulls > 0:
+        print(f"  • Records with missing positions: {position_nulls:,}")
+
+def clean_and_standardize(df):
+    """Clean and standardize the data"""
+    print("\nCleaning and standardizing data...")
+    
+    # Create a copy to avoid modifying the original
+    df_clean = df.copy()
+    
+    # Standardize text columns (strip whitespace, handle empty strings)
+    text_columns = ['name', 'position', 'org']
+    for col in text_columns:
+        # Convert to string and strip whitespace
+        df_clean[col] = df_clean[col].astype(str).str.strip()
+        # Replace empty strings and 'nan' with actual NaN
+        df_clean[col] = df_clean[col].replace(['', 'nan', 'None'], np.nan)
+    
+    # Standardize reappointed column if it's text
+    if df_clean['reappointed'].dtype == 'object':
+        # Convert string representations to boolean
+        true_values = ['True', 'true', 'TRUE', '1', 'Yes', 'yes', 'YES']
+        false_values = ['False', 'false', 'FALSE', '0', 'No', 'no', 'NO']
+        
+        df_clean['reappointed'] = df_clean['reappointed'].astype(str).str.strip()
+        
+        # Count conversions for reporting
+        true_count = df_clean['reappointed'].isin(true_values).sum()
+        false_count = df_clean['reappointed'].isin(false_values).sum()
+        other_count = len(df_clean) - true_count - false_count
+        
+        print(f"  • Converting reappointed values:")
+        print(f"    - True values: {true_count:,}")
+        print(f"    - False values: {false_count:,}")
+        print(f"    - Other/Missing: {other_count:,}")
+        
+        # Perform conversion
+        df_clean.loc[df_clean['reappointed'].isin(true_values), 'reappointed'] = True
+        df_clean.loc[df_clean['reappointed'].isin(false_values), 'reappointed'] = False
+        df_clean.loc[~df_clean['reappointed'].isin(true_values + false_values), 'reappointed'] = np.nan
+        
+        # Convert to boolean type
+        df_clean['reappointed'] = df_clean['reappointed'].astype('boolean')
+    
+    # Ensure year is integer
+    df_clean['year'] = df_clean['year'].astype(int)
+    
+    print("✓ Data cleaning completed")
+    
+    # Report cleaning results
+    print("\nCleaning summary:")
+    for col in text_columns:
+        null_count = df_clean[col].isnull().sum()
+        print(f"  • {col}: {null_count:,} null values after cleaning")
+    
+    return df_clean
+
+def save_key_columns_data(df):
+    """Save the extracted key columns data"""
+    print(f"\nSaving key columns data to: {OUTPUT_FILE}")
+    
+    try:
+        df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved key columns dataset")
+        print(f"  • File size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB")
+        print(f"  • Total records: {len(df):,}")
+        
+    except Exception as e:
+        print(f"✗ ERROR saving file: {str(e)}")
+        sys.exit(1)
+
+def main():
+    """Main execution function"""
+    print("="*50)
+    print("STEP 2: EXTRACT KEY COLUMNS")
+    print("="*50)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load combined data
+    df_combined = load_combined_data()
+    
+    # Validate columns exist
+    df_validated = validate_columns(df_combined)
+    
+    # Extract key columns
+    df_key = extract_key_columns(df_validated)
+    
+    # Clean and standardize
+    df_clean = clean_and_standardize(df_key)
+    
+    # Analyze the extracted data
+    analyze_key_data(df_clean)
+    
+    # Save results
+    save_key_columns_data(df_clean)
+    
+    # Final summary
+    print("\n" + "="*50)
+    print("STEP 2 COMPLETED SUCCESSFULLY")
+    print("="*50)
+    print(f"✓ Extracted {len(df_clean.columns)} key columns")
+    print(f"✓ Processed {len(df_clean):,} records")
+    print(f"✓ Output saved to: {OUTPUT_FILE}")
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if __name__ == "__main__":
+    main()

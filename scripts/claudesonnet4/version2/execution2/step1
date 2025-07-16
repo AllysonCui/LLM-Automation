@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine Raw Datasets
+New Brunswick Government Appointments Analysis
+
+This script combines 12 years of appointment data (2013-2024) into a single dataset.
+Saves output to: scripts/claudesonnet4/version2/execution2/analysis_data/step1_combined_appointments.csv
+
+Author: Claude Sonnet 4
+Date: July 2025
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
+def create_output_directory(base_path):
+    """Create output directory structure if it doesn't exist"""
+    output_dir = Path(base_path) / "analysis_data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def validate_file_exists(file_path):
+    """Check if file exists and is readable"""
+    if not file_path.exists():
+        print(f"WARNING: File not found: {file_path}")
+        return False
+    return True
+
+def load_single_csv(file_path, year):
+    """Load a single CSV file with error handling"""
+    try:
+        df = pd.read_csv(file_path)
+        # Add year column for tracking
+        df['source_year'] = year
+        print(f"✓ Loaded {file_path.name}: {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except Exception as e:
+        print(f"✗ Error loading {file_path.name}: {str(e)}")
+        return None
+
+def standardize_columns(df, year):
+    """Standardize column names and data types across datasets"""
+    # Convert column names to lowercase and replace spaces with underscores
+    df.columns = df.columns.str.lower().str.replace(' ', '_')
+    
+    # Handle potential column name variations
+    column_mapping = {
+        'organisation': 'org',
+        'organization': 'org',
+        'reappointed_flag': 'reappointed',
+        'is_reappointed': 'reappointed'
+    }
+    
+    df = df.rename(columns=column_mapping)
+    
+    # Standardize boolean reappointed column
+    if 'reappointed' in df.columns:
+        # Handle various boolean representations
+        df['reappointed'] = df['reappointed'].astype(str).str.lower()
+        df['reappointed'] = df['reappointed'].map({
+            'true': True, 'false': False, '1': True, '0': False,
+            'yes': True, 'no': False, 'y': True, 'n': False,
+            'nan': False, 'none': False
+        })
+        df['reappointed'] = df['reappointed'].fillna(False)
+    
+    print(f"  → Standardized columns for {year}: {list(df.columns)}")
+    return df
+
+def validate_data_quality(df, year):
+    """Validate data quality and print summary statistics"""
+    print(f"\n--- Data Quality Check for {year} ---")
+    print(f"Total rows: {len(df)}")
+    print(f"Total columns: {len(df.columns)}")
+    
+    # Check for missing values in key columns
+    key_columns = ['name', 'position', 'org']
+    for col in key_columns:
+        if col in df.columns:
+            missing_count = df[col].isna().sum()
+            missing_pct = (missing_count / len(df)) * 100
+            print(f"Missing {col}: {missing_count} ({missing_pct:.1f}%)")
+    
+    # Check reappointed column if exists
+    if 'reappointed' in df.columns:
+        reappointed_count = df['reappointed'].sum()
+        reappointed_pct = (reappointed_count / len(df)) * 100
+        print(f"Reappointed: {reappointed_count} ({reappointed_pct:.1f}%)")
+    
+    return df
+
+def combine_datasets():
+    """Main function to combine all datasets"""
+    print("="*60)
+    print("STEP 1: COMBINING RAW DATASETS")
+    print("="*60)
+    
+    # Define paths
+    raw_data_dir = Path("raw_data")
+    output_dir = create_output_directory("scripts/claudesonnet4/version2/execution2")
+    
+    # Check if raw data directory exists
+    if not raw_data_dir.exists():
+        print(f"ERROR: Raw data directory not found: {raw_data_dir}")
+        print("Please ensure the raw_data directory contains the CSV files.")
+        return None
+    
+    # List to store all dataframes
+    all_dataframes = []
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    print(f"\nAttempting to load {len(years)} CSV files...")
+    
+    # Load each year's data
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        
+        if validate_file_exists(file_path):
+            df = load_single_csv(file_path, year)
+            if df is not None:
+                df = standardize_columns(df, year)
+                df = validate_data_quality(df, year)
+                all_dataframes.append(df)
+        else:
+            print(f"  → Skipping {year} (file not found)")
+    
+    if not all_dataframes:
+        print("\nERROR: No valid CSV files were loaded!")
+        return None
+    
+    print(f"\n{'='*60}")
+    print("COMBINING DATASETS")
+    print(f"{'='*60}")
+    
+    # Combine all dataframes
+    try:
+        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+        print(f"✓ Successfully combined {len(all_dataframes)} datasets")
+        print(f"  → Total rows: {len(combined_df)}")
+        print(f"  → Total columns: {len(combined_df.columns)}")
+        
+        # Final data quality summary
+        print(f"\n--- COMBINED DATASET SUMMARY ---")
+        print(f"Years included: {sorted(combined_df['source_year'].unique())}")
+        print(f"Total appointments: {len(combined_df)}")
+        
+        # Distribution by year
+        year_counts = combined_df['source_year'].value_counts().sort_index()
+        print(f"\nAppointments by year:")
+        for year, count in year_counts.items():
+            print(f"  {year}: {count} appointments")
+        
+        # Check for key columns
+        key_columns = ['name', 'position', 'org', 'reappointed']
+        print(f"\nKey columns present:")
+        for col in key_columns:
+            status = "✓" if col in combined_df.columns else "✗"
+            print(f"  {status} {col}")
+        
+        # Save combined dataset
+        output_file = output_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(output_file, index=False)
+        print(f"\n✓ Combined dataset saved to: {output_file}")
+        
+        return combined_df
+        
+    except Exception as e:
+        print(f"\nERROR: Failed to combine datasets: {str(e)}")
+        return None
+
+def main():
+    """Main execution function"""
+    try:
+        result = combine_datasets()
+        
+        if result is not None:
+            print(f"\n{'='*60}")
+            print("STEP 1 COMPLETED SUCCESSFULLY")
+            print(f"{'='*60}")
+            print(f"Output saved to: scripts/claudesonnet4/version2/execution2/analysis_data/step1_combined_appointments.csv")
+            print(f"Ready for Step 2: Key Columns Analysis")
+        else:
+            print(f"\n{'='*60}")
+            print("STEP 1 FAILED")
+            print(f"{'='*60}")
+            print("Please check the error messages above and ensure:")
+            print("1. The raw_data directory exists")
+            print("2. CSV files are properly formatted")
+            print("3. File permissions allow reading")
+            
+    except Exception as e:
+        print(f"\nUNEXPECTED ERROR: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

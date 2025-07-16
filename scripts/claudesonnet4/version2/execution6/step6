@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""
+Step 6: Calculate Reappointment Rates
+Calculates the reappointment rate as reappointments divided by total appointments 
+for each org-year pair by combining data from steps 4 and 5.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution6/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output directory ready: {output_dir}")
+    return output_dir
+
+def load_appointment_counts(input_file):
+    """Load appointment counts dataset from step 4."""
+    try:
+        logger.info(f"Loading appointment counts from: {input_file}")
+        
+        if not input_file.exists():
+            logger.error(f"Appointment counts file not found: {input_file}")
+            return None
+        
+        df = pd.read_csv(input_file, encoding='utf-8')
+        
+        if df.empty:
+            logger.error("Appointment counts dataset is empty")
+            return None
+            
+        logger.info(f"Loaded appointment counts dataset: {df.shape}")
+        
+        # Verify required columns exist
+        required_columns = ['org', 'year', 'total_appointments']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required columns in appointment counts: {missing_columns}")
+            return None
+        
+        logger.info(f"Appointment counts: {df['total_appointments'].sum():,} total appointments")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading appointment counts: {str(e)}")
+        return None
+
+def load_reappointment_counts(input_file):
+    """Load reappointment counts dataset from step 5."""
+    try:
+        logger.info(f"Loading reappointment counts from: {input_file}")
+        
+        if not input_file.exists():
+            logger.error(f"Reappointment counts file not found: {input_file}")
+            return None
+        
+        df = pd.read_csv(input_file, encoding='utf-8')
+        
+        if df.empty:
+            logger.warning("Reappointment counts dataset is empty - no reappointments found")
+            # Return empty dataframe with correct structure
+            return pd.DataFrame(columns=['org', 'year', 'reappointment_count'])
+            
+        logger.info(f"Loaded reappointment counts dataset: {df.shape}")
+        
+        # Verify required columns exist
+        required_columns = ['org', 'year', 'reappointment_count']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required columns in reappointment counts: {missing_columns}")
+            return None
+        
+        logger.info(f"Reappointment counts: {df['reappointment_count'].sum():,} total reappointments")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading reappointment counts: {str(e)}")
+        return None
+
+def validate_and_clean_data(appointment_counts, reappointment_counts):
+    """Validate and clean both datasets before merging."""
+    logger.info("Validating and cleaning data...")
+    
+    # Validate appointment counts
+    if appointment_counts is None or len(appointment_counts) == 0:
+        logger.error("No valid appointment counts data")
+        return None, None
+    
+    # Clean appointment counts
+    appointment_counts = appointment_counts.copy()
+    appointment_counts['year'] = pd.to_numeric(appointment_counts['year'], errors='coerce')
+    appointment_counts['total_appointments'] = pd.to_numeric(appointment_counts['total_appointments'], errors='coerce')
+    
+    # Remove invalid data
+    before_count = len(appointment_counts)
+    appointment_counts = appointment_counts.dropna(subset=['org', 'year', 'total_appointments'])
+    appointment_counts = appointment_counts[appointment_counts['total_appointments'] > 0]  # Must have at least 1 appointment
+    after_count = len(appointment_counts)
+    
+    if before_count != after_count:
+        logger.warning(f"Removed {before_count - after_count} invalid appointment count records")
+    
+    # Clean reappointment counts (if any)
+    if reappointment_counts is not None and len(reappointment_counts) > 0:
+        reappointment_counts = reappointment_counts.copy()
+        reappointment_counts['year'] = pd.to_numeric(reappointment_counts['year'], errors='coerce')
+        reappointment_counts['reappointment_count'] = pd.to_numeric(reappointment_counts['reappointment_count'], errors='coerce')
+        
+        # Remove invalid data
+        before_count = len(reappointment_counts)
+        reappointment_counts = reappointment_counts.dropna(subset=['org', 'year', 'reappointment_count'])
+        reappointment_counts = reappointment_counts[reappointment_counts['reappointment_count'] >= 0]
+        after_count = len(reappointment_counts)
+        
+        if before_count != after_count:
+            logger.warning(f"Removed {before_count - after_count} invalid reappointment count records")
+    else:
+        # Create empty reappointment counts with correct structure
+        reappointment_counts = pd.DataFrame(columns=['org', 'year', 'reappointment_count'])
+        logger.info("No reappointment data - will use zero reappointments for all org-year pairs")
+    
+    # Report final data sizes
+    logger.info(f"Clean appointment counts: {len(appointment_counts)} org-year pairs")
+    logger.info(f"Clean reappointment counts: {len(reappointment_counts)} org-year pairs")
+    
+    return appointment_counts, reappointment_counts
+
+def merge_and_calculate_rates(appointment_counts, reappointment_counts):
+    """Merge datasets and calculate reappointment rates."""
+    logger.info("Merging datasets and calculating reappointment rates...")
+    
+    # Merge datasets - left join to keep all appointment counts
+    merged_data = appointment_counts.merge(
+        reappointment_counts, 
+        on=['org', 'year'], 
+        how='left'
+    )
+    
+    # Fill missing reappointment counts with 0
+    merged_data['reappointment_count'] = merged_data['reappointment_count'].fillna(0).astype(int)
+    
+    logger.info(f"Merged dataset shape: {merged_data.shape}")
+    
+    # Calculate reappointment rate
+    merged_data['reappointment_rate'] = (
+        merged_data['reappointment_count'] / merged_data['total_appointments']
+    ).round(4)
+    
+    # Handle any potential division by zero (though we filtered for > 0 appointments)
+    merged_data['reappointment_rate'] = merged_data['reappointment_rate'].fillna(0)
+    
+    # Validate rates are within expected bounds (0 to 1)
+    invalid_rates = merged_data[
+        (merged_data['reappointment_rate'] < 0) | 
+        (merged_data['reappointment_rate'] > 1)
+    ]
+    
+    if len(invalid_rates) > 0:
+        logger.warning(f"Found {len(invalid_rates)} records with invalid rates (outside 0-1 range)")
+        # Log details of problematic records
+        for _, row in invalid_rates.head().iterrows():
+            logger.warning(f"  {row['org']} ({row['year']:.0f}): "
+                          f"{row['reappointment_count']}/{row['total_appointments']} = {row['reappointment_rate']:.4f}")
+        
+        # Cap rates at 1.0 (100%)
+        merged_data['reappointment_rate'] = merged_data['reappointment_rate'].clip(upper=1.0)
+    
+    # Summary statistics
+    total_org_years = len(merged_data)
+    org_years_with_reappointments = (merged_data['reappointment_count'] > 0).sum()
+    overall_reappointment_rate = merged_data['reappointment_count'].sum() / merged_data['total_appointments'].sum()
+    
+    logger.info(f"Total org-year combinations: {total_org_years}")
+    logger.info(f"Combinations with reappointments: {org_years_with_reappointments}")
+    logger.info(f"Overall reappointment rate: {overall_reappointment_rate:.1%}")
+    
+    return merged_data
+
+def analyze_reappointment_rates(rates_data):
+    """Analyze reappointment rates across organizations and time."""
+    logger.info("Analyzing reappointment rates...")
+    
+    # Organizations with highest average reappointment rates
+    org_rates = rates_data.groupby('org').agg({
+        'reappointment_rate': ['mean', 'std', 'count', 'max'],
+        'reappointment_count': 'sum',
+        'total_appointments': 'sum'
+    }).round(4)
+    
+    # Flatten column names
+    org_rates.columns = ['avg_rate', 'std_rate', 'years_active', 'max_rate', 
+                        'total_reappointments', 'total_appointments']
+    
+    # Calculate overall rate for each organization
+    org_rates['overall_rate'] = (org_rates['total_reappointments'] / org_rates['total_appointments']).round(4)
+    
+    # Sort by overall rate
+    org_rates = org_rates.sort_values('overall_rate', ascending=False)
+    
+    # Filter for organizations with meaningful data (at least 10 total appointments across all years)
+    significant_orgs = org_rates[org_rates['total_appointments'] >= 10]
+    
+    logger.info("Top 15 organizations by overall reappointment rate (min 10 total appointments):")
+    for org, stats in significant_orgs.head(15).iterrows():
+        logger.info(f"  {org}: {stats['overall_rate']:.1%} overall "
+                   f"({stats['total_reappointments']:.0f}/{stats['total_appointments']:.0f}), "
+                   f"avg {stats['avg_rate']:.1%}, {stats['years_active']:.0f} years")
+    
+    # Yearly trends in reappointment rates
+    year_rates = rates_data.groupby('year').agg({
+        'reappointment_rate': 'mean',
+        'reappointment_count': 'sum',
+        'total_appointments': 'sum'
+    }).round(4)
+    
+    year_rates['overall_rate'] = (year_rates['reappointment_count'] / year_rates['total_appointments']).round(4)
+    
+    logger.info("Reappointment rates by year:")
+    for year, stats in year_rates.iterrows():
+        logger.info(f"  {year:.0f}: {stats['overall_rate']:.1%} overall, "
+                   f"{stats['reappointment_rate']:.1%} average across orgs")
+    
+    return org_rates, year_rates
+
+def identify_highest_reappointment_rates(rates_data):
+    """Identify specific org-year combinations with highest rates."""
+    logger.info("Identifying highest reappointment rates...")
+    
+    # Filter for meaningful sample sizes (at least 3 appointments)
+    meaningful_data = rates_data[rates_data['total_appointments'] >= 3].copy()
+    
+    # Top reappointment rates
+    top_rates = meaningful_data.nlargest(15, 'reappointment_rate')
+    
+    logger.info("Top 15 org-year combinations by reappointment rate (min 3 appointments):")
+    for _, row in top_rates.iterrows():
+        logger.info(f"  {row['org']} ({row['year']:.0f}): {row['reappointment_rate']:.1%} "
+                   f"({row['reappointment_count']:.0f}/{row['total_appointments']:.0f})")
+    
+    # Organizations with consistently high rates
+    org_consistency = meaningful_data.groupby('org').agg({
+        'reappointment_rate': ['mean', 'count', 'min'],
+        'total_appointments': 'sum'
+    }).round(4)
+    
+    org_consistency.columns = ['avg_rate', 'years_count', 'min_rate', 'total_appointments']
+    
+    # Filter for organizations with multiple years and consistently high rates
+    consistent_high = org_consistency[
+        (org_consistency['years_count'] >= 3) & 
+        (org_consistency['avg_rate'] >= 0.3) &
+        (org_consistency['min_rate'] >= 0.1) &
+        (org_consistency['total_appointments'] >= 20)
+    ].sort_values('avg_rate', ascending=False)
+    
+    if len(consistent_high) > 0:
+        logger.info("Organizations with consistently high reappointment rates:")
+        for org, stats in consistent_high.head(10).iterrows():
+            logger.info(f"  {org}: {stats['avg_rate']:.1%} avg rate, "
+                       f"{stats['years_count']:.0f} years, "
+                       f"min {stats['min_rate']:.1%}")
+    else:
+        logger.info("No organizations found with consistently high reappointment rates")
+    
+    return top_rates, consistent_high
+
+def detect_rate_trends(rates_data):
+    """Detect trends in reappointment rates over time."""
+    logger.info("Detecting reappointment rate trends...")
+    
+    # Overall trend analysis
+    yearly_overall = rates_data.groupby('year').agg({
+        'reappointment_count': 'sum',
+        'total_appointments': 'sum'
+    })
+    yearly_overall['rate'] = yearly_overall['reappointment_count'] / yearly_overall['total_appointments']
+    
+    # Calculate correlation with time
+    years = yearly_overall.index.values
+    rates = yearly_overall['rate'].values
+    
+    if len(years) >= 3:
+        overall_trend_corr = np.corrcoef(years, rates)[0, 1]
+        
+        if overall_trend_corr > 0.3:
+            logger.info(f"Overall reappointment rates are INCREASING over time (correlation: {overall_trend_corr:.3f})")
+        elif overall_trend_corr < -0.3:
+            logger.info(f"Overall reappointment rates are DECREASING over time (correlation: {overall_trend_corr:.3f})")
+        else:
+            logger.info(f"Overall reappointment rates are STABLE over time (correlation: {overall_trend_corr:.3f})")
+    
+    # Organization-specific trends
+    org_trends = {}
+    
+    for org in rates_data['org'].unique():
+        org_data = rates_data[rates_data['org'] == org].sort_values('year')
+        
+        if len(org_data) >= 4:  # Need at least 4 years for trend
+            years_org = org_data['year'].values
+            rates_org = org_data['reappointment_rate'].values
+            
+            # Only analyze if there's variation in rates
+            if np.std(rates_org) > 0.01:  # At least 1% standard deviation
+                correlation = np.corrcoef(years_org, rates_org)[0, 1]
+                org_trends[org] = correlation
+    
+    # Report strongest trends
+    increasing_orgs = {org: corr for org, corr in org_trends.items() if corr > 0.5}
+    decreasing_orgs = {org: corr for org, corr in org_trends.items() if corr < -0.5}
+    
+    if increasing_orgs:
+        logger.info("Organizations with strongly increasing reappointment rate trends:")
+        for org, corr in sorted(increasing_orgs.items(), key=lambda x: x[1], reverse=True)[:5]:
+            avg_rate = rates_data[rates_data['org'] == org]['reappointment_rate'].mean()
+            logger.info(f"  {org}: correlation = {corr:.3f}, avg rate = {avg_rate:.1%}")
+    
+    if decreasing_orgs:
+        logger.info("Organizations with strongly decreasing reappointment rate trends:")
+        for org, corr in sorted(decreasing_orgs.items(), key=lambda x: x[1])[:5]:
+            avg_rate = rates_data[rates_data['org'] == org]['reappointment_rate'].mean()
+            logger.info(f"  {org}: correlation = {corr:.3f}, avg rate = {avg_rate:.1%}")
+
+def create_summary_statistics(rates_data):
+    """Create comprehensive summary statistics."""
+    logger.info("Creating summary statistics...")
+    
+    # Overall statistics
+    total_appointments = rates_data['total_appointments'].sum()
+    total_reappointments = rates_data['reappointment_count'].sum()
+    overall_rate = total_reappointments / total_appointments
+    
+    # Distribution statistics
+    rate_stats = rates_data['reappointment_rate'].describe()
+    
+    # Organizations and time coverage
+    unique_orgs = rates_data['org'].nunique()
+    unique_years = rates_data['year'].nunique()
+    year_range = f"{rates_data['year'].min():.0f}-{rates_data['year'].max():.0f}"
+    
+    # Rate distribution
+    zero_rate_count = (rates_data['reappointment_rate'] == 0).sum()
+    high_rate_count = (rates_data['reappointment_rate'] >= 0.5).sum()  # 50%+ rate
+    perfect_rate_count = (rates_data['reappointment_rate'] == 1.0).sum()  # 100% rate
+    
+    logger.info("=== COMPREHENSIVE SUMMARY STATISTICS ===")
+    logger.info(f"Dataset coverage: {unique_orgs} organizations, {year_range} ({unique_years} years)")
+    logger.info(f"Total org-year combinations: {len(rates_data):,}")
+    logger.info(f"Total appointments: {total_appointments:,}")
+    logger.info(f"Total reappointments: {total_reappointments:,}")
+    logger.info(f"Overall reappointment rate: {overall_rate:.1%}")
+    logger.info("")
+    logger.info("Rate distribution:")
+    logger.info(f"  Zero reappointment rate: {zero_rate_count:,} org-years ({zero_rate_count/len(rates_data):.1%})")
+    logger.info(f"  High reappointment rate (≥50%): {high_rate_count:,} org-years ({high_rate_count/len(rates_data):.1%})")
+    logger.info(f"  Perfect reappointment rate (100%): {perfect_rate_count:,} org-years ({perfect_rate_count/len(rates_data):.1%})")
+    logger.info("")
+    logger.info("Statistical summary of reappointment rates:")
+    logger.info(f"  Mean: {rate_stats['mean']:.1%}")
+    logger.info(f"  Median: {rate_stats['50%']:.1%}")
+    logger.info(f"  Standard deviation: {rate_stats['std']:.1%}")
+    logger.info(f"  25th percentile: {rate_stats['25%']:.1%}")
+    logger.info(f"  75th percentile: {rate_stats['75%']:.1%}")
+    logger.info(f"  Maximum: {rate_stats['max']:.1%}")
+
+def calculate_reappointment_rates():
+    """Main function to calculate reappointment rates."""
+    logger.info("Starting Step 6: Calculating reappointment rates...")
+    
+    # Setup directories
+    output_dir = setup_directories()
+    
+    # Define input and output paths
+    appointment_counts_file = output_dir / "step4_appointment_counts.csv"
+    reappointment_counts_file = output_dir / "step5_reappointment_counts.csv"
+    output_file = output_dir / "step6_reappointment_rates.csv"
+    
+    # Load datasets
+    appointment_counts = load_appointment_counts(appointment_counts_file)
+    reappointment_counts = load_reappointment_counts(reappointment_counts_file)
+    
+    # Validate and clean data
+    appointment_counts, reappointment_counts = validate_and_clean_data(appointment_counts, reappointment_counts)
+    if appointment_counts is None:
+        logger.error("Failed to validate appointment counts data")
+        sys.exit(1)
+    
+    # Merge and calculate rates
+    rates_data = merge_and_calculate_rates(appointment_counts, reappointment_counts)
+    
+    # Analyze reappointment rates
+    org_rates, year_rates = analyze_reappointment_rates(rates_data)
+    
+    # Identify highest rates
+    top_rates, consistent_high = identify_highest_reappointment_rates(rates_data)
+    
+    # Detect trends
+    detect_rate_trends(rates_data)
+    
+    # Create summary statistics
+    create_summary_statistics(rates_data)
+    
+    # Save reappointment rates
+    try:
+        rates_data.to_csv(output_file, index=False, encoding='utf-8')
+        logger.info(f"Successfully saved reappointment rates to: {output_file}")
+        
+    except Exception as e:
+        logger.error(f"Error saving reappointment rates: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary
+    logger.info("=== STEP 6 SUMMARY ===")
+    logger.info(f"Calculated rates for {len(rates_data):,} org-year combinations")
+    logger.info(f"Overall reappointment rate: {rates_data['reappointment_count'].sum() / rates_data['total_appointments'].sum():.1%}")
+    logger.info(f"Organizations analyzed: {rates_data['org'].nunique()}")
+    logger.info(f"Years covered: {rates_data['year'].min():.0f} to {rates_data['year'].max():.0f}")
+    logger.info(f"Average rate across all org-years: {rates_data['reappointment_rate'].mean():.1%}")
+    logger.info(f"Highest single rate: {rates_data['reappointment_rate'].max():.1%}")
+    logger.info(f"Output file: {output_file}")
+    logger.info("Step 6 completed successfully!")
+    
+    return rates_data
+
+if __name__ == "__main__":
+    try:
+        rates_data = calculate_reappointment_rates()
+        print("\n" + "="*50)
+        print("STEP 6: REAPPOINTMENT RATE CALCULATION COMPLETE")
+        print("="*50)
+        print(f"Calculated rates for {len(rates_data):,} org-year combinations")
+        print(f"Overall reappointment rate: {rates_data['reappointment_count'].sum() / rates_data['total_appointments'].sum():.1%}")
+        print(f"Average rate: {rates_data['reappointment_rate'].mean():.1%}")
+        print("Ready for Step 7: Maximum rate identification and visualization")
+        
+    except KeyboardInterrupt:
+        logger.info("Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {str(e)}")
+        sys.exit(1)

@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark "reappointed" as true for repeated "name"-"position"-"org" combinations
+New Brunswick Government Appointments Analysis
+
+This script identifies repeated appointments by looking for duplicate combinations
+of name-position-org and marks all occurrences except the first as reappointed.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from typing import List, Dict, Any, Tuple
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define file paths
+INPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+OUTPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+INPUT_FILE = "step2_key_columns_data.csv"
+OUTPUT_FILE = "step3_repeats_marked.csv"
+
+def setup_directories():
+    """Create output directories if they don't exist"""
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created/verified output directory: {OUTPUT_PATH}")
+
+def validate_input_file() -> bool:
+    """Check if the input file exists and is readable"""
+    input_file_path = INPUT_PATH / INPUT_FILE
+    if not input_file_path.exists():
+        logger.error(f"Input file not found: {input_file_path}")
+        return False
+    if not input_file_path.is_file():
+        logger.error(f"Path is not a file: {input_file_path}")
+        return False
+    return True
+
+def load_key_columns_data() -> pd.DataFrame:
+    """
+    Load the key columns dataset from Step 2
+    
+    Returns:
+        DataFrame with key columns data
+    """
+    input_file_path = INPUT_PATH / INPUT_FILE
+    
+    try:
+        logger.info(f"Loading key columns dataset from: {input_file_path}")
+        df = pd.read_csv(input_file_path, encoding='utf-8')
+        
+        logger.info(f"Loaded dataset with {len(df)} records and {len(df.columns)} columns")
+        logger.info(f"Columns: {list(df.columns)}")
+        
+        # Validate required columns
+        required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading key columns dataset: {str(e)}")
+        raise
+
+def normalize_for_matching(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize the data for consistent matching of name-position-org combinations
+    
+    Args:
+        df: Input DataFrame
+    
+    Returns:
+        DataFrame with normalized columns for matching
+    """
+    logger.info("Normalizing data for consistent matching")
+    
+    # Create a copy to avoid modifying original
+    normalized_df = df.copy()
+    
+    # Normalize name column
+    normalized_df['name_normalized'] = (
+        normalized_df['name']
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(r'\s+', ' ', regex=True)  # Replace multiple spaces with single space
+        .str.replace(r'[^\w\s]', '', regex=True)  # Remove special characters
+    )
+    
+    # Normalize position column
+    normalized_df['position_normalized'] = (
+        normalized_df['position']
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(r'\s+', ' ', regex=True)
+        .str.replace(r'[^\w\s]', '', regex=True)
+    )
+    
+    # Normalize org column
+    normalized_df['org_normalized'] = (
+        normalized_df['org']
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(r'\s+', ' ', regex=True)
+        .str.replace(r'[^\w\s]', '', regex=True)
+    )
+    
+    # Create a composite key for matching
+    normalized_df['match_key'] = (
+        normalized_df['name_normalized'] + '|' + 
+        normalized_df['position_normalized'] + '|' + 
+        normalized_df['org_normalized']
+    )
+    
+    logger.info("Data normalization completed")
+    return normalized_df
+
+def identify_and_mark_reappointments(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Identify repeated name-position-org combinations and mark reappointments
+    
+    Args:
+        df: DataFrame with normalized data
+    
+    Returns:
+        DataFrame with reappointment flags corrected
+    """
+    logger.info("Identifying and marking reappointments")
+    
+    # Create a copy to work with
+    result_df = df.copy()
+    
+    # Sort by match_key and year to ensure chronological order
+    result_df = result_df.sort_values(['match_key', 'year'], ascending=[True, True])
+    
+    # Reset index after sorting
+    result_df = result_df.reset_index(drop=True)
+    
+    # Initialize counters for reporting
+    original_reappointed = result_df['reappointed'].sum()
+    combinations_processed = 0
+    reappointments_marked = 0
+    
+    # Group by match_key to identify repeated combinations
+    grouped = result_df.groupby('match_key')
+    
+    # Process each group
+    for match_key, group in grouped:
+        combinations_processed += 1
+        
+        if len(group) > 1:
+            # Multiple appointments for same person-position-org combination
+            # Sort by year to ensure chronological order
+            group_sorted = group.sort_values('year')
+            
+            # Mark all except the first as reappointed
+            indices = group_sorted.index[1:]  # Skip first occurrence
+            result_df.loc[indices, 'reappointed'] = True
+            
+            reappointments_marked += len(indices)
+            
+            # Log detailed information for complex cases
+            if len(group) > 2:
+                years = sorted(group['year'].unique())
+                logger.info(f"Multiple reappointments found: {group.iloc[0]['name']} - "
+                          f"{group.iloc[0]['position']} - {group.iloc[0]['org']} "
+                          f"(Years: {years})")
+        else:
+            # Single appointment - mark as not reappointed (first occurrence)
+            result_df.loc[group.index, 'reappointed'] = False
+    
+    # Calculate final statistics
+    final_reappointed = result_df['reappointed'].sum()
+    
+    logger.info(f"Reappointment marking completed:")
+    logger.info(f"  - Unique combinations processed: {combinations_processed:,}")
+    logger.info(f"  - Original reappointed count: {original_reappointed:,}")
+    logger.info(f"  - New reappointed count: {final_reappointed:,}")
+    logger.info(f"  - Reappointments marked: {reappointments_marked:,}")
+    
+    return result_df
+
+def validate_reappointment_logic(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Validate the reappointment marking logic
+    
+    Args:
+        df: DataFrame with reappointment flags
+    
+    Returns:
+        Dictionary with validation results
+    """
+    logger.info("Validating reappointment logic")
+    
+    validation_results = {}
+    
+    # Check that first occurrences are not marked as reappointed
+    first_occurrences = df.groupby('match_key').first()
+    incorrect_first_appointments = first_occurrences[first_occurrences['reappointed'] == True]
+    
+    validation_results['incorrect_first_appointments'] = len(incorrect_first_appointments)
+    
+    # Check reappointment patterns by combination
+    combination_stats = []
+    grouped = df.groupby('match_key')
+    
+    for match_key, group in grouped:
+        group_sorted = group.sort_values('year')
+        stats = {
+            'match_key': match_key,
+            'name': group_sorted.iloc[0]['name'],
+            'position': group_sorted.iloc[0]['position'],
+            'org': group_sorted.iloc[0]['org'],
+            'total_appointments': len(group),
+            'years': sorted(group['year'].unique()),
+            'reappointed_count': group['reappointed'].sum(),
+            'first_is_reappointed': group_sorted.iloc[0]['reappointed']
+        }
+        combination_stats.append(stats)
+    
+    validation_results['combination_stats'] = combination_stats
+    
+    # Summary statistics
+    total_combinations = len(combination_stats)
+    multiple_appointment_combinations = len([s for s in combination_stats if s['total_appointments'] > 1])
+    single_appointment_combinations = total_combinations - multiple_appointment_combinations
+    
+    validation_results['summary'] = {
+        'total_combinations': total_combinations,
+        'single_appointment_combinations': single_appointment_combinations,
+        'multiple_appointment_combinations': multiple_appointment_combinations,
+        'total_records': len(df),
+        'total_reappointments': df['reappointed'].sum()
+    }
+    
+    logger.info(f"Validation completed:")
+    logger.info(f"  - Total unique combinations: {total_combinations:,}")
+    logger.info(f"  - Single appointments: {single_appointment_combinations:,}")
+    logger.info(f"  - Multiple appointments: {multiple_appointment_combinations:,}")
+    logger.info(f"  - Incorrect first appointments: {validation_results['incorrect_first_appointments']}")
+    
+    return validation_results
+
+def clean_output_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean the output data by removing temporary columns
+    
+    Args:
+        df: DataFrame with temporary columns
+    
+    Returns:
+        DataFrame with only original columns
+    """
+    logger.info("Cleaning output data")
+    
+    # Keep only original columns
+    original_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    clean_df = df[original_columns].copy()
+    
+    # Sort by year and name for consistent output
+    clean_df = clean_df.sort_values(['year', 'name', 'position', 'org'])
+    clean_df = clean_df.reset_index(drop=True)
+    
+    logger.info(f"Output data cleaned. Shape: {clean_df.shape}")
+    return clean_df
+
+def generate_analysis_report(df: pd.DataFrame, validation_results: Dict[str, Any]) -> str:
+    """
+    Generate detailed analysis report
+    
+    Args:
+        df: Final DataFrame
+        validation_results: Validation results
+    
+    Returns:
+        Formatted analysis report
+    """
+    # Calculate reappointment rates by year
+    yearly_stats = df.groupby('year').agg({
+        'reappointed': ['count', 'sum'],
+        'name': 'count'
+    }).round(2)
+    
+    yearly_stats.columns = ['total_appointments', 'reappointments', 'total_records']
+    yearly_stats['reappointment_rate'] = (yearly_stats['reappointments'] / yearly_stats['total_appointments'] * 100).round(2)
+    
+    # Top organizations by reappointment count
+    org_stats = df.groupby('org').agg({
+        'reappointed': ['count', 'sum']
+    }).round(2)
+    org_stats.columns = ['total_appointments', 'reappointments']
+    org_stats['reappointment_rate'] = (org_stats['reappointments'] / org_stats['total_appointments'] * 100).round(2)
+    org_stats = org_stats.sort_values('reappointments', ascending=False)
+    
+    # Most frequently reappointed positions
+    position_stats = df[df['reappointed'] == True].groupby('position').size().sort_values(ascending=False)
+    
+    # Multi-appointment individuals
+    multi_appointments = [s for s in validation_results['combination_stats'] if s['total_appointments'] > 1]
+    multi_appointments_sorted = sorted(multi_appointments, key=lambda x: x['total_appointments'], reverse=True)
+    
+    report = f"""
+STEP 3 - REAPPOINTMENT MARKING ANALYSIS REPORT
+=============================================
+
+Overall Statistics:
+- Total Records: {len(df):,}
+- Total Reappointments: {df['reappointed'].sum():,}
+- Overall Reappointment Rate: {(df['reappointed'].sum() / len(df) * 100):.2f}%
+- Unique Combinations: {validation_results['summary']['total_combinations']:,}
+- Single Appointments: {validation_results['summary']['single_appointment_combinations']:,}
+- Multiple Appointments: {validation_results['summary']['multiple_appointment_combinations']:,}
+
+Yearly Reappointment Rates:
+{chr(10).join([f"  {year}: {row['reappointments']:,}/{row['total_appointments']:,} ({row['reappointment_rate']:.1f}%)" 
+              for year, row in yearly_stats.iterrows()])}
+
+Top 10 Organizations by Reappointment Count:
+{chr(10).join([f"  {org}: {row['reappointments']:,}/{row['total_appointments']:,} ({row['reappointment_rate']:.1f}%)" 
+              for org, row in org_stats.head(10).iterrows()])}
+
+Top 10 Most Frequently Reappointed Positions:
+{chr(10).join([f"  {pos}: {count:,} reappointments" 
+              for pos, count in position_stats.head(10).items()])}
+
+Top 10 Most Frequently Reappointed Individuals:
+{chr(10).join([f"  {item['name']} ({item['position']}, {item['org']}): {item['total_appointments']} appointments in {item['years']}" 
+              for item in multi_appointments_sorted[:10]])}
+
+Data Quality Validation:
+- Incorrect first appointments: {validation_results['incorrect_first_appointments']}
+- Logic validation: {'PASSED' if validation_results['incorrect_first_appointments'] == 0 else 'FAILED'}
+
+Analysis Notes:
+- Reappointment flags corrected based on chronological order
+- First occurrence of each name-position-org combination marked as new appointment
+- Subsequent occurrences marked as reappointments
+- Data sorted by year for consistent chronological analysis
+- Ready for Step 4 analysis
+"""
+    
+    return report
+
+def save_results(df: pd.DataFrame, validation_results: Dict[str, Any]):
+    """
+    Save the dataset with marked reappointments and generate analysis report
+    
+    Args:
+        df: DataFrame with marked reappointments
+        validation_results: Validation results
+    """
+    output_file_path = OUTPUT_PATH / OUTPUT_FILE
+    
+    try:
+        # Save marked reappointments dataset
+        df.to_csv(output_file_path, index=False, encoding='utf-8')
+        logger.info(f"Marked reappointments dataset saved to: {output_file_path}")
+        
+        # Generate and save analysis report
+        analysis_report = generate_analysis_report(df, validation_results)
+        
+        # Save analysis report
+        report_path = OUTPUT_PATH / "step3_analysis_report.txt"
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(analysis_report)
+        
+        logger.info(f"Analysis report saved to: {report_path}")
+        print(analysis_report)
+        
+    except Exception as e:
+        logger.error(f"Error saving results: {str(e)}")
+        raise
+
+def main():
+    """Main execution function"""
+    try:
+        logger.info("=" * 60)
+        logger.info("STEP 3: MARKING REPEATED APPOINTMENTS")
+        logger.info("=" * 60)
+        
+        # Setup directories
+        setup_directories()
+        
+        # Validate input file
+        if not validate_input_file():
+            logger.error("Input file validation failed")
+            sys.exit(1)
+        
+        # Load key columns data
+        df = load_key_columns_data()
+        
+        # Normalize data for matching
+        normalized_df = normalize_for_matching(df)
+        
+        # Identify and mark reappointments
+        marked_df = identify_and_mark_reappointments(normalized_df)
+        
+        # Validate reappointment logic
+        validation_results = validate_reappointment_logic(marked_df)
+        
+        # Clean output data
+        final_df = clean_output_data(marked_df)
+        
+        if final_df.empty:
+            logger.error("No valid data remaining after processing")
+            sys.exit(1)
+        
+        # Save results
+        save_results(final_df, validation_results)
+        
+        logger.info("Step 3 completed successfully!")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Step 3 failed: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

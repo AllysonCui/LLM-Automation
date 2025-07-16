@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count Appointments by Organization and Year
+New Brunswick Government Appointments Analysis
+
+This script counts the total number of appointments (appointees) for each organization
+in each year. This provides the denominator needed for calculating reappointment
+rates in subsequent steps.
+
+Key Metrics Calculated:
+- Total appointments per organization per year
+- Unique individuals per organization per year
+- Year-over-year growth/decline in appointments
+- Organization size rankings by year
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def validate_input_file(input_path):
+    """Validate that the input file from Step 3 exists"""
+    if not input_path.exists():
+        print(f"✗ Input file not found: {input_path}")
+        print("Please run Step 3 first to create the repeats marked dataset.")
+        return False
+    
+    file_size_mb = input_path.stat().st_size / (1024*1024)
+    print(f"✓ Input file found: {input_path}")
+    print(f"  File size: {file_size_mb:.2f} MB")
+    return True
+
+def load_repeats_marked_data(input_path):
+    """Load the repeats marked dataset from Step 3"""
+    try:
+        print(f"\n" + "="*60)
+        print("LOADING REPEATS MARKED DATASET")
+        print("="*60)
+        
+        df = pd.read_csv(input_path)
+        
+        print(f"✓ Dataset loaded successfully")
+        print(f"  Rows: {len(df):,}")
+        print(f"  Columns: {list(df.columns)}")
+        print(f"  Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
+        # Validate required columns
+        required_cols = ['name', 'position', 'org', 'year', 'reappointed']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            print(f"✗ Missing required columns: {missing_cols}")
+            return None
+        
+        print(f"✓ All required columns present: {required_cols}")
+        
+        # Basic data validation
+        print(f"\nData validation:")
+        print(f"  Year range: {df['year'].min():.0f} - {df['year'].max():.0f}")
+        print(f"  Organizations: {df['org'].nunique():,}")
+        print(f"  Unique individuals: {df['name'].nunique():,}")
+        print(f"  Total appointments: {len(df):,}")
+        print(f"  Reappointments: {df['reappointed'].sum():,}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading repeats marked dataset: {e}")
+        return None
+
+def analyze_data_structure(df):
+    """Analyze the structure of the data for counting"""
+    print(f"\n" + "="*60)
+    print("DATA STRUCTURE ANALYSIS")
+    print("="*60)
+    
+    # Analyze organizations
+    print(f"Organization analysis:")
+    org_counts = df['org'].value_counts()
+    print(f"  Total organizations: {len(org_counts)}")
+    print(f"  Organization distribution:")
+    for org, count in org_counts.items():
+        percentage = (count / len(df)) * 100
+        print(f"    {org}: {count:,} appointments ({percentage:.1f}%)")
+    
+    # Analyze years
+    print(f"\nYear analysis:")
+    year_counts = df['year'].value_counts().sort_index()
+    print(f"  Year range: {df['year'].min():.0f} - {df['year'].max():.0f}")
+    print(f"  Total years: {len(year_counts)}")
+    print(f"  Yearly distribution:")
+    for year, count in year_counts.items():
+        print(f"    {year:.0f}: {count:,} appointments")
+    
+    # Analyze appointment patterns
+    print(f"\nAppointment patterns:")
+    
+    # Check for multiple appointments of same person in same year to same org
+    duplicates = df.groupby(['name', 'org', 'year']).size()
+    multiple_same_year = (duplicates > 1).sum()
+    
+    if multiple_same_year > 0:
+        print(f"  ⚠ Found {multiple_same_year} cases where same person has multiple appointments to same org in same year")
+        print(f"    This may indicate different positions or data quality issues")
+        
+        # Show examples
+        duplicate_cases = duplicates[duplicates > 1].head(5)
+        print(f"    Examples:")
+        for (name, org, year), count in duplicate_cases.items():
+            print(f"      {name} | {org} | {year:.0f}: {count} appointments")
+    else:
+        print(f"  ✓ No duplicate person-org-year combinations found")
+    
+    return org_counts, year_counts
+
+def calculate_appointment_counts(df):
+    """Calculate appointment counts by organization and year"""
+    print(f"\n" + "="*60)
+    print("CALCULATING EMPLOYEE COUNTS")
+    print("="*60)
+    
+    print(f"Calculating counts by organization and year...")
+    
+    # Method 1: Count total appointments per org per year
+    appointment_counts = df.groupby(['org', 'year']).size().reset_index(name='total_appointments')
+    
+    # Method 2: Count unique individuals per org per year (handles multiple positions)
+    unique_appointment_counts = df.groupby(['org', 'year'])['name'].nunique().reset_index(name='unique_appointments')
+    
+    # Method 3: Count unique positions per org per year
+    position_counts = df.groupby(['org', 'year'])['position'].nunique().reset_index(name='unique_positions')
+    
+    # Method 4: Count reappointments per org per year
+    reappointment_counts = df.groupby(['org', 'year'])['reappointed'].sum().reset_index(name='reappointments')
+    
+    # Combine all counts
+    appointment_counts = appointment_counts.merge(unique_appointment_counts, on=['org', 'year'], how='outer')
+    appointment_counts = appointment_counts.merge(position_counts, on=['org', 'year'], how='outer')
+    appointment_counts = appointment_counts.merge(reappointment_counts, on=['org', 'year'], how='outer')
+    
+    # Fill any NaN values with 0
+    appointment_counts = appointment_counts.fillna(0)
+    
+    # Convert to appropriate data types
+    appointment_counts['total_appointments'] = appointment_counts['total_appointments'].astype(int)
+    appointment_counts['unique_appointments'] = appointment_counts['unique_appointments'].astype(int)
+    appointment_counts['unique_positions'] = appointment_counts['unique_positions'].astype(int)
+    appointment_counts['reappointments'] = appointment_counts['reappointments'].astype(int)
+    appointment_counts['year'] = appointment_counts['year'].astype(int)
+    
+    # Calculate additional metrics
+    appointment_counts['new_appointments'] = appointment_counts['total_appointments'] - appointment_counts['reappointments']
+    appointment_counts['reappointment_rate'] = (appointment_counts['reappointments'] / appointment_counts['total_appointments'] * 100).round(2)
+    
+    # Handle division by zero
+    appointment_counts['reappointment_rate'] = appointment_counts['reappointment_rate'].fillna(0)
+    
+    print(f"✓ Appointment counts calculated successfully")
+    print(f"  Total org-year combinations: {len(appointment_counts):,}")
+    print(f"  Organizations covered: {appointment_counts['org'].nunique():,}")
+    print(f"  Years covered: {appointment_counts['year'].nunique():,}")
+    
+    return appointment_counts
+
+def analyze_appointment_count_patterns(appointment_counts):
+    """Analyze patterns in appointment counts"""
+    print(f"\n" + "="*60)
+    print("EMPLOYEE COUNT PATTERN ANALYSIS")
+    print("="*60)
+    
+    # Overall statistics
+    print(f"Overall statistics:")
+    total_appointments = appointment_counts['total_appointments'].sum()
+    total_unique_appointments = appointment_counts['unique_appointments'].sum()
+    total_reappointments = appointment_counts['reappointments'].sum()
+    
+    print(f"  Total appointments across all orgs/years: {total_appointments:,}")
+    print(f"  Total unique appointments across all orgs/years: {total_unique_appointments:,}")
+    print(f"  Total reappointments across all orgs/years: {total_reappointments:,}")
+    print(f"  Overall reappointment rate: {(total_reappointments/total_appointments*100):.1f}%")
+    
+    # Analysis by organization (aggregated across all years)
+    print(f"\nAnalysis by organization (2013-2024 totals):")
+    org_totals = appointment_counts.groupby('org').agg({
+        'total_appointments': 'sum',
+        'unique_appointments': 'sum',
+        'reappointments': 'sum',
+        'year': 'nunique'
+    }).round(2)
+    
+    org_totals['avg_appointments_per_year'] = (org_totals['total_appointments'] / org_totals['year']).round(1)
+    org_totals['reappointment_rate'] = (org_totals['reappointments'] / org_totals['total_appointments'] * 100).round(1)
+    
+    # Sort by total appointments (organization size)
+    org_totals = org_totals.sort_values('total_appointments', ascending=False)
+    
+    print(f"Organization rankings by total appointments:")
+    for i, (org, stats) in enumerate(org_totals.iterrows(), 1):
+        print(f"  {i:2d}. {org}:")
+        print(f"      Total appointments: {stats['total_appointments']:,}")
+        print(f"      Unique appointments: {stats['unique_appointments']:,}")
+        print(f"      Reappointments: {stats['reappointments']:,}")
+        print(f"      Reappointment rate: {stats['reappointment_rate']:.1f}%")
+        print(f"      Avg appointments/year: {stats['avg_appointments_per_year']:.1f}")
+        print(f"      Years active: {stats['year']}")
+        print()
+    
+    # Analysis by year (aggregated across all organizations)
+    print(f"Analysis by year (all organizations combined):")
+    year_totals = appointment_counts.groupby('year').agg({
+        'total_appointments': 'sum',
+        'unique_appointments': 'sum',
+        'reappointments': 'sum',
+        'org': 'nunique'
+    }).round(2)
+    
+    year_totals['reappointment_rate'] = (year_totals['reappointments'] / year_totals['total_appointments'] * 100).round(1)
+    
+    print(f"Yearly trends:")
+    for year, stats in year_totals.iterrows():
+        print(f"  {year}: {stats['total_appointments']:,} appointments, {stats['reappointments']:,} reappointments ({stats['reappointment_rate']:.1f}%), {stats['org']} orgs")
+    
+    # Identify trends
+    print(f"\nTrend analysis:")
+    first_half_years = year_totals.loc[year_totals.index <= 2018]
+    second_half_years = year_totals.loc[year_totals.index >= 2019]
+    
+    avg_early_rate = first_half_years['reappointment_rate'].mean()
+    avg_late_rate = second_half_years['reappointment_rate'].mean()
+    
+    print(f"  Early period (2013-2018) avg reappointment rate: {avg_early_rate:.1f}%")
+    print(f"  Late period (2019-2024) avg reappointment rate: {avg_late_rate:.1f}%")
+    print(f"  Trend: {'Increasing' if avg_late_rate > avg_early_rate else 'Decreasing'} by {abs(avg_late_rate - avg_early_rate):.1f} percentage points")
+    
+    return org_totals, year_totals
+
+def validate_appointment_counts(appointment_counts, original_df):
+    """Validate the calculated appointment counts against original data"""
+    print(f"\n" + "="*60)
+    print("VALIDATING EMPLOYEE COUNTS")
+    print("="*60)
+    
+    # Validation 1: Total appointments should match original data
+    calculated_total = appointment_counts['total_appointments'].sum()
+    original_total = len(original_df)
+    
+    print(f"Validation checks:")
+    print(f"  1. Total appointments:")
+    print(f"     Original data: {original_total:,}")
+    print(f"     Calculated sum: {calculated_total:,}")
+    print(f"     Match: {'✓ PASS' if calculated_total == original_total else '✗ FAIL'}")
+    
+    # Validation 2: Total reappointments should match
+    calculated_reappointments = appointment_counts['reappointments'].sum()
+    original_reappointments = original_df['reappointed'].sum()
+    
+    print(f"  2. Total reappointments:")
+    print(f"     Original data: {original_reappointments:,}")
+    print(f"     Calculated sum: {calculated_reappointments:,}")
+    print(f"     Match: {'✓ PASS' if calculated_reappointments == original_reappointments else '✗ FAIL'}")
+    
+    # Validation 3: Check a few specific org-year combinations
+    print(f"  3. Sample org-year validation:")
+    
+    # Get a few samples to validate manually
+    sample_combinations = appointment_counts.head(3)
+    
+    for _, row in sample_combinations.iterrows():
+        org = row['org']
+        year = int(row['year'])
+        
+        # Count manually from original data
+        manual_count = len(original_df[(original_df['org'] == org) & (original_df['year'] == year)])
+        manual_reappointments = original_df[(original_df['org'] == org) & (original_df['year'] == year)]['reappointed'].sum()
+        manual_unique = original_df[(original_df['org'] == org) & (original_df['year'] == year)]['name'].nunique()
+        
+        calculated_count = row['total_appointments']
+        calculated_reapp = row['reappointments']
+        calculated_unique = row['unique_appointments']
+        
+        print(f"     {org} {year}:")
+        print(f"       Appointments: {manual_count} vs {calculated_count} {'✓' if manual_count == calculated_count else '✗'}")
+        print(f"       Reappointments: {manual_reappointments} vs {calculated_reapp} {'✓' if manual_reappointments == calculated_reapp else '✗'}")
+        print(f"       Unique appointments: {manual_unique} vs {calculated_unique} {'✓' if manual_unique == calculated_unique else '✗'}")
+
+def create_summary_statistics(appointment_counts):
+    """Create summary statistics for the appointment counts"""
+    print(f"\n" + "="*60)
+    print("SUMMARY STATISTICS")
+    print("="*60)
+    
+    # Overall summary
+    total_org_year_combinations = len(appointment_counts)
+    min_year = appointment_counts['year'].min()
+    max_year = appointment_counts['year'].max()
+    total_orgs = appointment_counts['org'].nunique()
+    
+    print(f"Dataset summary:")
+    print(f"  Total org-year combinations: {total_org_year_combinations:,}")
+    print(f"  Organizations: {total_orgs}")
+    print(f"  Year range: {min_year} - {max_year}")
+    print(f"  Years covered: {max_year - min_year + 1}")
+    
+    # Statistical summaries
+    print(f"\nStatistical summaries:")
+    
+    summary_stats = appointment_counts[['total_appointments', 'unique_appointments', 'reappointments', 'reappointment_rate']].describe()
+    
+    for col in summary_stats.columns:
+        print(f"\n  {col}:")
+        print(f"    Mean: {summary_stats.loc['mean', col]:.1f}")
+        print(f"    Median: {summary_stats.loc['50%', col]:.1f}")
+        print(f"    Min: {summary_stats.loc['min', col]:.1f}")
+        print(f"    Max: {summary_stats.loc['max', col]:.1f}")
+        print(f"    Std Dev: {summary_stats.loc['std', col]:.1f}")
+
+def save_appointment_counts_data(appointment_counts, output_path):
+    """Save the appointment counts dataset"""
+    try:
+        output_file = output_path / "step4_appointment_counts.csv"
+        appointment_counts.to_csv(output_file, index=False)
+        
+        file_size_mb = output_file.stat().st_size / (1024*1024)
+        print(f"\n✓ Appointment counts dataset saved successfully!")
+        print(f"  File: {output_file}")
+        print(f"  Size: {file_size_mb:.2f} MB")
+        print(f"  Rows: {len(appointment_counts):,}")
+        print(f"  Columns: {list(appointment_counts.columns)}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error saving appointment counts dataset: {e}")
+        return False
+
+def main():
+    """Main execution function"""
+    print("="*80)
+    print("NEW BRUNSWICK GOVERNMENT APPOINTMENTS ANALYSIS")
+    print("Step 4: Count Appointments by Organization and Year")
+    print("="*80)
+    
+    # Define paths
+    input_path = Path("scripts/claudesonnet4/version2/execution8/analysis_data/step3_repeats_marked.csv")
+    output_path = Path("scripts/claudesonnet4/version2/execution8/analysis_data")
+    
+    # Validate input file
+    if not validate_input_file(input_path):
+        sys.exit(1)
+    
+    try:
+        # Load repeats marked dataset
+        df = load_repeats_marked_data(input_path)
+        if df is None:
+            sys.exit(1)
+        
+        # Analyze data structure
+        org_counts, year_counts = analyze_data_structure(df)
+        
+        # Calculate appointment counts
+        appointment_counts = calculate_appointment_counts(df)
+        
+        # Analyze patterns
+        org_totals, year_totals = analyze_appointment_count_patterns(appointment_counts)
+        
+        # Validate the counts
+        validate_appointment_counts(appointment_counts, df)
+        
+        # Create summary statistics
+        create_summary_statistics(appointment_counts)
+        
+        # Save the results
+        if save_appointment_counts_data(appointment_counts, output_path):
+            print(f"\n" + "="*60)
+            print("STEP 4 COMPLETED SUCCESSFULLY")
+            print("="*60)
+            print(f"✓ Calculated appointment counts for {len(appointment_counts):,} org-year combinations")
+            print(f"✓ Covered {appointment_counts['org'].nunique():,} organizations")
+            print(f"✓ Analyzed {appointment_counts['year'].nunique():,} years of data")
+            print(f"✓ Total appointments processed: {appointment_counts['total_appointments'].sum():,}")
+            print(f"✓ Total reappointments identified: {appointment_counts['reappointments'].sum():,}")
+            print(f"✓ Output saved to: {output_path / 'step4_appointment_counts.csv'}")
+            print(f"\n✓ Ready for Step 5: Calculate reappointment counts by organization")
+            
+        else:
+            print("\n✗ Step 4 failed during save operation")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"\n✗ Step 4 failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

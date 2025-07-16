@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script marks "reappointed" as true for repeated "name"-"position"-"org" 
+combinations except for the first appearance.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+INPUT_DIR = Path("scripts/claudeopus4/version2/execution8/analysis_data")
+INPUT_FILE = INPUT_DIR / "step2_key_columns_data.csv"
+OUTPUT_FILE = INPUT_DIR / "step3_repeats_marked.csv"
+
+def load_key_columns_data():
+    """Load the key columns dataset from step 2."""
+    try:
+        if not INPUT_FILE.exists():
+            print(f"✗ Error: Input file not found: {INPUT_FILE}")
+            return None
+        
+        print(f"Loading key columns dataset from: {INPUT_FILE}")
+        df = pd.read_csv(INPUT_FILE, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} rows, {len(df.columns)} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading key columns dataset: {e}")
+        return None
+
+def analyze_existing_reappointed(df):
+    """Analyze the existing reappointed column before modification."""
+    print("\n" + "="*60)
+    print("EXISTING REAPPOINTED COLUMN ANALYSIS")
+    print("="*60)
+    
+    if 'reappointed' not in df.columns:
+        print("⚠ No existing 'reappointed' column found")
+        return
+    
+    # Count existing values
+    print("\nExisting 'reappointed' values:")
+    value_counts = df['reappointed'].value_counts(dropna=False)
+    for value, count in value_counts.items():
+        pct = (count / len(df)) * 100
+        if pd.isna(value):
+            print(f"  - NaN: {count:,} ({pct:.1f}%)")
+        else:
+            print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Store original column for comparison
+    df['reappointed_original'] = df['reappointed'].copy()
+
+def check_data_quality(df):
+    """Check data quality for the key columns needed for matching."""
+    print("\n" + "="*60)
+    print("DATA QUALITY CHECK FOR MATCHING")
+    print("="*60)
+    
+    matching_columns = ['name', 'position', 'org']
+    quality_issues = {}
+    
+    for col in matching_columns:
+        print(f"\n{col.upper()} column:")
+        
+        if col not in df.columns:
+            print(f"  ✗ Column missing!")
+            quality_issues[col] = "missing"
+            continue
+        
+        # Check for missing values
+        missing_count = df[col].isna().sum()
+        missing_pct = (missing_count / len(df)) * 100
+        print(f"  - Missing values: {missing_count:,} ({missing_pct:.1f}%)")
+        
+        # Check for empty strings
+        if df[col].dtype == 'object':
+            empty_count = (df[col].fillna('') == '').sum()
+            if empty_count > missing_count:
+                print(f"  - Empty strings: {empty_count - missing_count:,}")
+        
+        # Sample unique values
+        unique_count = df[col].nunique(dropna=True)
+        print(f"  - Unique values: {unique_count:,}")
+        
+        if unique_count < 20 and unique_count > 0:
+            print("  - Sample values:")
+            for val in df[col].dropna().unique()[:10]:
+                count = (df[col] == val).sum()
+                print(f"    • '{val}': {count:,} occurrences")
+    
+    # Check if year column exists and is valid
+    if 'year' in df.columns:
+        print(f"\nYEAR column:")
+        print(f"  - Range: {df['year'].min()} - {df['year'].max()}")
+        print(f"  - Missing values: {df['year'].isna().sum():,}")
+    else:
+        print("\n⚠ Warning: No 'year' column found for chronological sorting")
+    
+    return quality_issues
+
+def create_matching_key(row):
+    """Create a composite key from name, position, and org."""
+    # Handle missing values by converting to string
+    name = str(row['name']) if pd.notna(row['name']) else ''
+    position = str(row['position']) if pd.notna(row['position']) else ''
+    org = str(row['org']) if pd.notna(row['org']) else ''
+    
+    # Create composite key (using || as separator to avoid conflicts)
+    return f"{name}||{position}||{org}"
+
+def mark_repeated_appointments(df):
+    """
+    Mark repeated appointments based on name-position-org combinations.
+    First appearance = False (or existing value), subsequent = True.
+    """
+    print("\n" + "="*60)
+    print("MARKING REPEATED APPOINTMENTS")
+    print("="*60)
+    
+    # Create a copy to avoid modifying original
+    df = df.copy()
+    
+    # Initialize reappointed column if it doesn't exist
+    if 'reappointed' not in df.columns:
+        print("Creating new 'reappointed' column...")
+        df['reappointed'] = False
+    
+    # Sort by year to ensure chronological order
+    if 'year' in df.columns:
+        print("Sorting by year to ensure chronological order...")
+        df = df.sort_values('year', na_position='last').reset_index(drop=True)
+    else:
+        print("⚠ Warning: No year column found, using existing order")
+    
+    # Create composite key for matching
+    print("Creating composite keys for matching...")
+    df['matching_key'] = df.apply(create_matching_key, axis=1)
+    
+    # Count total unique combinations
+    unique_combinations = df['matching_key'].nunique()
+    print(f"Total unique name-position-org combinations: {unique_combinations:,}")
+    
+    # Find repeated appointments
+    print("\nIdentifying repeated appointments...")
+    
+    # Track first appearances
+    first_appearances = {}
+    repeated_count = 0
+    new_appointments_count = 0
+    
+    # Create new reappointed column
+    new_reappointed = []
+    
+    for idx, row in df.iterrows():
+        key = row['matching_key']
+        
+        # Skip if key is empty (all fields are missing)
+        if key == '||||':
+            new_reappointed.append(np.nan)
+            continue
+        
+        if key in first_appearances:
+            # This is a repeated appointment
+            new_reappointed.append(True)
+            repeated_count += 1
+            
+            # Track details for reporting
+            if repeated_count <= 5:  # Show first 5 examples
+                first_idx = first_appearances[key]
+                print(f"\n  Example {repeated_count}: Repeated appointment found")
+                print(f"    - Name: {row['name']}")
+                print(f"    - Position: {row['position']}")
+                print(f"    - Org: {row['org']}")
+                print(f"    - Current year: {row.get('year', 'N/A')}")
+                print(f"    - First appeared: row {first_idx} (year {df.loc[first_idx, 'year'] if 'year' in df.columns else 'N/A'})")
+        else:
+            # This is the first appearance
+            first_appearances[key] = idx
+            
+            # Keep existing value if it's True, otherwise False
+            if pd.notna(row.get('reappointed_original')) and row.get('reappointed_original') == True:
+                new_reappointed.append(True)
+            else:
+                new_reappointed.append(False)
+            new_appointments_count += 1
+    
+    # Update the reappointed column
+    df['reappointed'] = new_reappointed
+    
+    print(f"\n✓ Marking complete:")
+    print(f"  - First appearances: {new_appointments_count:,}")
+    print(f"  - Repeated appointments marked: {repeated_count:,}")
+    
+    # Analyze combinations with multiple appointments
+    print("\nAnalyzing frequency of reappointments:")
+    appointment_counts = df.groupby('matching_key').size()
+    frequency_dist = appointment_counts.value_counts().sort_index()
+    
+    print("Number of appointments per unique combination:")
+    for count, freq in frequency_dist.items():
+        if count <= 10 or freq > 100:  # Show counts up to 10 or if very frequent
+            print(f"  - {count} appointment(s): {freq:,} combinations")
+    
+    # Find most frequently reappointed combinations
+    print("\nTop 10 most frequently reappointed combinations:")
+    top_combinations = appointment_counts.nlargest(10)
+    
+    for i, (key, count) in enumerate(top_combinations.items(), 1):
+        if count > 1:  # Only show actual reappointments
+            # Parse the key to get details
+            parts = key.split('||')
+            if len(parts) >= 3:
+                name, position, org = parts[0], parts[1], parts[2]
+                print(f"\n  {i}. {count} appointments:")
+                print(f"     - Name: {name}")
+                print(f"     - Position: {position}")
+                print(f"     - Org: {org}")
+    
+    return df
+
+def validate_results(df):
+    """Validate the results and compare with original data."""
+    print("\n" + "="*60)
+    print("VALIDATION OF RESULTS")
+    print("="*60)
+    
+    # Compare new vs original reappointed values
+    if 'reappointed_original' in df.columns:
+        print("\nComparison with original 'reappointed' values:")
+        
+        # Create comparison
+        comparison = pd.crosstab(
+            df['reappointed_original'].fillna('NaN'),
+            df['reappointed'].fillna('NaN'),
+            margins=True
+        )
+        print("\nCrosstab (Original vs New):")
+        print(comparison)
+        
+        # Count changes
+        both_not_nan = df['reappointed'].notna() & df['reappointed_original'].notna()
+        changed = both_not_nan & (df['reappointed'] != df['reappointed_original'])
+        changed_count = changed.sum()
+        
+        print(f"\nTotal changes from original: {changed_count:,}")
+        
+        if changed_count > 0:
+            print("\nSample of changes (first 10):")
+            changed_df = df[changed][['name', 'position', 'org', 'year', 'reappointed_original', 'reappointed']].head(10)
+            for idx, row in changed_df.iterrows():
+                print(f"  - {row['name']} | {row['position']} | {row['org']} | Year: {row.get('year', 'N/A')}")
+                print(f"    Original: {row['reappointed_original']} → New: {row['reappointed']}")
+    
+    # Final statistics
+    print("\nFinal 'reappointed' statistics:")
+    value_counts = df['reappointed'].value_counts(dropna=False)
+    for value, count in value_counts.items():
+        pct = (count / len(df)) * 100
+        if pd.isna(value):
+            print(f"  - NaN: {count:,} ({pct:.1f}%)")
+        else:
+            print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Check logical consistency
+    print("\nLogical consistency checks:")
+    
+    # Check 1: Each unique combination should have at most one False
+    consistency_check = df.groupby('matching_key')['reappointed'].apply(
+        lambda x: (x == False).sum()
+    )
+    violations = consistency_check[consistency_check > 1]
+    
+    if len(violations) > 0:
+        print(f"  ⚠ Warning: {len(violations)} combinations have multiple 'False' values")
+    else:
+        print("  ✓ All combinations have at most one 'False' value (first appearance)")
+    
+    # Sample data
+    print("\nSample of final data (first 10 rows with reappointments):")
+    reappointed_sample = df[df['reappointed'] == True].head(10)
+    if len(reappointed_sample) > 0:
+        print(reappointed_sample[['name', 'position', 'org', 'year', 'reappointed']])
+    else:
+        print("  No reappointments found in the data")
+
+def main():
+    """Main execution function."""
+    print("STEP 3: MARK REPEATED APPOINTMENTS")
+    print("="*60)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load data from step 2
+    df = load_key_columns_data()
+    if df is None:
+        sys.exit(1)
+    
+    # Analyze existing reappointed column
+    analyze_existing_reappointed(df)
+    
+    # Check data quality
+    quality_issues = check_data_quality(df)
+    
+    # Check if we have minimum required columns
+    required_cols = ['name', 'position', 'org']
+    missing_required = [col for col in required_cols if col not in df.columns]
+    if missing_required:
+        print(f"\n✗ ERROR: Required columns missing: {missing_required}")
+        sys.exit(1)
+    
+    # Mark repeated appointments
+    df = mark_repeated_appointments(df)
+    
+    # Validate results
+    validate_results(df)
+    
+    # Remove temporary columns before saving
+    columns_to_drop = ['matching_key', 'reappointed_original']
+    df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+    
+    # Save results
+    print(f"\nSaving results to: {OUTPUT_FILE}")
+    try:
+        df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved results")
+        print(f"  File size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB")
+        
+    except Exception as e:
+        print(f"✗ Error saving results: {e}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 3 COMPLETED SUCCESSFULLY")
+    print(f"Output file: {OUTPUT_FILE}")
+    print(f"Total records: {len(df):,}")
+    
+    # Summary statistics
+    reappointed_true = (df['reappointed'] == True).sum()
+    reappointed_false = (df['reappointed'] == False).sum()
+    reappointed_nan = df['reappointed'].isna().sum()
+    
+    print(f"\nReappointment summary:")
+    print(f"  - Reappointments (True): {reappointed_true:,} ({reappointed_true/len(df)*100:.1f}%)")
+    print(f"  - First appointments (False): {reappointed_false:,} ({reappointed_false/len(df)*100:.1f}%)")
+    print(f"  - Missing data (NaN): {reappointed_nan:,} ({reappointed_nan/len(df)*100:.1f}%)")
+    
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

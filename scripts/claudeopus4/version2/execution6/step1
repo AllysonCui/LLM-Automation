@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets
+This script reads all appointment CSV files from 2013-2024 and combines them into a single dataset.
+Output: step1_combined_appointments.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def create_output_directory(output_path):
+    """Create output directory if it doesn't exist."""
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Output directory created/verified: {output_path}")
+        return True
+    except Exception as e:
+        print(f"✗ Error creating output directory: {e}")
+        return False
+
+def load_appointment_file(file_path, year):
+    """Load a single appointment CSV file with error handling."""
+    try:
+        # Read CSV file
+        df = pd.read_csv(file_path, encoding='utf-8')
+        
+        # Add year column to track source
+        df['source_year'] = year
+        
+        # Print file info
+        print(f"  - Loaded {file_path.name}: {len(df)} rows, {len(df.columns)} columns")
+        
+        return df
+    
+    except FileNotFoundError:
+        print(f"  ✗ File not found: {file_path}")
+        return None
+    except pd.errors.EmptyDataError:
+        print(f"  ✗ Empty file: {file_path}")
+        return None
+    except Exception as e:
+        print(f"  ✗ Error loading {file_path}: {e}")
+        return None
+
+def validate_columns(dataframes):
+    """Validate and report column consistency across dataframes."""
+    print("\n📋 Column Validation:")
+    
+    all_columns = set()
+    column_counts = {}
+    
+    for year, df in dataframes.items():
+        if df is not None:
+            columns = set(df.columns)
+            all_columns.update(columns)
+            
+            for col in columns:
+                if col not in column_counts:
+                    column_counts[col] = []
+                column_counts[col].append(year)
+    
+    # Report columns present in all years
+    common_columns = [col for col, years in column_counts.items() 
+                     if len(years) == len(dataframes)]
+    print(f"\n  Common columns (in all files): {len(common_columns)}")
+    for col in sorted(common_columns):
+        if col != 'source_year':
+            print(f"    - {col}")
+    
+    # Report columns missing in some years
+    partial_columns = [col for col, years in column_counts.items() 
+                      if len(years) < len(dataframes)]
+    if partial_columns:
+        print(f"\n  Columns missing in some years:")
+        for col in sorted(partial_columns):
+            if col != 'source_year':
+                missing_years = [y for y in dataframes.keys() 
+                               if y not in column_counts[col]]
+                print(f"    - {col}: missing in {missing_years}")
+    
+    return list(all_columns)
+
+def combine_dataframes(dataframes):
+    """Combine all dataframes with proper handling of missing columns."""
+    print("\n🔄 Combining dataframes...")
+    
+    # Filter out None values
+    valid_dfs = [df for df in dataframes.values() if df is not None]
+    
+    if not valid_dfs:
+        print("✗ No valid dataframes to combine!")
+        return None
+    
+    try:
+        # Combine all dataframes
+        combined_df = pd.concat(valid_dfs, ignore_index=True, sort=False)
+        
+        print(f"✓ Successfully combined {len(valid_dfs)} dataframes")
+        print(f"  Total rows: {len(combined_df)}")
+        print(f"  Total columns: {len(combined_df.columns)}")
+        
+        return combined_df
+    
+    except Exception as e:
+        print(f"✗ Error combining dataframes: {e}")
+        return None
+
+def validate_combined_data(df):
+    """Validate the combined dataset."""
+    print("\n🔍 Data Validation:")
+    
+    # Check for duplicate columns
+    duplicate_cols = df.columns[df.columns.duplicated()].tolist()
+    if duplicate_cols:
+        print(f"  ⚠️  Duplicate columns found: {duplicate_cols}")
+    else:
+        print(f"  ✓ No duplicate columns")
+    
+    # Check data types
+    print(f"\n  Data types summary:")
+    dtype_counts = df.dtypes.value_counts()
+    for dtype, count in dtype_counts.items():
+        print(f"    - {dtype}: {count} columns")
+    
+    # Check for completely empty columns
+    empty_cols = df.columns[df.isnull().all()].tolist()
+    if empty_cols:
+        print(f"\n  ⚠️  Completely empty columns: {empty_cols}")
+    
+    # Summary statistics
+    print(f"\n  Summary statistics:")
+    print(f"    - Total records: {len(df)}")
+    print(f"    - Years covered: {sorted(df['source_year'].unique())}")
+    print(f"    - Records per year:")
+    year_counts = df['source_year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"      {year}: {count} records")
+
+def main():
+    """Main execution function."""
+    print("=" * 60)
+    print("STEP 1: Combine the 12 Raw Datasets")
+    print("=" * 60)
+    
+    # Define paths
+    raw_data_path = Path("raw_data")
+    output_path = Path("scripts/claudeopus4/version2/execution6/analysis_data")
+    
+    # Create output directory
+    if not create_output_directory(output_path):
+        sys.exit(1)
+    
+    # Load all appointment files
+    print("\n📂 Loading appointment files:")
+    dataframes = {}
+    
+    for year in range(2013, 2025):  # 2013 to 2024 inclusive
+        file_path = raw_data_path / f"appointments_{year}.csv"
+        df = load_appointment_file(file_path, year)
+        if df is not None:
+            dataframes[year] = df
+        else:
+            print(f"  ⚠️  Skipping year {year} due to loading error")
+    
+    # Check if we have any valid data
+    if not dataframes:
+        print("\n✗ No appointment files could be loaded!")
+        sys.exit(1)
+    
+    print(f"\n✓ Successfully loaded {len(dataframes)} out of 12 files")
+    
+    # Validate columns across years
+    all_columns = validate_columns(dataframes)
+    
+    # Combine all dataframes
+    combined_df = combine_dataframes(dataframes)
+    
+    if combined_df is None:
+        print("\n✗ Failed to combine dataframes!")
+        sys.exit(1)
+    
+    # Validate combined data
+    validate_combined_data(combined_df)
+    
+    # Save combined dataset
+    output_file = output_path / "step1_combined_appointments.csv"
+    try:
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\n✅ Combined dataset saved to: {output_file}")
+        print(f"   File size: {output_file.stat().st_size / 1024 / 1024:.2f} MB")
+    except Exception as e:
+        print(f"\n✗ Error saving combined dataset: {e}")
+        sys.exit(1)
+    
+    # Print key columns for next steps
+    print("\n📌 Key columns for analysis:")
+    key_columns = ['name', 'position', 'org', 'organization', 'reappointed', 
+                   'start_date', 'end_date', 'posted_date']
+    available_key_cols = [col for col in key_columns if col in combined_df.columns]
+    for col in available_key_cols:
+        non_null = combined_df[col].notna().sum()
+        null_pct = (1 - non_null / len(combined_df)) * 100
+        print(f"  - {col}: {non_null} non-null values ({null_pct:.1f}% missing)")
+    
+    print("\n✅ Step 1 completed successfully!")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()

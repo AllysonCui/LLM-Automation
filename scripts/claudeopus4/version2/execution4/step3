@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script identifies repeated name-position-org combinations and marks
+them as reappointed (True), except for the first appearance.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to mark repeated appointments."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution4/analysis_data")
+    input_file = input_dir / "step2_key_columns_data.csv"
+    output_file = input_dir / "step3_repeats_marked.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 3: MARKING REPEATED APPOINTMENTS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run step2_extract_key_columns.py first!")
+        sys.exit(1)
+    
+    print(f"Loading data from: {input_file}")
+    
+    try:
+        # Read the extracted key columns dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"SUCCESS: Loaded {len(df)} rows")
+        
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Display initial data structure
+    print("\n" + "-"*60)
+    print("INITIAL DATASET STRUCTURE:")
+    print(f"- Total rows: {len(df)}")
+    print(f"- Columns: {', '.join(df.columns.tolist())}")
+    
+    # Analyze original reappointed column
+    print("\n" + "-"*60)
+    print("ORIGINAL 'REAPPOINTED' COLUMN ANALYSIS:")
+    if 'reappointed' in df.columns:
+        print(f"- Data type: {df['reappointed'].dtype}")
+        print(f"- Unique values: {df['reappointed'].unique()}")
+        print("- Value distribution:")
+        value_counts = df['reappointed'].value_counts(dropna=False)
+        for val, count in value_counts.items():
+            pct = (count / len(df)) * 100
+            print(f"  • {val}: {count} ({pct:.2f}%)")
+    
+    # Create a copy to preserve original data
+    df_processed = df.copy()
+    
+    # Store original reappointed column for comparison
+    df_processed['reappointed_original'] = df_processed['reappointed'].copy()
+    
+    # Initialize new reappointed column as False
+    df_processed['reappointed'] = False
+    
+    print("\n" + "-"*60)
+    print("PROCESSING REPEATED APPOINTMENTS:")
+    
+    # Check for missing values in key columns
+    key_cols = ['name', 'position', 'org']
+    missing_info = {}
+    for col in key_cols:
+        missing_count = df_processed[col].isna().sum()
+        missing_info[col] = missing_count
+        if missing_count > 0:
+            print(f"- WARNING: {missing_count} missing values in '{col}' column")
+    
+    # Create a composite key from name-position-org
+    # Handle missing values by converting to string 'nan'
+    print("\nCreating composite keys for matching...")
+    df_processed['composite_key'] = (
+        df_processed['name'].fillna('').astype(str) + '|' +
+        df_processed['position'].fillna('').astype(str) + '|' +
+        df_processed['org'].fillna('').astype(str)
+    )
+    
+    # Sort by year to ensure chronological order
+    # If year is missing, sort those records to the end
+    print("Sorting by year to ensure chronological order...")
+    df_processed['year_sort'] = pd.to_numeric(df_processed['year'], errors='coerce')
+    df_processed = df_processed.sort_values(['year_sort', 'composite_key'], na_position='last')
+    df_processed = df_processed.reset_index(drop=True)
+    
+    # Track statistics
+    total_combinations = 0
+    repeated_combinations = 0
+    total_reappointments = 0
+    
+    # Process each unique combination
+    print("\nIdentifying repeated appointments...")
+    unique_combinations = df_processed['composite_key'].unique()
+    print(f"Found {len(unique_combinations)} unique name-position-org combinations")
+    
+    # Group by composite key and mark repeats
+    for i, combination in enumerate(unique_combinations):
+        if i % 1000 == 0 and i > 0:
+            print(f"  Processing combination {i}/{len(unique_combinations)}...")
+        
+        # Get all rows with this combination
+        mask = df_processed['composite_key'] == combination
+        combination_rows = df_processed[mask]
+        
+        if len(combination_rows) > 1:
+            # This combination appears multiple times
+            repeated_combinations += 1
+            
+            # Get indices of all occurrences except the first
+            indices = combination_rows.index[1:]  # Skip first occurrence
+            
+            # Mark as reappointed
+            df_processed.loc[indices, 'reappointed'] = True
+            total_reappointments += len(indices)
+            
+            # Debug info for first few repeated combinations
+            if repeated_combinations <= 5 and not combination.startswith('||'):
+                parts = combination.split('|')
+                print(f"\n  Example repeat #{repeated_combinations}:")
+                print(f"    Name: {parts[0]}")
+                print(f"    Position: {parts[1]}")
+                print(f"    Org: {parts[2]}")
+                print(f"    Occurrences: {len(combination_rows)}")
+                print(f"    Years: {combination_rows['year'].dropna().tolist()}")
+        
+        total_combinations += 1
+    
+    # Remove temporary columns
+    df_processed = df_processed.drop(columns=['composite_key', 'year_sort'])
+    
+    # Analysis of changes
+    print("\n" + "-"*60)
+    print("REAPPOINTMENT MARKING SUMMARY:")
+    print(f"- Total unique combinations processed: {total_combinations}")
+    print(f"- Combinations with repeats: {repeated_combinations}")
+    print(f"- Total appointments marked as reappointed: {total_reappointments}")
+    print(f"- Percentage of records marked as reappointed: {(total_reappointments/len(df_processed))*100:.2f}%")
+    
+    # Compare with original reappointed column
+    print("\n" + "-"*60)
+    print("COMPARISON WITH ORIGINAL DATA:")
+    
+    # Convert original to boolean for comparison
+    original_true = df_processed['reappointed_original'].isin([True, 'True', 'true', 'TRUE', 1, '1'])
+    new_true = df_processed['reappointed'] == True
+    
+    matches = (original_true == new_true).sum()
+    match_rate = (matches / len(df_processed)) * 100
+    
+    print(f"- Original reappointed=True count: {original_true.sum()}")
+    print(f"- New reappointed=True count: {new_true.sum()}")
+    print(f"- Matching records: {matches} ({match_rate:.2f}%)")
+    
+    # Analyze discrepancies
+    only_original = original_true & ~new_true
+    only_new = ~original_true & new_true
+    
+    print(f"- Marked as reappointed only in original: {only_original.sum()}")
+    print(f"- Marked as reappointed only in new logic: {only_new.sum()}")
+    
+    # Remove the comparison column before saving
+    df_final = df_processed.drop(columns=['reappointed_original'])
+    
+    # Verify data by year
+    print("\n" + "-"*60)
+    print("REAPPOINTMENTS BY YEAR:")
+    yearly_stats = df_final.groupby('year')['reappointed'].agg(['sum', 'count'])
+    yearly_stats['percentage'] = (yearly_stats['sum'] / yearly_stats['count']) * 100
+    yearly_stats.columns = ['reappointed_count', 'total_count', 'reappointed_percentage']
+    print(yearly_stats.to_string())
+    
+    # Display sample of marked reappointments
+    print("\n" + "-"*60)
+    print("SAMPLE OF MARKED REAPPOINTMENTS (first 10):")
+    reappointed_sample = df_final[df_final['reappointed'] == True].head(10)
+    print(reappointed_sample[['name', 'position', 'org', 'year', 'reappointed']])
+    
+    # Save the processed data
+    print("\n" + "-"*60)
+    print(f"SAVING PROCESSED DATA TO: {output_file}")
+    
+    try:
+        df_final.to_csv(output_file, index=False, encoding='utf-8')
+        print("SUCCESS: Data with marked repeats saved successfully!")
+        
+        # Verify saved file
+        verify_df = pd.read_csv(output_file)
+        if len(verify_df) == len(df_final):
+            print(f"VERIFICATION: Saved file contains {len(verify_df)} rows ✓")
+            reapp_count = verify_df['reappointed'].sum()
+            print(f"VERIFICATION: {reapp_count} records marked as reappointed ✓")
+        else:
+            print(f"WARNING: Verification failed!")
+            
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 3 COMPLETED SUCCESSFULLY!")
+    print(f"Processed {len(df_final)} records")
+    print(f"Identified {total_reappointments} reappointments based on name-position-org repeats")
+    print("="*60 + "\n")
+    
+    return df_final
+
+if __name__ == "__main__":
+    # Run the main function
+    marked_data = main()

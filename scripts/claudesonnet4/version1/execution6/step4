@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 
 """
-Employee Counts Creator for New Brunswick Government Appointments
+Appointment Counts by Organization and Year
 
-This script creates a summary table of appointment counts by organization and year.
-It groups the data by organization and year, counts appointments, and creates
-a pivot table with organizations as rows and years as columns.
-
-Output Format:
-- Rows: Organizations
-- Columns: Years (2013-2024)
-- Values: Number of appointments
-- Missing values handled as 0
+This script loads the dataset from step 3, groups by organization and year,
+and creates a summary table showing appointment counts for each organization
+across all years.
 
 Author: Claude Sonnet 4
 Date: June 30, 2025
@@ -42,13 +36,6 @@ def load_marked_data(file_path="scripts/claudesonnet4/version1/execution6/analys
         df = pd.read_csv(file_path, encoding='utf-8')
         print(f"✓ Loaded marked dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
         
-        # Validate required columns
-        required_cols = ['org', 'year']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        
-        if missing_cols:
-            raise ValueError(f"Missing required columns: {missing_cols}")
-        
         return df
         
     except Exception as e:
@@ -56,78 +43,67 @@ def load_marked_data(file_path="scripts/claudesonnet4/version1/execution6/analys
         raise
 
 
-def validate_and_clean_data(df):
+def validate_and_prepare_data(df):
     """
-    Validate and clean the data before counting.
+    Validate and prepare the dataset for counting analysis.
     
     Args:
         df (pd.DataFrame): Input dataset
     
     Returns:
-        pd.DataFrame: Cleaned dataset
-        dict: Data quality statistics
+        pd.DataFrame: Cleaned and validated dataset
     """
     
-    print("\nValidating and cleaning data...")
-    print("-" * 35)
+    print("Validating and preparing data...")
     
-    stats = {
-        'original_rows': len(df),
-        'missing_org': 0,
-        'missing_year': 0,
-        'invalid_year': 0,
-        'cleaned_rows': 0
-    }
+    # Check required columns
+    required_columns = ['org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
     
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Create a copy for modifications
     df_clean = df.copy()
     
-    # Check for missing organizations
-    missing_org_mask = df_clean['org'].isnull() | (df_clean['org'].astype(str).str.strip() == '')
-    stats['missing_org'] = missing_org_mask.sum()
+    # Track initial row count
+    initial_rows = len(df_clean)
     
-    if stats['missing_org'] > 0:
-        print(f"  • Found {stats['missing_org']:,} records with missing organization")
-        # Replace missing org with 'Unknown Organization'
-        df_clean.loc[missing_org_mask, 'org'] = 'Unknown Organization'
+    # Convert year to numeric, handling any errors
+    df_clean.loc[:, 'year'] = pd.to_numeric(df_clean['year'], errors='coerce')
     
-    # Check for missing years
-    missing_year_mask = df_clean['year'].isnull()
-    stats['missing_year'] = missing_year_mask.sum()
+    # Clean organization names - strip whitespace and handle missing values
+    df_clean.loc[:, 'org'] = df_clean['org'].astype(str).str.strip()
     
-    if stats['missing_year'] > 0:
-        print(f"  • Found {stats['missing_year']:,} records with missing year")
-        # Remove records with missing years
-        df_clean = df_clean[~missing_year_mask].copy()
+    # Remove rows with missing critical information
+    df_clean = df_clean.dropna(subset=['org', 'year'])
     
-    # Check for invalid years (outside reasonable range)
-    if len(df_clean) > 0:
-        df_clean['year'] = pd.to_numeric(df_clean['year'], errors='coerce')
-        
-        # Define reasonable year range (2010-2030)
-        min_year, max_year = 2010, 2030
-        invalid_year_mask = (df_clean['year'] < min_year) | (df_clean['year'] > max_year) | df_clean['year'].isnull()
-        stats['invalid_year'] = invalid_year_mask.sum()
-        
-        if stats['invalid_year'] > 0:
-            print(f"  • Found {stats['invalid_year']:,} records with invalid years")
-            # Remove records with invalid years
-            df_clean = df_clean[~invalid_year_mask].copy()
-        
-        # Convert year to integer
-        df_clean['year'] = df_clean['year'].astype(int)
+    # Remove rows where org is empty string or 'nan'
+    df_clean = df_clean.loc[
+        (df_clean['org'] != '') & 
+        (df_clean['org'] != 'nan') & 
+        (df_clean['org'] != 'None')
+    ]
     
-    stats['cleaned_rows'] = len(df_clean)
+    # Validate year ranges (reasonable government appointment years)
+    valid_year_mask = (df_clean['year'] >= 2000) & (df_clean['year'] <= 2030)
+    invalid_years = df_clean.loc[~valid_year_mask, 'year'].value_counts()
     
-    # Clean organization names
-    df_clean['org'] = df_clean['org'].astype(str).str.strip()
+    if len(invalid_years) > 0:
+        print(f"  WARNING: Found {len(invalid_years)} records with invalid years: {invalid_years.index.tolist()}")
+        df_clean = df_clean.loc[valid_year_mask]
     
-    print(f"  • Data cleaning complete")
-    print(f"  • Retained {stats['cleaned_rows']:,} of {stats['original_rows']:,} records")
+    final_rows = len(df_clean)
     
-    return df_clean, stats
+    if initial_rows != final_rows:
+        print(f"  Removed {initial_rows - final_rows:,} rows with invalid data")
+    
+    print(f"✓ Data validation complete: {final_rows:,} valid records")
+    
+    return df_clean
 
 
-def create_counts_table(df):
+def create_counts_summary(df):
     """
     Create a summary table of appointment counts by organization and year.
     
@@ -135,97 +111,43 @@ def create_counts_table(df):
         df (pd.DataFrame): Cleaned dataset
     
     Returns:
-        pd.DataFrame: Pivot table with organizations as rows, years as columns
+        pd.DataFrame: Summary table with organizations as rows and years as columns
     """
     
-    print("\nCreating appointment counts table...")
-    print("-" * 38)
+    print("Creating appointment counts summary...")
     
-    # Group by organization and year, count appointments
-    counts_df = df.groupby(['org', 'year']).size().reset_index(name='count')
-    
-    print(f"  • Generated counts for {len(counts_df):,} org-year combinations")
-    
-    # Create pivot table
-    pivot_table = counts_df.pivot(index='org', columns='year', values='count')
-    
-    # Fill missing values with 0
-    pivot_table = pivot_table.fillna(0).astype(int)
-    
-    # Sort columns (years) in ascending order
-    pivot_table = pivot_table.reindex(sorted(pivot_table.columns), axis=1)
-    
-    # Sort rows by total appointments (descending)
-    pivot_table['Total'] = pivot_table.sum(axis=1)
-    pivot_table = pivot_table.sort_values('Total', ascending=False)
-    
-    print(f"  • Created pivot table: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]-1} years")
-    
-    return pivot_table
+    try:
+        # Group by organization and year, count appointments
+        counts_df = df.groupby(['org', 'year']).size().reset_index(name='appointment_count')
+        
+        # Create pivot table with organizations as rows and years as columns
+        summary_table = counts_df.pivot(index='org', columns='year', values='appointment_count')
+        
+        # Fill missing values with 0
+        summary_table = summary_table.fillna(0).astype(int)
+        
+        # Sort columns (years) in ascending order
+        summary_table = summary_table.sort_index(axis=1)
+        
+        # Sort rows by total appointments (descending)
+        summary_table.loc[:, 'Total'] = summary_table.sum(axis=1)
+        summary_table = summary_table.sort_values('Total', ascending=False)
+        
+        print(f"✓ Created summary table: {len(summary_table)} organizations × {len(summary_table.columns)-1} years")
+        
+        return summary_table
+        
+    except Exception as e:
+        print(f"ERROR creating summary table: {str(e)}")
+        raise
 
 
-def validate_counts(df, pivot_table):
+def save_counts_summary(summary_table, output_dir="scripts/claudesonnet4/version1/execution6/analysis_data"):
     """
-    Validate that the counts are reasonable and consistent.
+    Save the appointment counts summary to CSV file.
     
     Args:
-        df (pd.DataFrame): Original cleaned dataset
-        pivot_table (pd.DataFrame): Pivot table with counts
-    
-    Returns:
-        dict: Validation results
-    """
-    
-    print("\nValidating counts...")
-    print("-" * 20)
-    
-    validation = {
-        'total_records_original': len(df),
-        'total_records_pivot': 0,
-        'match': False,
-        'max_count_per_org_year': 0,
-        'organizations_count': 0,
-        'years_range': None
-    }
-    
-    # Calculate total from pivot table (excluding 'Total' column)
-    year_columns = [col for col in pivot_table.columns if col != 'Total']
-    validation['total_records_pivot'] = pivot_table[year_columns].sum().sum()
-    
-    # Check if totals match
-    validation['match'] = validation['total_records_original'] == validation['total_records_pivot']
-    
-    # Find maximum count per org-year combination
-    validation['max_count_per_org_year'] = pivot_table[year_columns].max().max()
-    
-    # Count organizations
-    validation['organizations_count'] = len(pivot_table)
-    
-    # Get year range
-    validation['years_range'] = (min(year_columns), max(year_columns))
-    
-    print(f"  • Original records: {validation['total_records_original']:,}")
-    print(f"  • Pivot table sum: {validation['total_records_pivot']:,}")
-    print(f"  • Totals match: {validation['match']}")
-    print(f"  • Max appointments per org-year: {validation['max_count_per_org_year']:,}")
-    print(f"  • Organizations: {validation['organizations_count']:,}")
-    print(f"  • Year range: {validation['years_range'][0]}-{validation['years_range'][1]}")
-    
-    if not validation['match']:
-        print("  ⚠️  WARNING: Total counts don't match - possible data issue")
-    
-    if validation['max_count_per_org_year'] > 1000:
-        print("  ⚠️  WARNING: Very high appointment count detected - verify data")
-    
-    return validation
-
-
-def save_counts_table(pivot_table, output_dir="scripts/claudesonnet4/version1/execution6/analysis_data"):
-    """
-    Save the counts table to CSV file.
-    
-    Args:
-        pivot_table (pd.DataFrame): Pivot table with appointment counts
+        summary_table (pd.DataFrame): Summary table with counts
         output_dir (str): Directory to save the output file
     """
     
@@ -233,107 +155,129 @@ def save_counts_table(pivot_table, output_dir="scripts/claudesonnet4/version1/ex
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Define output file path
-    output_file = os.path.join(output_dir, "step4_employee_counts.csv")
+    output_file = os.path.join(output_dir, "step4_appointment_counts.csv")
     
     try:
-        # Save to CSV with organization as index
-        pivot_table.to_csv(output_file, encoding='utf-8')
-        print(f"✓ Saved counts table to: {output_file}")
+        # Save to CSV
+        summary_table.to_csv(output_file, encoding='utf-8')
+        print(f"✓ Saved appointment counts to: {output_file}")
+        
+        return output_file
         
     except Exception as e:
         print(f"ERROR saving file: {str(e)}")
         raise
 
 
-def print_summary_statistics(pivot_table):
+def validate_counts(summary_table, original_df):
     """
-    Print summary statistics and identify top organizations.
+    Validate that the counts are reasonable and match expected totals.
     
     Args:
-        pivot_table (pd.DataFrame): Pivot table with appointment counts
+        summary_table (pd.DataFrame): Summary table with counts
+        original_df (pd.DataFrame): Original dataset for validation
     """
     
-    print("\n" + "=" * 70)
+    print("Validating appointment counts...")
+    
+    # Check total counts match
+    summary_total = summary_table.drop('Total', axis=1).sum().sum()
+    original_total = len(original_df)
+    
+    if summary_total != original_total:
+        print(f"  WARNING: Count mismatch - Summary: {summary_total:,}, Original: {original_total:,}")
+    else:
+        print(f"✓ Count validation passed: {summary_total:,} total appointments")
+    
+    # Check for unreasonably high counts (potential data quality issues)
+    max_count = summary_table.drop('Total', axis=1).max().max()
+    if max_count > 1000:
+        print(f"  WARNING: Very high appointment count detected: {max_count}")
+    
+    # Check for organizations with zero appointments across all years
+    zero_orgs = summary_table.loc[summary_table['Total'] == 0]
+    if len(zero_orgs) > 0:
+        print(f"  WARNING: {len(zero_orgs)} organizations with zero appointments")
+
+
+def print_summary_statistics(summary_table):
+    """
+    Print detailed statistics about the appointment counts.
+    
+    Args:
+        summary_table (pd.DataFrame): Summary table with counts
+    """
+    
+    print("\n" + "=" * 60)
     print("APPOINTMENT COUNTS SUMMARY")
-    print("=" * 70)
+    print("=" * 60)
     
-    year_columns = [col for col in pivot_table.columns if col != 'Total']
+    # Basic statistics
+    total_organizations = len(summary_table)
+    year_columns = [col for col in summary_table.columns if col != 'Total']
+    years_covered = len(year_columns)
+    total_appointments = summary_table['Total'].sum()
     
-    # Overall statistics
-    total_appointments = pivot_table['Total'].sum()
-    total_organizations = len(pivot_table)
-    
-    print(f"Total appointments: {total_appointments:,}")
     print(f"Total organizations: {total_organizations:,}")
-    print(f"Years covered: {min(year_columns)}-{max(year_columns)}")
-    print(f"Average appointments per organization: {total_appointments/total_organizations:.1f}")
+    print(f"Years covered: {years_covered} ({min(year_columns):.0f}-{max(year_columns):.0f})")
+    print(f"Total appointments: {total_appointments:,}")
     
     # Top organizations by total appointments
     print(f"\nTop 10 organizations by total appointments:")
-    top_orgs = pivot_table.head(10)
-    
+    top_orgs = summary_table.nlargest(10, 'Total')
     for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
-        print(f"  {i:2}. {org[:60]:<60} {row['Total']:>6,}")
+        total = int(row['Total'])
+        print(f"  {i:2d}. {org}: {total:,} appointments")
     
-    # Year-wise totals
+    # Year-wise statistics
     print(f"\nAppointments by year:")
-    year_totals = pivot_table[year_columns].sum().sort_index()
+    year_totals = summary_table[year_columns].sum().sort_index()
+    for year, count in year_totals.items():
+        print(f"  {year:.0f}: {count:,} appointments")
     
-    for year, total in year_totals.items():
-        print(f"  {year}: {total:,}")
+    # Organizations statistics
+    print(f"\nOrganization statistics:")
+    org_stats = summary_table['Total'].describe()
+    print(f"  Mean appointments per org: {org_stats['mean']:.1f}")
+    print(f"  Median appointments per org: {org_stats['50%']:.1f}")
+    print(f"  Max appointments (single org): {org_stats['max']:.0f}")
+    print(f"  Min appointments (single org): {org_stats['min']:.0f}")
     
-    # Organizations with highest activity in recent years
-    if len(year_columns) >= 3:
-        recent_years = sorted(year_columns)[-3:]  # Last 3 years
-        recent_totals = pivot_table[recent_years].sum(axis=1).sort_values(ascending=False)
-        
-        print(f"\nMost active organizations in recent years ({'-'.join(map(str, recent_years))}):")
-        for i, (org, total) in enumerate(recent_totals.head(5).items(), 1):
-            print(f"  {i}. {org[:50]:<50} {total:>4,}")
+    # Show sample of the summary table
+    print(f"\nSample of summary table (top 5 organizations):")
+    display_table = summary_table.head(5)
     
-    # Display sample of the pivot table
-    print(f"\nSample of counts table (top 5 organizations):")
-    sample_table = pivot_table.head(5)
-    
-    # Format for display
-    display_cols = ['Total'] + [col for col in year_columns if col in sample_table.columns][:8]  # Show up to 8 years + total
-    sample_display = sample_table[display_cols]
-    
-    print(sample_display.to_string())
-    
-    if len(year_columns) > 8:
-        print(f"  ... and {len(year_columns) - 8} more year columns")
+    # Format for better display
+    print(display_table.to_string(max_cols=None, max_rows=None))
 
 
 def main():
     """Main execution function."""
     
-    print("Employee Counts Creator for NB Government Appointments")
+    print("Appointment Counts by Organization and Year")
     print("=" * 60)
     
     try:
-        # Load the marked dataset
+        # Load the marked dataset from step 3
         df = load_marked_data()
         
-        # Validate and clean the data
-        df_clean, quality_stats = validate_and_clean_data(df)
+        # Validate and prepare the data
+        df_clean = validate_and_prepare_data(df)
         
-        if len(df_clean) == 0:
-            raise ValueError("No valid data remaining after cleaning!")
+        # Create the summary table
+        summary_table = create_counts_summary(df_clean)
         
-        # Create counts table
-        pivot_table = create_counts_table(df_clean)
+        # Validate the counts
+        validate_counts(summary_table, df_clean)
         
-        # Validate counts
-        validation_results = validate_counts(df_clean, pivot_table)
+        # Save the summary table
+        output_file = save_counts_summary(summary_table)
         
-        # Save the counts table
-        save_counts_table(pivot_table)
+        # Print comprehensive statistics
+        print_summary_statistics(summary_table)
         
-        # Print summary statistics
-        print_summary_statistics(pivot_table)
-        
-        print(f"\n✓ Employee counts creation completed successfully!")
+        print(f"\n✓ Appointment counts analysis completed successfully!")
+        print(f"✓ Output saved to: {output_file}")
         
     except Exception as e:
         print(f"\n❌ Process failed: {str(e)}")

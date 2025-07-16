@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine Raw Datasets
+Combines 12 years of New Brunswick government appointment data (2013-2024)
+into a single dataset for analysis.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution6/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created output directory: {output_dir}")
+    return output_dir
+
+def validate_file_exists(file_path):
+    """Check if file exists and is readable."""
+    if not file_path.exists():
+        logger.error(f"File not found: {file_path}")
+        return False
+    if not file_path.is_file():
+        logger.error(f"Path is not a file: {file_path}")
+        return False
+    return True
+
+def load_single_csv(file_path, year):
+    """Load a single CSV file with error handling and validation."""
+    try:
+        logger.info(f"Loading data for year {year}: {file_path}")
+        
+        # Read CSV with error handling
+        df = pd.read_csv(file_path, encoding='utf-8')
+        
+        # Add year column for tracking
+        df['data_year'] = year
+        
+        # Basic validation
+        if df.empty:
+            logger.warning(f"Empty dataset for year {year}")
+            return None
+            
+        logger.info(f"Loaded {len(df)} records for year {year}")
+        logger.info(f"Columns: {list(df.columns)}")
+        
+        return df
+        
+    except pd.errors.EmptyDataError:
+        logger.error(f"Empty CSV file: {file_path}")
+        return None
+    except pd.errors.ParserError as e:
+        logger.error(f"Parser error in {file_path}: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error loading {file_path}: {str(e)}")
+        return None
+
+def standardize_columns(df_list):
+    """Standardize column names and ensure consistency across datasets."""
+    logger.info("Standardizing column names across datasets...")
+    
+    # Get all unique columns across all datasets
+    all_columns = set()
+    for df in df_list:
+        if df is not None:
+            all_columns.update(df.columns)
+    
+    logger.info(f"Found {len(all_columns)} unique columns across all datasets")
+    
+    # Standardize each dataframe to have the same columns
+    standardized_dfs = []
+    for df in df_list:
+        if df is not None:
+            # Add missing columns with NaN values
+            for col in all_columns:
+                if col not in df.columns:
+                    df[col] = np.nan
+            
+            # Reorder columns consistently
+            df = df[sorted(all_columns)]
+            standardized_dfs.append(df)
+    
+    return standardized_dfs
+
+def combine_datasets():
+    """Main function to combine all 12 datasets."""
+    logger.info("Starting Step 1: Combining raw datasets...")
+    
+    # Setup directories
+    output_dir = setup_directories()
+    
+    # Define input and output paths
+    raw_data_dir = Path("raw_data")
+    output_file = output_dir / "step1_combined_appointments.csv"
+    
+    # Check if raw data directory exists
+    if not raw_data_dir.exists():
+        logger.error(f"Raw data directory not found: {raw_data_dir}")
+        sys.exit(1)
+    
+    # Load all datasets
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    datasets = []
+    missing_files = []
+    
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        
+        if not validate_file_exists(file_path):
+            missing_files.append(str(file_path))
+            continue
+            
+        df = load_single_csv(file_path, year)
+        if df is not None:
+            datasets.append(df)
+    
+    # Report missing files
+    if missing_files:
+        logger.warning(f"Missing files: {missing_files}")
+    
+    # Check if we have any data
+    if not datasets:
+        logger.error("No valid datasets found. Cannot proceed.")
+        sys.exit(1)
+    
+    logger.info(f"Successfully loaded {len(datasets)} datasets out of {len(years)} expected")
+    
+    # Standardize columns across datasets
+    datasets = standardize_columns(datasets)
+    
+    # Combine all datasets
+    logger.info("Combining datasets...")
+    try:
+        combined_df = pd.concat(datasets, ignore_index=True, sort=False)
+        logger.info(f"Combined dataset shape: {combined_df.shape}")
+        
+    except Exception as e:
+        logger.error(f"Error combining datasets: {str(e)}")
+        sys.exit(1)
+    
+    # Data quality checks
+    logger.info("Performing data quality checks...")
+    
+    # Check for completely empty rows
+    empty_rows = combined_df.isnull().all(axis=1).sum()
+    if empty_rows > 0:
+        logger.warning(f"Found {empty_rows} completely empty rows")
+        combined_df = combined_df.dropna(how='all')
+        logger.info(f"After removing empty rows: {combined_df.shape}")
+    
+    # Report data distribution by year
+    if 'data_year' in combined_df.columns:
+        year_counts = combined_df['data_year'].value_counts().sort_index()
+        logger.info("Records per year:")
+        for year, count in year_counts.items():
+            logger.info(f"  {year}: {count} records")
+    
+    # Report key columns presence
+    key_columns = ['name', 'position', 'org', 'reappointed', 'start_date', 'end_date']
+    logger.info("Key columns analysis:")
+    for col in key_columns:
+        if col in combined_df.columns:
+            non_null_count = combined_df[col].notna().sum()
+            null_percentage = (combined_df[col].isna().sum() / len(combined_df)) * 100
+            logger.info(f"  {col}: {non_null_count} non-null values ({null_percentage:.1f}% null)")
+        else:
+            logger.warning(f"  {col}: Column not found in dataset")
+    
+    # Save combined dataset
+    try:
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        logger.info(f"Successfully saved combined dataset to: {output_file}")
+        logger.info(f"Final dataset shape: {combined_df.shape}")
+        
+    except Exception as e:
+        logger.error(f"Error saving combined dataset: {str(e)}")
+        sys.exit(1)
+    
+    # Summary statistics
+    logger.info("=== STEP 1 SUMMARY ===")
+    logger.info(f"Total records combined: {len(combined_df):,}")
+    logger.info(f"Total columns: {len(combined_df.columns)}")
+    logger.info(f"Years covered: {combined_df['data_year'].min()} to {combined_df['data_year'].max()}")
+    logger.info(f"Output file: {output_file}")
+    logger.info("Step 1 completed successfully!")
+    
+    return combined_df
+
+if __name__ == "__main__":
+    try:
+        combined_data = combine_datasets()
+        print("\n" + "="*50)
+        print("STEP 1: DATASET COMBINATION COMPLETE")
+        print("="*50)
+        print(f"Combined {len(combined_data):,} appointment records from 2013-2024")
+        print("Ready for Step 2: Key columns extraction and analysis")
+        
+    except KeyboardInterrupt:
+        logger.info("Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {str(e)}")
+        sys.exit(1)

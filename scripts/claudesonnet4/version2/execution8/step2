@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+New Brunswick Government Appointments Analysis
+
+This script extracts and retains the key columns needed for reappointment analysis:
+- reappointed: Boolean indicator of reappointment status
+- name: Appointee name for tracking individuals
+- position: Role/position for context
+- org: Organization/government branch
+- year: Year of appointment for temporal analysis
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import os
+
+def validate_input_file(input_path):
+    """Validate that the input file from Step 1 exists"""
+    if not input_path.exists():
+        print(f"✗ Input file not found: {input_path}")
+        print("Please run Step 1 first to create the combined dataset.")
+        return False
+    
+    file_size_mb = input_path.stat().st_size / (1024*1024)
+    print(f"✓ Input file found: {input_path}")
+    print(f"  File size: {file_size_mb:.2f} MB")
+    return True
+
+def load_combined_dataset(input_path):
+    """Load the combined dataset from Step 1"""
+    try:
+        print(f"\n" + "="*60)
+        print("LOADING COMBINED DATASET")
+        print("="*60)
+        
+        df = pd.read_csv(input_path)
+        
+        print(f"✓ Dataset loaded successfully")
+        print(f"  Rows: {len(df):,}")
+        print(f"  Columns: {len(df.columns)}")
+        print(f"  Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading combined dataset: {e}")
+        return None
+
+def analyze_available_columns(df):
+    """Analyze available columns and identify key columns"""
+    print(f"\n" + "="*60)
+    print("ANALYZING AVAILABLE COLUMNS")
+    print("="*60)
+    
+    print(f"Available columns ({len(df.columns)}):")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+    
+    # Define required columns and their alternatives
+    required_columns = {
+        'reappointed': ['reappointed', 'reappointed_flag', 'is_reappointed'],
+        'name': ['name', 'appointee_name', 'person_name', 'full_name'],
+        'position': ['position', 'role', 'title', 'job_title'],
+        'org': ['org', 'organization', 'department', 'agency', 'ministry'],
+        'year': ['year', 'appointment_year', 'source_year']
+    }
+    
+    # Find matching columns
+    column_mapping = {}
+    missing_columns = []
+    
+    print(f"\n" + "-"*40)
+    print("COLUMN MAPPING ANALYSIS")
+    print("-"*40)
+    
+    for key, alternatives in required_columns.items():
+        found = False
+        for alt in alternatives:
+            if alt in df.columns:
+                column_mapping[key] = alt
+                print(f"✓ {key}: Found as '{alt}'")
+                found = True
+                break
+        
+        if not found:
+            missing_columns.append(key)
+            print(f"✗ {key}: Not found (looked for: {alternatives})")
+    
+    return column_mapping, missing_columns
+
+def extract_key_columns(df, column_mapping):
+    """Extract and rename key columns"""
+    print(f"\n" + "="*60)
+    print("EXTRACTING KEY COLUMNS")
+    print("="*60)
+    
+    # Create new dataframe with key columns
+    key_df = pd.DataFrame()
+    
+    for standard_name, original_name in column_mapping.items():
+        key_df[standard_name] = df[original_name].copy()
+        print(f"✓ Extracted '{original_name}' as '{standard_name}'")
+    
+    print(f"\nKey columns dataset created:")
+    print(f"  Rows: {len(key_df):,}")
+    print(f"  Columns: {len(key_df.columns)}")
+    
+    return key_df
+
+def clean_and_validate_data(df):
+    """Clean and validate the extracted data"""
+    print(f"\n" + "="*60)
+    print("DATA CLEANING AND VALIDATION")
+    print("="*60)
+    
+    original_rows = len(df)
+    
+    # 1. Analyze and clean the 'reappointed' column
+    print(f"\n1. Analyzing 'reappointed' column:")
+    if 'reappointed' in df.columns:
+        print(f"   Original data type: {df['reappointed'].dtype}")
+        print(f"   Unique values: {sorted(df['reappointed'].unique())}")
+        
+        # Convert to boolean if needed
+        if df['reappointed'].dtype == 'object':
+            # Handle various text representations
+            df['reappointed'] = df['reappointed'].map({
+                'True': True, 'true': True, 'TRUE': True, 'T': True,
+                'False': False, 'false': False, 'FALSE': False, 'F': False,
+                'Yes': True, 'yes': True, 'YES': True, 'Y': True,
+                'No': False, 'no': False, 'NO': False, 'N': False,
+                '1': True, '0': False, 1: True, 0: False,
+                True: True, False: False
+            })
+        
+        print(f"   After conversion - Value counts:")
+        reappointed_counts = df['reappointed'].value_counts(dropna=False)
+        for value, count in reappointed_counts.items():
+            percentage = (count / len(df)) * 100
+            print(f"     {value}: {count:,} ({percentage:.1f}%)")
+    
+    # 2. Clean name column
+    print(f"\n2. Cleaning 'name' column:")
+    if 'name' in df.columns:
+        # Remove extra whitespace and handle case
+        df['name'] = df['name'].astype(str).str.strip()
+        
+        # Count unique names
+        unique_names = df['name'].nunique()
+        print(f"   Unique names: {unique_names:,}")
+        
+        # Check for missing names
+        missing_names = df['name'].isna().sum()
+        if missing_names > 0:
+            print(f"   Missing names: {missing_names:,}")
+    
+    # 3. Clean position column
+    print(f"\n3. Cleaning 'position' column:")
+    if 'position' in df.columns:
+        df['position'] = df['position'].astype(str).str.strip()
+        unique_positions = df['position'].nunique()
+        print(f"   Unique positions: {unique_positions:,}")
+        
+        # Show top 10 most common positions
+        top_positions = df['position'].value_counts().head(10)
+        print(f"   Top 10 positions:")
+        for pos, count in top_positions.items():
+            print(f"     {pos}: {count:,}")
+    
+    # 4. Clean organization column
+    print(f"\n4. Cleaning 'org' column:")
+    if 'org' in df.columns:
+        df['org'] = df['org'].astype(str).str.strip()
+        unique_orgs = df['org'].nunique()
+        print(f"   Unique organizations: {unique_orgs:,}")
+        
+        # Show all organizations for government branch analysis
+        org_counts = df['org'].value_counts()
+        print(f"   Organization distribution:")
+        for org, count in org_counts.items():
+            percentage = (count / len(df)) * 100
+            print(f"     {org}: {count:,} ({percentage:.1f}%)")
+    
+    # 5. Validate year column
+    print(f"\n5. Validating 'year' column:")
+    if 'year' in df.columns:
+        df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        
+        year_range = f"{df['year'].min():.0f}-{df['year'].max():.0f}"
+        print(f"   Year range: {year_range}")
+        
+        # Year distribution
+        year_counts = df['year'].value_counts().sort_index()
+        print(f"   Year distribution:")
+        for year, count in year_counts.items():
+            print(f"     {year:.0f}: {count:,}")
+    
+    # 6. Handle missing values
+    print(f"\n6. Missing values analysis:")
+    missing_summary = df.isnull().sum()
+    for col, missing_count in missing_summary.items():
+        if missing_count > 0:
+            percentage = (missing_count / len(df)) * 100
+            print(f"   {col}: {missing_count:,} ({percentage:.1f}%)")
+    
+    # 7. Remove rows with critical missing values
+    print(f"\n7. Removing rows with critical missing values:")
+    initial_rows = len(df)
+    
+    # Remove rows where essential columns are missing
+    df = df.dropna(subset=['name', 'org', 'year'])
+    
+    rows_removed = initial_rows - len(df)
+    if rows_removed > 0:
+        print(f"   Removed {rows_removed:,} rows with missing essential data")
+        print(f"   Remaining rows: {len(df):,}")
+    else:
+        print(f"   No rows removed - all essential data present")
+    
+    return df
+
+def generate_data_summary(df):
+    """Generate comprehensive data summary"""
+    print(f"\n" + "="*60)
+    print("DATA SUMMARY REPORT")
+    print("="*60)
+    
+    # Basic statistics
+    print(f"Dataset Overview:")
+    print(f"  Total appointments: {len(df):,}")
+    print(f"  Unique individuals: {df['name'].nunique():,}")
+    print(f"  Unique positions: {df['position'].nunique():,}")
+    print(f"  Government branches: {df['org'].nunique():,}")
+    print(f"  Years covered: {df['year'].nunique():,}")
+    
+    # Reappointment analysis
+    if 'reappointed' in df.columns:
+        print(f"\nReappointment Overview:")
+        total_reappointed = df['reappointed'].sum()
+        total_appointments = len(df)
+        reappointment_rate = (total_reappointed / total_appointments) * 100
+        print(f"  Total reappointments: {total_reappointed:,}")
+        print(f"  Overall reappointment rate: {reappointment_rate:.1f}%")
+        
+        # Reappointment by organization
+        print(f"\nReappointment by Organization:")
+        org_reappointment = df.groupby('org')['reappointed'].agg(['count', 'sum'])
+        org_reappointment['rate'] = (org_reappointment['sum'] / org_reappointment['count']) * 100
+        org_reappointment = org_reappointment.sort_values('rate', ascending=False)
+        
+        for org, stats in org_reappointment.iterrows():
+            print(f"  {org}: {stats['sum']:,}/{stats['count']:,} ({stats['rate']:.1f}%)")
+    
+    # Temporal analysis
+    print(f"\nTemporal Analysis:")
+    yearly_stats = df.groupby('year').agg({
+        'name': 'count',
+        'reappointed': ['sum', 'mean'] if 'reappointed' in df.columns else 'count'
+    }).round(3)
+    
+    print(f"  Yearly appointment counts:")
+    for year, stats in yearly_stats.iterrows():
+        if 'reappointed' in df.columns:
+            appointments = stats[('name', 'count')]
+            reappointed = stats[('reappointed', 'sum')]
+            rate = stats[('reappointed', 'mean')] * 100
+            print(f"    {year:.0f}: {appointments:,} appointments, {reappointed:,} reappointed ({rate:.1f}%)")
+        else:
+            appointments = stats[('name', 'count')]
+            print(f"    {year:.0f}: {appointments:,} appointments")
+
+def save_key_columns_data(df, output_path):
+    """Save the key columns dataset"""
+    try:
+        output_file = output_path / "step2_key_columns_data.csv"
+        df.to_csv(output_file, index=False)
+        
+        file_size_mb = output_file.stat().st_size / (1024*1024)
+        print(f"\n✓ Key columns dataset saved successfully!")
+        print(f"  File: {output_file}")
+        print(f"  Size: {file_size_mb:.2f} MB")
+        print(f"  Rows: {len(df):,}")
+        print(f"  Columns: {list(df.columns)}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error saving key columns dataset: {e}")
+        return False
+
+def main():
+    """Main execution function"""
+    print("="*80)
+    print("NEW BRUNSWICK GOVERNMENT APPOINTMENTS ANALYSIS")
+    print("Step 2: Extract Key Columns")
+    print("="*80)
+    
+    # Define paths
+    input_path = Path("scripts/claudesonnet4/version2/execution8/analysis_data/step1_combined_appointments.csv")
+    output_path = Path("scripts/claudesonnet4/version2/execution8/analysis_data")
+    
+    # Validate input file
+    if not validate_input_file(input_path):
+        sys.exit(1)
+    
+    try:
+        # Load combined dataset
+        df = load_combined_dataset(input_path)
+        if df is None:
+            sys.exit(1)
+        
+        # Analyze available columns and create mapping
+        column_mapping, missing_columns = analyze_available_columns(df)
+        
+        if missing_columns:
+            print(f"\n✗ Critical columns missing: {missing_columns}")
+            print("Cannot proceed without these essential columns.")
+            sys.exit(1)
+        
+        # Extract key columns
+        key_df = extract_key_columns(df, column_mapping)
+        
+        # Clean and validate data
+        cleaned_df = clean_and_validate_data(key_df)
+        
+        # Generate comprehensive summary
+        generate_data_summary(cleaned_df)
+        
+        # Save the key columns dataset
+        if save_key_columns_data(cleaned_df, output_path):
+            print(f"\n" + "="*60)
+            print("STEP 2 COMPLETED SUCCESSFULLY")
+            print("="*60)
+            print(f"✓ Extracted {len(cleaned_df.columns)} key columns")
+            print(f"✓ Processed {len(cleaned_df):,} appointment records")
+            print(f"✓ Data covers {cleaned_df['year'].nunique():,} years ({cleaned_df['year'].min():.0f}-{cleaned_df['year'].max():.0f})")
+            print(f"✓ Tracking {cleaned_df['name'].nunique():,} unique individuals")
+            print(f"✓ Analyzing {cleaned_df['org'].nunique():,} government branches")
+            print(f"✓ Output saved to: {output_path / 'step2_key_columns_data.csv'}")
+            print(f"\n✓ Ready for Step 3: Mark repeat appointments")
+            
+        else:
+            print("\n✗ Step 2 failed during save operation")
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"\n✗ Step 2 failed with error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

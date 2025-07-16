@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Organization Appointment Counts Creator for New Brunswick Government Data
+Appointment Counts Creator for New Brunswick Government Appointments Data
 
-This script groups appointments by organization and year to create a summary table
-showing appointment counts for each organization across all years.
+This script creates a summary table showing appointment counts by organization 
+and year, providing insights into hiring patterns and organizational activity.
 
 Author: Claude Sonnet 4
 Version: 1.0
@@ -17,13 +17,13 @@ from pathlib import Path
 import sys
 
 def main():
-    """Main function to create organization appointment counts summary."""
+    """Main function to create appointment counts summary."""
     
     # Define paths
     script_dir = Path(__file__).parent
     analysis_data_dir = script_dir / "analysis_data"
     input_file = analysis_data_dir / "step3_repeats_marked.csv"
-    output_file = analysis_data_dir / "step4_employee_counts.csv"
+    output_file = analysis_data_dir / "step4_appointment_counts.csv"
     
     # Check if input file exists
     if not input_file.exists():
@@ -32,170 +32,169 @@ def main():
         sys.exit(1)
     
     try:
-        # Load the dataset
-        print("Loading appointments dataset with marked reappointments...")
+        # Load the processed dataset
+        print("Loading processed appointments dataset...")
         df = pd.read_csv(input_file)
         print(f"✓ Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
         
-        # Check for required columns
-        required_columns = ['org', 'year']
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        # Validate required columns
+        required_cols = ['org', 'year']
+        missing_cols = [col for col in required_cols if col not in df.columns]
         
-        if missing_columns:
-            print(f"ERROR: Missing required columns: {missing_columns}")
+        if missing_cols:
+            print(f"ERROR: Missing required columns: {missing_cols}")
             sys.exit(1)
         
-        print("\nValidating data quality...")
-        print("-" * 30)
+        # Data quality checks
+        print("\nPerforming data quality checks...")
         
-        # Check for missing values
-        missing_orgs = df['org'].isna().sum()
-        missing_years = df['year'].isna().sum()
+        # Check for missing organizations
+        missing_org_count = df['org'].isna().sum()
+        if missing_org_count > 0:
+            print(f"WARNING: {missing_org_count} appointments with missing organization data")
         
-        print(f"Missing organizations: {missing_orgs}")
-        print(f"Missing years: {missing_years}")
+        # Check for missing years
+        missing_year_count = df['year'].isna().sum()
+        if missing_year_count > 0:
+            print(f"WARNING: {missing_year_count} appointments with missing year data")
         
-        # Clean the data
-        df_clean = df.copy()
+        # Convert year to numeric if it's not already
+        df.loc[:, 'year'] = pd.to_numeric(df['year'], errors='coerce')
         
-        # Handle missing organizations
-        if missing_orgs > 0:
-            df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
-            print(f"✓ Filled {missing_orgs} missing organizations with 'Unknown Organization'")
+        # Check for invalid years
+        valid_year_range = (2013, 2024)
+        invalid_years = df[(df['year'] < valid_year_range[0]) | (df['year'] > valid_year_range[1])]
+        if not invalid_years.empty:
+            print(f"WARNING: {len(invalid_years)} appointments with years outside expected range {valid_year_range}")
         
-        # Handle missing years
-        if missing_years > 0:
-            df_clean['year'] = df_clean['year'].fillna('Unknown Year')
-            print(f"✓ Filled {missing_years} missing years with 'Unknown Year'")
+        # Remove rows with missing org or year for counting
+        df_clean = df.dropna(subset=['org', 'year']).copy()
+        excluded_count = len(df) - len(df_clean)
         
-        # Convert years to integers where possible, keep as string for 'Unknown Year'
-        def convert_year(year):
-            try:
-                if pd.isna(year) or year == 'Unknown Year':
-                    return 'Unknown Year'
-                return int(float(year))
-            except (ValueError, TypeError):
-                return 'Unknown Year'
+        if excluded_count > 0:
+            print(f"✓ Excluded {excluded_count} appointments with missing org/year data")
         
-        df_clean['year'] = df_clean['year'].apply(convert_year)
-        
-        # Validate year ranges
-        numeric_years = df_clean[df_clean['year'] != 'Unknown Year']['year']
-        if len(numeric_years) > 0:
-            min_year = numeric_years.min()
-            max_year = numeric_years.max()
-            print(f"✓ Year range: {min_year} - {max_year}")
-            
-            # Check for unreasonable years
-            unreasonable_years = numeric_years[(numeric_years < 2000) | (numeric_years > 2030)]
-            if len(unreasonable_years) > 0:
-                print(f"WARNING: Found {len(unreasonable_years)} appointments with unusual years")
-        
-        print("\nCreating organization-year summary...")
-        print("-" * 40)
+        print(f"✓ Processing {len(df_clean)} valid appointments")
         
         # Group by organization and year, count appointments
-        counts = df_clean.groupby(['org', 'year']).size().reset_index(name='count')
+        print("\nCreating appointment counts by organization and year...")
+        
+        # Create counts table
+        counts = df_clean.groupby(['org', 'year']).size().reset_index(name='appointment_count')
         
         # Create pivot table with organizations as rows, years as columns
-        pivot_table = counts.pivot(index='org', columns='year', values='count')
+        pivot_table = counts.pivot(index='org', columns='year', values='appointment_count')
         
-        # Fill missing values with 0
+        # Fill missing values with 0 (organizations with no appointments in certain years)
         pivot_table = pivot_table.fillna(0).astype(int)
         
-        # Sort columns (years) - put 'Unknown Year' at the end if it exists
-        columns = list(pivot_table.columns)
-        numeric_columns = [col for col in columns if col != 'Unknown Year']
-        if numeric_columns:
-            numeric_columns.sort()
+        # Ensure all years from 2013-2024 are present as columns
+        all_years = list(range(2013, 2025))
+        for year in all_years:
+            if year not in pivot_table.columns:
+                pivot_table.loc[:, year] = 0
         
-        if 'Unknown Year' in columns:
-            final_columns = numeric_columns + ['Unknown Year']
-        else:
-            final_columns = numeric_columns
-        
-        pivot_table = pivot_table[final_columns]
+        # Sort columns (years) in chronological order
+        pivot_table = pivot_table.reindex(sorted(pivot_table.columns), axis=1)
         
         # Add total column
-        pivot_table['Total'] = pivot_table.sum(axis=1)
+        pivot_table.loc[:, 'Total'] = pivot_table.sum(axis=1)
         
         # Sort by total appointments (descending)
         pivot_table = pivot_table.sort_values('Total', ascending=False)
         
-        # Save the summary table
+        # Save the counts table
         pivot_table.to_csv(output_file)
-        print(f"✓ Organization counts saved to: {output_file}")
+        print(f"✓ Appointment counts saved to: {output_file}")
         
-        print("-" * 40)
-        print("ORGANIZATION APPOINTMENT COUNTS SUMMARY:")
+        print("-" * 60)
+        print("APPOINTMENT COUNTS SUMMARY:")
         print(f"Total organizations: {len(pivot_table):,}")
-        print(f"Total appointments across all years: {pivot_table['Total'].sum():,}")
-        print(f"Years covered: {len(final_columns) - (1 if 'Total' in pivot_table.columns else 0)}")
+        print(f"Years covered: {pivot_table.columns[0]} - {pivot_table.columns[-2]}")  # Exclude 'Total' column
+        print(f"Total appointments processed: {pivot_table['Total'].sum():,}")
         
-        # Display the summary table (first 20 rows)
-        print(f"\nTop 20 Organizations by Total Appointments:")
-        print("-" * 50)
+        # Display summary statistics
+        print(f"\nAppointments per organization:")
+        print(f"  Mean: {pivot_table['Total'].mean():.1f}")
+        print(f"  Median: {pivot_table['Total'].median():.1f}")
+        print(f"  Min: {pivot_table['Total'].min()}")
+        print(f"  Max: {pivot_table['Total'].max()}")
         
-        # Create a display version with limited column width
-        display_table = pivot_table.head(20).copy()
-        
-        # Format organization names for display
-        display_table.index = [org[:40] + "..." if len(org) > 40 else org for org in display_table.index]
-        
-        print(display_table.to_string())
-        
-        # Show organizations with most appointments
-        print(f"\nTop 10 Organizations by Total Appointments:")
+        # Show top 15 organizations by total appointments
+        print("\nTop 15 Organizations by Total Appointments:")
         print("-" * 45)
-        top_orgs = pivot_table.head(10)
-        for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
-            org_name = org[:50] + "..." if len(org) > 50 else org
+        top_orgs = pivot_table.head(15)
+        
+        for org, row in top_orgs.iterrows():
+            org_name = str(org)[:40] + "..." if len(str(org)) > 40 else str(org)
             total = row['Total']
-            print(f"{i:2}. {org_name:53} | {total:4} appointments")
+            print(f"{org_name:43}: {total:4} appointments")
         
-        # Show year-by-year statistics
-        print(f"\nYear-by-Year Appointment Statistics:")
-        print("-" * 37)
-        year_totals = pivot_table.drop('Total', axis=1).sum()
-        for year in final_columns:
-            if year != 'Total':
-                total = year_totals[year]
-                orgs_with_appointments = (pivot_table[year] > 0).sum()
-                print(f"{year}: {total:4} appointments across {orgs_with_appointments:3} organizations")
+        # Show year-over-year trends
+        print(f"\nYear-over-Year Appointment Totals:")
+        print("-" * 35)
+        year_totals = pivot_table.drop('Total', axis=1).sum(axis=0)
         
-        # Data quality checks
-        print(f"\nData Quality Validation:")
-        print("-" * 25)
+        for year, total in year_totals.items():
+            print(f"{year}: {total:4} appointments")
         
-        # Check for organizations with unusually high counts
-        max_appointments = pivot_table['Total'].max()
-        avg_appointments = pivot_table['Total'].mean()
+        # Identify organizations with significant activity
+        print(f"\nOrganizations with 50+ Total Appointments:")
+        print("-" * 42)
+        high_activity_orgs = pivot_table[pivot_table['Total'] >= 50]
         
-        print(f"Maximum appointments per organization: {max_appointments}")
-        print(f"Average appointments per organization: {avg_appointments:.1f}")
-        
-        # Organizations with more than 3 standard deviations above mean
-        std_appointments = pivot_table['Total'].std()
-        threshold = avg_appointments + 3 * std_appointments
-        outliers = pivot_table[pivot_table['Total'] > threshold]
-        
-        if len(outliers) > 0:
-            print(f"Organizations with unusually high counts (>{threshold:.1f}): {len(outliers)}")
-            for org, row in outliers.iterrows():
-                org_name = org[:40] + "..." if len(org) > 40 else org
-                print(f"  - {org_name}: {row['Total']} appointments")
+        if not high_activity_orgs.empty:
+            for org, row in high_activity_orgs.iterrows():
+                org_name = str(org)[:35] + "..." if len(str(org)) > 35 else str(org)
+                total = row['Total']
+                # Calculate years with appointments
+                years_active = (row.drop('Total') > 0).sum()
+                avg_per_year = total / years_active if years_active > 0 else 0
+                print(f"{org_name:38}: {total:3} total ({years_active:2} years, {avg_per_year:.1f} avg/year)")
         else:
-            print("✓ No organizations with unusually high appointment counts detected")
+            print("No organizations with 50+ appointments found")
         
-        # Check for organizations with appointments in multiple years
-        multi_year_orgs = (pivot_table.drop('Total', axis=1) > 0).sum(axis=1)
-        orgs_multiple_years = (multi_year_orgs > 1).sum()
-        print(f"Organizations with appointments in multiple years: {orgs_multiple_years}")
+        # Show sample of the pivot table
+        print(f"\nSample of Appointment Counts Table (Top 10 Organizations):")
+        print("-" * 65)
         
-        print("\nOrganization counts summary completed successfully!")
+        # Display first few columns and total for top 10 organizations
+        sample_cols = [col for col in pivot_table.columns[:6]] + ['Total']
+        sample_table = pivot_table.head(10)[sample_cols]
+        
+        # Format the display
+        print(sample_table.to_string())
+        
+        # Data validation
+        print(f"\nData Validation:")
+        print("-" * 16)
+        
+        # Check for unreasonably high counts
+        max_reasonable = 100  # Reasonable max appointments per org per year
+        high_counts = pivot_table.drop('Total', axis=1)
+        unreasonable = (high_counts > max_reasonable).any(axis=1)
+        
+        if unreasonable.any():
+            print(f"WARNING: {unreasonable.sum()} organizations have >100 appointments in a single year")
+            problem_orgs = pivot_table[unreasonable].head(3)
+            for org in problem_orgs.index:
+                max_year_count = high_counts.loc[org].max()
+                max_year = high_counts.loc[org].idxmax()
+                print(f"  - {str(org)[:30]}: {max_year_count} appointments in {max_year}")
+        else:
+            print("✓ All appointment counts appear reasonable")
+        
+        # Check for organizations with appointments every year
+        consistent_orgs = (high_counts > 0).all(axis=1)
+        if consistent_orgs.any():
+            print(f"✓ {consistent_orgs.sum()} organizations have appointments in all years")
+        
+        print("\nAppointment counts analysis completed successfully!")
         
     except Exception as e:
-        print(f"ERROR during organization counts creation: {str(e)}")
+        print(f"ERROR during appointment counts creation: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

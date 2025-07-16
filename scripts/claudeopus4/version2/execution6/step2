@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis:
+- reappointed: Indicates if this is a reappointment
+- name: Appointee name
+- position: Position title
+- org: Organization/department
+- year: Year of appointment (from source_year)
+Output: step2_key_columns_data.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def load_combined_data(input_path):
+    """Load the combined dataset from Step 1."""
+    try:
+        print("📂 Loading combined dataset...")
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except FileNotFoundError:
+        print(f"✗ File not found: {input_path}")
+        return None
+    except Exception as e:
+        print(f"✗ Error loading file: {e}")
+        return None
+
+def analyze_column_availability(df, required_columns):
+    """Analyze which required columns are available and their alternatives."""
+    print("\n🔍 Analyzing column availability:")
+    
+    available_cols = df.columns.tolist()
+    column_mapping = {}
+    
+    # Check for exact matches first
+    for req_col in required_columns:
+        if req_col in available_cols:
+            column_mapping[req_col] = req_col
+            print(f"  ✓ '{req_col}' found directly")
+        else:
+            print(f"  ✗ '{req_col}' not found directly")
+    
+    # Check for alternatives
+    # For 'org', also check 'organization'
+    if 'org' not in column_mapping and 'organization' in available_cols:
+        column_mapping['org'] = 'organization'
+        print(f"  ✓ Using 'organization' as alternative for 'org'")
+    
+    # For 'year', use 'source_year' from Step 1
+    if 'year' not in column_mapping and 'source_year' in available_cols:
+        column_mapping['year'] = 'source_year'
+        print(f"  ✓ Using 'source_year' as 'year'")
+    
+    # List all columns for reference
+    print("\n📋 All available columns:")
+    for i, col in enumerate(sorted(available_cols), 1):
+        print(f"  {i:2d}. {col}")
+    
+    return column_mapping
+
+def extract_key_columns(df, column_mapping):
+    """Extract the key columns using the mapping."""
+    print("\n🔄 Extracting key columns...")
+    
+    # Create new dataframe with standardized column names
+    extracted_data = pd.DataFrame()
+    
+    for target_col, source_col in column_mapping.items():
+        if source_col in df.columns:
+            extracted_data[target_col] = df[source_col]
+            print(f"  ✓ Extracted '{source_col}' as '{target_col}'")
+        else:
+            # Create empty column if not found
+            extracted_data[target_col] = np.nan
+            print(f"  ⚠️  Created empty column for '{target_col}'")
+    
+    # Ensure we have all required columns (even if empty)
+    required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    for col in required_columns:
+        if col not in extracted_data.columns:
+            extracted_data[col] = np.nan
+            print(f"  ⚠️  Added missing column '{col}' with NaN values")
+    
+    # Reorder columns to match specification
+    extracted_data = extracted_data[required_columns]
+    
+    print(f"\n✓ Extracted {len(extracted_data.columns)} columns")
+    print(f"  Final shape: {extracted_data.shape}")
+    
+    return extracted_data
+
+def analyze_reappointed_column(df):
+    """Analyze the reappointed column values and data types."""
+    print("\n📊 Analyzing 'reappointed' column:")
+    
+    if 'reappointed' not in df.columns:
+        print("  ⚠️  'reappointed' column not found!")
+        return
+    
+    # Get value counts
+    value_counts = df['reappointed'].value_counts(dropna=False)
+    print(f"  Value distribution:")
+    for value, count in value_counts.items():
+        pct = (count / len(df)) * 100
+        if pd.isna(value):
+            print(f"    - NaN: {count} ({pct:.1f}%)")
+        else:
+            print(f"    - {value}: {count} ({pct:.1f}%)")
+    
+    # Check data type
+    dtype = df['reappointed'].dtype
+    print(f"\n  Data type: {dtype}")
+    
+    # Check unique values (excluding NaN)
+    unique_values = df['reappointed'].dropna().unique()
+    print(f"  Unique values (excluding NaN): {sorted(unique_values)}")
+    
+    # Standardize boolean values if needed
+    if dtype == 'object':
+        print("\n  ⚠️  'reappointed' is text type, may need standardization")
+        # Check for common text representations
+        text_values = df['reappointed'].dropna().astype(str).str.lower().unique()
+        if any(val in ['true', 'false', 'yes', 'no', '1', '0'] for val in text_values):
+            print("    Found boolean-like text values")
+
+def validate_key_data(df):
+    """Validate the extracted key columns data."""
+    print("\n🔍 Validating extracted data:")
+    
+    # Check for missing values
+    print("\n  Missing values per column:")
+    for col in df.columns:
+        missing_count = df[col].isna().sum()
+        missing_pct = (missing_count / len(df)) * 100
+        print(f"    - {col}: {missing_count} ({missing_pct:.1f}%)")
+    
+    # Check data types
+    print("\n  Data types:")
+    for col in df.columns:
+        print(f"    - {col}: {df[col].dtype}")
+    
+    # Year validation
+    if 'year' in df.columns and df['year'].notna().any():
+        year_min = df['year'].min()
+        year_max = df['year'].max()
+        print(f"\n  Year range: {year_min} - {year_max}")
+        
+        # Check for invalid years
+        invalid_years = df[(df['year'] < 2013) | (df['year'] > 2024)]['year'].unique()
+        if len(invalid_years) > 0:
+            print(f"  ⚠️  Invalid years found: {invalid_years}")
+    
+    # Check for duplicate rows
+    duplicates = df.duplicated().sum()
+    print(f"\n  Duplicate rows: {duplicates}")
+    
+    # Sample data preview
+    print("\n  Sample data (first 5 rows):")
+    print(df.head().to_string(index=False))
+
+def save_extracted_data(df, output_path):
+    """Save the extracted key columns data."""
+    try:
+        df.to_csv(output_path, index=False, encoding='utf-8')
+        print(f"\n✅ Extracted data saved to: {output_path}")
+        print(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
+        return True
+    except Exception as e:
+        print(f"\n✗ Error saving file: {e}")
+        return False
+
+def main():
+    """Main execution function."""
+    print("=" * 60)
+    print("STEP 2: Extract and Retain Key Columns")
+    print("=" * 60)
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step1_combined_appointments.csv")
+    output_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step2_key_columns_data.csv")
+    
+    # Check if input file exists
+    if not input_path.exists():
+        print(f"\n✗ Input file not found: {input_path}")
+        print("  Please run Step 1 first to create the combined dataset.")
+        sys.exit(1)
+    
+    # Load combined data
+    df = load_combined_data(input_path)
+    if df is None:
+        sys.exit(1)
+    
+    # Define required columns
+    required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    # Analyze column availability
+    column_mapping = analyze_column_availability(df, required_columns)
+    
+    # Extract key columns
+    extracted_df = extract_key_columns(df, column_mapping)
+    
+    # Analyze the reappointed column specifically
+    analyze_reappointed_column(extracted_df)
+    
+    # Validate the extracted data
+    validate_key_data(extracted_df)
+    
+    # Save the extracted data
+    if not save_extracted_data(extracted_df, output_path):
+        sys.exit(1)
+    
+    # Summary statistics
+    print("\n📊 Summary Statistics:")
+    print(f"  - Total records: {len(extracted_df)}")
+    print(f"  - Columns extracted: {list(extracted_df.columns)}")
+    
+    # Records with complete data
+    complete_records = extracted_df.dropna().shape[0]
+    complete_pct = (complete_records / len(extracted_df)) * 100
+    print(f"  - Complete records (no missing values): {complete_records} ({complete_pct:.1f}%)")
+    
+    # Records with reappointed data
+    if 'reappointed' in extracted_df.columns:
+        reappointed_records = extracted_df['reappointed'].notna().sum()
+        reappointed_pct = (reappointed_records / len(extracted_df)) * 100
+        print(f"  - Records with reappointed data: {reappointed_records} ({reappointed_pct:.1f}%)")
+    
+    print("\n✅ Step 2 completed successfully!")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()

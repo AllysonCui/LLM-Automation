@@ -30,7 +30,7 @@ def load_reappointment_rates(input_file):
         print(f"✓ Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
         
         # Validate required columns
-        required_cols = ['org', 'year', 'total_employees', 'reappointments', 'reappointment_rate']
+        required_cols = ['org', 'year', 'total_appointments', 'reappointments', 'reappointment_rate']
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -66,13 +66,13 @@ def prepare_data_for_analysis(df):
         print(f"  Removing {invalid_rate_count} records with invalid reappointment rates")
         df_clean = df_clean[~invalid_rate_mask]
     
-    # Remove records with no employees (these should have rate = 0, but we'll exclude for safety)
-    no_employees_mask = df_clean['total_employees'] <= 0
-    no_employees_count = no_employees_mask.sum()
+    # Remove records with no appointments (these should have rate = 0, but we'll exclude for safety)
+    no_appointments_mask = df_clean['total_appointments'] <= 0
+    no_appointments_count = no_appointments_mask.sum()
     
-    if no_employees_count > 0:
-        print(f"  Removing {no_employees_count} records with no employees")
-        df_clean = df_clean[~no_employees_mask]
+    if no_appointments_count > 0:
+        print(f"  Removing {no_appointments_count} records with no appointments")
+        df_clean = df_clean[~no_appointments_mask]
     
     # Remove records with zero reappointment rate for maximum analysis
     # (We want to find meaningful maximums, not just zeros)
@@ -101,7 +101,7 @@ def identify_yearly_maximums(df):
     Identify the organization with the highest reappointment rate for each year.
     
     Tie-breaking approach:
-    1. If multiple organizations have the same highest rate, prefer the one with more total employees
+    1. If multiple organizations have the same highest rate, prefer the one with more total appointments
     2. If still tied, prefer the one with more reappointments (absolute count)
     3. If still tied, use alphabetical order of organization name
     
@@ -138,13 +138,13 @@ def identify_yearly_maximums(df):
             # Handle tie using the documented approach
             print(f"  {year}: Tie between {len(max_orgs)} organizations at rate {max_rate:.3f}")
             
-            # Tie-breaking step 1: Prefer organization with more total employees
-            max_employees = max_orgs['total_employees'].max()
-            max_orgs_emp = max_orgs[max_orgs['total_employees'] == max_employees]
+            # Tie-breaking step 1: Prefer organization with more total appointments
+            max_appointments = max_orgs['total_appointments'].max()
+            max_orgs_emp = max_orgs[max_orgs['total_appointments'] == max_appointments]
             
             if len(max_orgs_emp) == 1:
                 winner = max_orgs_emp.iloc[0]
-                tie_info = f"Tie broken by employee count ({max_employees})"
+                tie_info = f"Tie broken by appointment count ({max_appointments})"
             else:
                 # Tie-breaking step 2: Prefer organization with more reappointments
                 max_reapp = max_orgs_emp['reappointments'].max()
@@ -159,7 +159,7 @@ def identify_yearly_maximums(df):
                     tie_info = "Tie broken alphabetically"
             
             tied_orgs = max_orgs['org'].tolist()
-            print(f"    Tied organizations: {', '.join(tied_orgs)}")
+            print(f"    Tied organizations: {', '.join(tied_orgs[:3])}{'...' if len(tied_orgs) > 3 else ''}")
             print(f"    Winner: {winner['org']} ({tie_info})")
         
         # Add to results
@@ -167,7 +167,7 @@ def identify_yearly_maximums(df):
             'year': int(year),
             'top_org': winner['org'],
             'max_rate': round(winner['reappointment_rate'], 4),
-            'total_employees': int(winner['total_employees']),
+            'total_appointments': int(winner['total_appointments']),
             'reappointments': int(winner['reappointments']),
             'tie_info': tie_info
         })
@@ -195,18 +195,18 @@ def print_yearly_results(results_df):
     print("YEARLY MAXIMUM REAPPOINTMENT RATES")
     print("="*80)
     
-    print(f"{'Year':<6} {'Organization':<45} {'Rate':<8} {'Employees':<9} {'Reappt':<7} {'Tie Info':<15}")
+    print(f"{'Year':<6} {'Organization':<45} {'Rate':<8} {'Appointments':<9} {'Reappt':<7} {'Tie Info':<15}")
     print("-" * 95)
     
     for _, row in results_df.iterrows():
         year = f"{row['year']}"
-        org = row['top_org'][:44]  # Truncate if too long
+        org = row['top_org'][:44] if len(row['top_org']) > 44 else row['top_org']  # Truncate if too long
         rate = f"{row['max_rate']:.3f}"
-        employees = f"{row['total_employees']}"
+        appointments = f"{row['total_appointments']}"
         reappt = f"{row['reappointments']}"
         tie_info = row['tie_info'][:14] if 'tie_info' in row else ""
         
-        print(f"{year:<6} {org:<45} {rate:<8} {employees:<9} {reappt:<7} {tie_info:<15}")
+        print(f"{year:<6} {org:<45} {rate:<8} {appointments:<9} {reappt:<7} {tie_info:<15}")
     
     # Summary statistics
     print(f"\nSummary:")
@@ -316,9 +316,13 @@ def save_yearly_results(results_df, output_dir="scripts/claudesonnet4/version1/e
     # Define output file path
     output_file = os.path.join(output_dir, "step7_yearly_max_rates.csv")
     
-    # Save to CSV
-    output_df.to_csv(output_file, index=False)
-    print(f"\n✓ Yearly maximum rates saved to: {output_file}")
+    try:
+        # Save to CSV
+        output_df.to_csv(output_file, index=False)
+        print(f"\n✓ Yearly maximum rates saved to: {output_file}")
+        
+    except Exception as e:
+        raise Exception(f"Error saving yearly results: {e}")
     
     return output_file
 
@@ -357,6 +361,8 @@ def main():
         
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

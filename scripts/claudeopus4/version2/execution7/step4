@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count total number of employees for each organization in each year
+This script aggregates appointment data to show employee counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to count employees by organization and year."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution7/analysis_data")
+    input_file = input_dir / "step3_repeats_marked.csv"
+    output_file = input_dir / "step4_employee_counts.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 4: COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 3 first to generate the reappointments dataset.")
+        sys.exit(1)
+    
+    # Read the data
+    print(f"Reading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows")
+    except Exception as e:
+        print(f"ERROR reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Display initial data info
+    print("\nInitial data summary:")
+    print(f"  - Total rows: {len(df):,}")
+    print(f"  - Columns: {', '.join(df.columns)}")
+    
+    # Check for required columns
+    required_cols = ['org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"\nERROR: Missing required columns: {', '.join(missing_cols)}")
+        sys.exit(1)
+    
+    # Data quality checks
+    print("\n" + "-"*60)
+    print("DATA QUALITY CHECKS:")
+    print("-"*60)
+    
+    # Check for missing values
+    print("\nMissing values:")
+    print(f"  - org: {df['org'].isna().sum():,} ({df['org'].isna().sum()/len(df)*100:.1f}%)")
+    print(f"  - year: {df['year'].isna().sum():,} ({df['year'].isna().sum()/len(df)*100:.1f}%)")
+    
+    # Handle missing organizations
+    print("\nHandling missing organization names...")
+    df['org_clean'] = df['org'].fillna('Unknown Organization')
+    
+    # Convert year to numeric and handle missing years
+    df['year_numeric'] = pd.to_numeric(df['year'], errors='coerce')
+    missing_years = df['year_numeric'].isna().sum()
+    if missing_years > 0:
+        print(f"  - Found {missing_years:,} rows with invalid/missing years")
+        print("  - These will be excluded from the count")
+    
+    # Filter out rows with missing years
+    df_valid = df[df['year_numeric'].notna()].copy()
+    print(f"\nProcessing {len(df_valid):,} valid appointments (with valid years)")
+    
+    # Basic statistics
+    print("\n" + "-"*60)
+    print("BASIC STATISTICS:")
+    print("-"*60)
+    print(f"  - Unique organizations: {df_valid['org_clean'].nunique():,}")
+    print(f"  - Year range: {int(df_valid['year_numeric'].min())} - {int(df_valid['year_numeric'].max())}")
+    
+    # Count employees by organization and year
+    print("\n" + "-"*60)
+    print("COUNTING EMPLOYEES BY ORGANIZATION AND YEAR:")
+    print("-"*60)
+    
+    # Group by org and year to count appointments
+    employee_counts = df_valid.groupby(['org_clean', 'year_numeric']).size().reset_index(name='employee_count')
+    
+    # Rename columns for clarity
+    employee_counts.rename(columns={
+        'org_clean': 'organization',
+        'year_numeric': 'year'
+    }, inplace=True)
+    
+    # Convert year back to integer
+    employee_counts['year'] = employee_counts['year'].astype(int)
+    
+    print(f"\nGenerated {len(employee_counts):,} organization-year combinations")
+    
+    # Summary statistics
+    print("\n" + "="*60)
+    print("SUMMARY STATISTICS:")
+    print("="*60)
+    
+    # Overall statistics
+    print("\nAppointment count statistics:")
+    print(f"  - Mean employees per org-year: {employee_counts['employee_count'].mean():.1f}")
+    print(f"  - Median employees per org-year: {employee_counts['employee_count'].median():.0f}")
+    print(f"  - Max employees in single org-year: {employee_counts['employee_count'].max():,}")
+    print(f"  - Min employees in single org-year: {employee_counts['employee_count'].min():,}")
+    
+    # Top organizations by total appointments across all years
+    print("\n" + "-"*60)
+    print("TOP 10 ORGANIZATIONS BY TOTAL APPOINTMENTS (ALL YEARS):")
+    print("-"*60)
+    org_totals = employee_counts.groupby('organization')['employee_count'].sum().sort_values(ascending=False)
+    for i, (org, total) in enumerate(org_totals.head(10).items(), 1):
+        print(f"  {i:2d}. {org}: {total:,} total appointments")
+    
+    # Organizations with most appointments in a single year
+    print("\n" + "-"*60)
+    print("TOP 10 SINGLE-YEAR APPOINTMENT COUNTS:")
+    print("-"*60)
+    top_single_year = employee_counts.nlargest(10, 'employee_count')
+    for i, row in enumerate(top_single_year.itertuples(), 1):
+        print(f"  {i:2d}. {row.organization} ({row.year}): {row.employee_count:,} appointments")
+    
+    # Year-by-year totals
+    print("\n" + "-"*60)
+    print("TOTAL APPOINTMENTS BY YEAR:")
+    print("-"*60)
+    year_totals = employee_counts.groupby('year')['employee_count'].sum().sort_index()
+    for year, total in year_totals.items():
+        print(f"  {year}: {total:,} appointments")
+    
+    # Number of active organizations per year
+    print("\n" + "-"*60)
+    print("NUMBER OF ORGANIZATIONS WITH APPOINTMENTS BY YEAR:")
+    print("-"*60)
+    orgs_per_year = employee_counts.groupby('year')['organization'].nunique().sort_index()
+    for year, count in orgs_per_year.items():
+        print(f"  {year}: {count:,} organizations")
+    
+    # Analyze organization continuity
+    print("\n" + "-"*60)
+    print("ORGANIZATION CONTINUITY ANALYSIS:")
+    print("-"*60)
+    
+    # Find organizations present in all years
+    years = sorted(employee_counts['year'].unique())
+    org_years = employee_counts.groupby('organization')['year'].apply(set)
+    all_years_set = set(years)
+    
+    orgs_all_years = [org for org, year_set in org_years.items() if year_set == all_years_set]
+    print(f"\nOrganizations with appointments in all {len(years)} years: {len(orgs_all_years)}")
+    if len(orgs_all_years) > 0 and len(orgs_all_years) <= 20:
+        for org in sorted(orgs_all_years)[:20]:
+            print(f"  - {org}")
+    
+    # Sample of the output data
+    print("\n" + "-"*60)
+    print("SAMPLE OUTPUT DATA (first 15 rows):")
+    print("-"*60)
+    print(employee_counts.head(15).to_string(index=False))
+    
+    # Create pivot table for analysis
+    print("\n" + "-"*60)
+    print("CREATING PIVOT TABLE VIEW:")
+    print("-"*60)
+    
+    # Create a pivot table showing organizations as rows and years as columns
+    pivot_table = employee_counts.pivot_table(
+        index='organization',
+        columns='year',
+        values='employee_count',
+        fill_value=0
+    )
+    
+    # Show organizations with highest average appointments
+    avg_appointments = pivot_table.mean(axis=1).sort_values(ascending=False)
+    print("\nTop 10 organizations by average yearly appointments:")
+    for i, (org, avg) in enumerate(avg_appointments.head(10).items(), 1):
+        print(f"  {i:2d}. {org}: {avg:.1f} average appointments/year")
+    
+    # Save the results
+    print("\n" + "-"*60)
+    print(f"Saving results to: {output_file}")
+    
+    # Sort by organization and year for better readability
+    employee_counts_sorted = employee_counts.sort_values(['organization', 'year'])
+    employee_counts_sorted.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Verify saved file
+    saved_df = pd.read_csv(output_file)
+    if len(saved_df) == len(employee_counts):
+        print(f"SUCCESS: Data saved successfully ({len(saved_df):,} rows)")
+    else:
+        print("WARNING: Row count mismatch in saved file!")
+    
+    # Additional analysis for government branches
+    print("\n" + "="*60)
+    print("GOVERNMENT BRANCH ANALYSIS:")
+    print("="*60)
+    
+    # Try to identify government branches based on organization names
+    # Common patterns in government organization names
+    branch_keywords = {
+        'Executive': ['minister', 'deputy', 'executive', 'premier', 'cabinet'],
+        'Legislative': ['legislative', 'assembly', 'speaker', 'clerk'],
+        'Judicial': ['court', 'judge', 'judicial', 'justice', 'tribunal'],
+        'Crown Corporations': ['corporation', 'corp', 'inc', 'ltd', 'limited'],
+        'Boards/Commissions': ['board', 'commission', 'committee', 'council', 'authority'],
+        'Other': []  # Catch-all category
+    }
+    
+    # Classify organizations
+    org_classification = {}
+    for org in employee_counts['organization'].unique():
+        org_lower = org.lower()
+        classified = False
+        
+        for branch, keywords in branch_keywords.items():
+            if branch == 'Other':
+                continue
+            if any(keyword in org_lower for keyword in keywords):
+                org_classification[org] = branch
+                classified = True
+                break
+        
+        if not classified:
+            org_classification[org] = 'Other'
+    
+    # Add classification to the dataframe
+    employee_counts['branch'] = employee_counts['organization'].map(org_classification)
+    
+    # Summarize by branch
+    branch_summary = employee_counts.groupby('branch')['employee_count'].agg(['sum', 'mean', 'count'])
+    branch_summary.columns = ['total_appointments', 'avg_appointments', 'org_year_combinations']
+    branch_summary = branch_summary.sort_values('total_appointments', ascending=False)
+    
+    print("\nAppointments by government branch (estimated):")
+    for branch, row in branch_summary.iterrows():
+        print(f"  {branch}:")
+        print(f"    - Total appointments: {int(row['total_appointments']):,}")
+        print(f"    - Average per org-year: {row['avg_appointments']:.1f}")
+        print(f"    - Org-year combinations: {int(row['org_year_combinations']):,}")
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 4 COMPLETED SUCCESSFULLY")
+    print("="*60)
+    print(f"\nSummary:")
+    print(f"  - Total appointments processed: {len(df_valid):,}")
+    print(f"  - Organization-year combinations: {len(employee_counts):,}")
+    print(f"  - Unique organizations: {employee_counts['organization'].nunique():,}")
+    print(f"  - Years covered: {employee_counts['year'].min()} - {employee_counts['year'].max()}")
+    print(f"  - Output file: {output_file}")
+    
+    # Note about the analysis
+    print("\n📝 Note: This count represents the number of appointments per organization per year.")
+    print("   It may include reappointments within the same year.")
+
+if __name__ == "__main__":
+    main()

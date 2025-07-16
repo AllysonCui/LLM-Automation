@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count employees by organization and year
+This script counts the total number of employees for each "org" in each year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to count employees by organization and year"""
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    output_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    
+    # Define input and output files
+    input_file = input_path / "step3_repeats_marked.csv"
+    output_file = output_path / "step4_employee_counts.csv"
+    
+    print("=== Step 4: Count Appointments by Organization and Year ===")
+    print(f"Input file: {input_file}")
+    print(f"Output file: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run step3_mark_repeats.py first.")
+        sys.exit(1)
+    
+    # Read the dataset with marked repeats
+    try:
+        print("\nReading dataset with marked repeats...")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✅ Successfully loaded data: {len(df)} rows, {len(df.columns)} columns")
+        print(f"Columns: {', '.join(df.columns)}")
+    except Exception as e:
+        print(f"❌ Error reading input file: {str(e)}")
+        sys.exit(1)
+    
+    # Validate required columns
+    required_cols = ['org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"❌ ERROR: Missing required columns: {', '.join(missing_cols)}")
+        sys.exit(1)
+    
+    # Initial data overview
+    print("\n=== Data Overview ===")
+    print(f"Total records: {len(df)}")
+    print(f"Year range: {df['year'].min()} to {df['year'].max()}")
+    print(f"Total unique organizations: {df['org'].nunique()}")
+    print(f"Records with valid org: {df['org'].notna().sum()}")
+    print(f"Records with valid year: {df['year'].notna().sum()}")
+    
+    # Filter out records with missing org or year
+    print("\n=== Data Filtering ===")
+    valid_records = df[df['org'].notna() & df['year'].notna()].copy()
+    excluded_records = len(df) - len(valid_records)
+    
+    print(f"Records with both org and year: {len(valid_records)}")
+    if excluded_records > 0:
+        print(f"⚠️  Excluded {excluded_records} records with missing org or year")
+        
+        # Show examples of excluded records
+        excluded = df[df['org'].isna() | df['year'].isna()]
+        if len(excluded) > 0:
+            print("\nExamples of excluded records:")
+            print(excluded[['name', 'position', 'org', 'year']].head(5))
+    
+    # Create employee counts by org and year
+    print("\n=== Calculating Appointment Counts ===")
+    
+    # Group by org and year to count employees
+    employee_counts = valid_records.groupby(['org', 'year']).size().reset_index(name='employee_count')
+    
+    print(f"✅ Created employee count table with {len(employee_counts)} org-year combinations")
+    
+    # Add additional statistics for each org-year combination
+    print("\n=== Adding Additional Statistics ===")
+    
+    # Count reappointments for each org-year
+    reappointment_counts = valid_records[valid_records['reappointed'] == True].groupby(
+        ['org', 'year']).size().reset_index(name='reappointment_count')
+    
+    # Merge with employee counts
+    employee_counts = employee_counts.merge(
+        reappointment_counts, 
+        on=['org', 'year'], 
+        how='left'
+    )
+    
+    # Fill NaN reappointment counts with 0
+    employee_counts['reappointment_count'] = employee_counts['reappointment_count'].fillna(0).astype(int)
+    
+    # Calculate reappointment rate
+    employee_counts['reappointment_rate'] = (
+        employee_counts['reappointment_count'] / employee_counts['employee_count'] * 100
+    ).round(2)
+    
+    # Count unique employees (by name) for each org-year
+    unique_employees = valid_records.groupby(['org', 'year'])['name'].nunique().reset_index(
+        name='unique_employees')
+    
+    employee_counts = employee_counts.merge(
+        unique_employees,
+        on=['org', 'year'],
+        how='left'
+    )
+    
+    # Sort by org and year for better readability
+    employee_counts = employee_counts.sort_values(['org', 'year']).reset_index(drop=True)
+    
+    print(f"✅ Added reappointment counts and rates")
+    
+    # Summary statistics
+    print("\n=== Summary Statistics ===")
+    print(f"Total org-year combinations: {len(employee_counts)}")
+    print(f"Average employees per org-year: {employee_counts['employee_count'].mean():.2f}")
+    print(f"Max employees in single org-year: {employee_counts['employee_count'].max()}")
+    print(f"Organizations with data: {employee_counts['org'].nunique()}")
+    
+    # Find organizations with most employees
+    print("\n=== Top 10 Organizations by Total Appointments (All Years) ===")
+    org_totals = employee_counts.groupby('org')['employee_count'].sum().sort_values(
+        ascending=False).head(10)
+    
+    for i, (org, total) in enumerate(org_totals.items(), 1):
+        years_active = employee_counts[employee_counts['org'] == org]['year'].nunique()
+        avg_per_year = total / years_active
+        print(f"{i:2d}. {org}: {total} total employees across {years_active} years "
+              f"(avg: {avg_per_year:.1f}/year)")
+    
+    # Find organizations with highest reappointment rates
+    print("\n=== Top 10 Organizations by Average Reappointment Rate ===")
+    # Calculate average reappointment rate per org (weighted by employee count)
+    org_reappointment_stats = employee_counts.groupby('org').apply(
+        lambda x: pd.Series({
+            'total_employees': x['employee_count'].sum(),
+            'total_reappointments': x['reappointment_count'].sum(),
+            'avg_reappointment_rate': (x['reappointment_count'].sum() / 
+                                      x['employee_count'].sum() * 100) 
+                                      if x['employee_count'].sum() > 0 else 0,
+            'years_active': x['year'].nunique()
+        })
+    ).reset_index()
+    
+    # Filter organizations with at least 10 total employees for meaningful rates
+    significant_orgs = org_reappointment_stats[
+        org_reappointment_stats['total_employees'] >= 10
+    ].sort_values('avg_reappointment_rate', ascending=False).head(10)
+    
+    for i, row in significant_orgs.iterrows():
+        print(f"{i+1:2d}. {row['org']}: {row['avg_reappointment_rate']:.1f}% "
+              f"({int(row['total_reappointments'])}/{int(row['total_employees'])} "
+              f"over {int(row['years_active'])} years)")
+    
+    # Year-over-year analysis
+    print("\n=== Year-over-Year Growth Analysis ===")
+    yearly_totals = employee_counts.groupby('year').agg({
+        'employee_count': 'sum',
+        'reappointment_count': 'sum',
+        'org': 'nunique'
+    }).reset_index()
+    
+    yearly_totals.columns = ['year', 'total_employees', 'total_reappointments', 'active_orgs']
+    yearly_totals['overall_reappointment_rate'] = (
+        yearly_totals['total_reappointments'] / yearly_totals['total_employees'] * 100
+    ).round(2)
+    
+    print("\nYearly Summary:")
+    print(yearly_totals.to_string(index=False))
+    
+    # Find organizations with consistent presence
+    print("\n=== Organizations with Consistent Presence ===")
+    years_range = employee_counts['year'].max() - employee_counts['year'].min() + 1
+    org_year_counts = employee_counts.groupby('org')['year'].nunique()
+    consistent_orgs = org_year_counts[org_year_counts >= years_range * 0.75].sort_values(
+        ascending=False).head(10)
+    
+    print(f"Organizations present in at least 75% of years ({years_range * 0.75:.0f} years):")
+    for org, years in consistent_orgs.items():
+        total_employees = employee_counts[employee_counts['org'] == org]['employee_count'].sum()
+        print(f"  - {org}: Present in {years} years, {total_employees} total appointments")
+    
+    # Identify growth trends
+    print("\n=== Organizations with Strongest Growth (Last 3 Years) ===")
+    recent_years = sorted(employee_counts['year'].unique())[-3:]
+    if len(recent_years) >= 2:
+        growth_analysis = []
+        
+        for org in employee_counts['org'].unique():
+            org_data = employee_counts[employee_counts['org'] == org]
+            
+            # Get data for first and last of recent years
+            first_year_data = org_data[org_data['year'] == recent_years[0]]
+            last_year_data = org_data[org_data['year'] == recent_years[-1]]
+            
+            if not first_year_data.empty and not last_year_data.empty:
+                first_count = first_year_data['employee_count'].iloc[0]
+                last_count = last_year_data['employee_count'].iloc[0]
+                
+                if first_count > 0:
+                    growth_rate = ((last_count - first_count) / first_count * 100)
+                    growth_analysis.append({
+                        'org': org,
+                        'first_year': recent_years[0],
+                        'first_count': first_count,
+                        'last_year': recent_years[-1],
+                        'last_count': last_count,
+                        'growth_rate': growth_rate
+                    })
+        
+        growth_df = pd.DataFrame(growth_analysis).sort_values('growth_rate', ascending=False)
+        
+        # Show top growing organizations
+        print(f"\nTop 5 Growing Organizations ({recent_years[0]}-{recent_years[-1]}):")
+        for _, row in growth_df.head(5).iterrows():
+            print(f"  - {row['org']}: {row['growth_rate']:.1f}% growth "
+                  f"({int(row['first_count'])} → {int(row['last_count'])} employees)")
+    
+    # Save the employee counts dataset
+    print(f"\n=== Saving Appointment Counts Dataset ===")
+    
+    try:
+        employee_counts.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✅ Successfully saved employee counts")
+        print(f"  - Output file: {output_file}")
+        print(f"  - File size: {output_file.stat().st_size / 1024:.2f} KB")
+        print(f"  - Total rows: {len(employee_counts)}")
+        print(f"  - Columns: {', '.join(employee_counts.columns)}")
+    except Exception as e:
+        print(f"❌ Error saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Display sample of the employee counts
+    print("\n=== Sample of Appointment Counts (First 15 rows) ===")
+    print(employee_counts.head(15).to_string(index=False))
+    
+    # Display organizations with highest employee counts in most recent year
+    most_recent_year = employee_counts['year'].max()
+    print(f"\n=== Top Organizations in Most Recent Year ({most_recent_year}) ===")
+    recent_top = employee_counts[employee_counts['year'] == most_recent_year].nlargest(
+        10, 'employee_count')[['org', 'employee_count', 'reappointment_count', 'reappointment_rate']]
+    print(recent_top.to_string(index=False))
+    
+    print("\n✅ Step 4 completed successfully!")
+    print(f"Next step: Run step 5 to count reappointments by organization and year")
+
+if __name__ == "__main__":
+    main()

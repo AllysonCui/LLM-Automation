@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""
+Step 6: Calculate reappointment rates
+This script calculates the reappointment rate as reappointments divided by 
+total employees for each org-year pair.
+
+Author: Data Analysis Script
+Date: 2025-07-05
+Input: 
+  - analysis_data/step4_employee_counts.csv (total employees)
+  - analysis_data/step5_reappointment_counts.csv (reappointments)
+Output: analysis_data/step6_reappointment_rates.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def setup_paths():
+    """Setup input and output paths."""
+    script_dir = Path(__file__).parent
+    analysis_dir = script_dir / "analysis_data"
+    
+    employee_counts_file = analysis_dir / "step4_employee_counts.csv"
+    reappointment_counts_file = analysis_dir / "step5_reappointment_counts.csv"
+    output_file = analysis_dir / "step6_reappointment_rates.csv"
+    
+    return employee_counts_file, reappointment_counts_file, output_file, analysis_dir
+
+def load_and_merge_data(employee_counts_file, reappointment_counts_file):
+    """Load and merge employee and reappointment count data."""
+    print("\nLoading input data...")
+    
+    # Load employee counts
+    try:
+        employee_counts = pd.read_csv(employee_counts_file, encoding='utf-8')
+        print(f"✓ Loaded employee counts: {len(employee_counts):,} org-year combinations")
+    except Exception as e:
+        print(f"✗ ERROR loading employee counts: {str(e)}")
+        return None
+    
+    # Load reappointment counts
+    try:
+        reappointment_counts = pd.read_csv(reappointment_counts_file, encoding='utf-8')
+        print(f"✓ Loaded reappointment counts: {len(reappointment_counts):,} org-year combinations")
+    except Exception as e:
+        print(f"✗ ERROR loading reappointment counts: {str(e)}")
+        return None
+    
+    # Merge the datasets
+    print("\nMerging datasets...")
+    merged_data = employee_counts.merge(
+        reappointment_counts,
+        on=['org', 'year'],
+        how='left',
+        indicator=True
+    )
+    
+    # Fill missing reappointment counts with 0
+    merged_data['reappointment_count'] = merged_data['reappointment_count'].fillna(0).astype(int)
+    
+    # Report merge statistics
+    merge_stats = merged_data['_merge'].value_counts()
+    print(f"  - Matched records: {merge_stats.get('both', 0):,}")
+    print(f"  - Organizations with no reappointments: {merge_stats.get('left_only', 0):,}")
+    
+    # Drop merge indicator
+    merged_data = merged_data.drop('_merge', axis=1)
+    
+    return merged_data
+
+def calculate_reappointment_rates(merged_data):
+    """Calculate reappointment rates and add analysis columns."""
+    print("\nCalculating reappointment rates...")
+    
+    # Calculate rate as percentage
+    merged_data['reappointment_rate'] = (
+        merged_data['reappointment_count'] / merged_data['total_employees'] * 100
+    )
+    
+    # Handle division by zero (though shouldn't happen with our data)
+    merged_data['reappointment_rate'] = merged_data['reappointment_rate'].fillna(0)
+    
+    # Add analysis flags
+    merged_data['has_reappointments'] = merged_data['reappointment_count'] > 0
+    merged_data['high_volume'] = merged_data['total_employees'] >= 10
+    merged_data['very_high_volume'] = merged_data['total_employees'] >= 50
+    
+    # Calculate statistics
+    total_orgs = merged_data['org'].nunique()
+    orgs_with_reappointments = merged_data[merged_data['has_reappointments']]['org'].nunique()
+    
+    print(f"  ✓ Calculated rates for {len(merged_data):,} org-year combinations")
+    print(f"  ✓ {orgs_with_reappointments:,} of {total_orgs:,} organizations have reappointments")
+    
+    return merged_data
+
+def analyze_rate_distribution(rates_data):
+    """Analyze the distribution of reappointment rates."""
+    print("\n" + "-"*60)
+    print("REAPPOINTMENT RATE DISTRIBUTION:")
+    print("-"*60)
+    
+    # Overall statistics
+    print("\nOverall rate statistics:")
+    rate_stats = rates_data['reappointment_rate'].describe()
+    print(f"  - Mean rate: {rate_stats['mean']:.1f}%")
+    print(f"  - Median rate: {rate_stats['50%']:.1f}%")
+    print(f"  - Standard deviation: {rate_stats['std']:.1f}%")
+    print(f"  - Min rate: {rate_stats['min']:.1f}%")
+    print(f"  - Max rate: {rate_stats['max']:.1f}%")
+    
+    # Distribution by rate ranges
+    print("\nDistribution by rate ranges:")
+    ranges = [(0, 0), (0, 10), (10, 25), (25, 50), (50, 75), (75, 100), (100, 100)]
+    
+    for i in range(len(ranges) - 1):
+        low, high = ranges[i][1], ranges[i+1][1]
+        if i == 0:
+            count = (rates_data['reappointment_rate'] == 0).sum()
+            label = "0% (no reappointments)"
+        elif i == len(ranges) - 2:
+            count = (rates_data['reappointment_rate'] == 100).sum()
+            label = "100% (all reappointments)"
+        else:
+            count = ((rates_data['reappointment_rate'] > low) & 
+                    (rates_data['reappointment_rate'] <= high)).sum()
+            label = f"{low}% - {high}%"
+        
+        pct = count / len(rates_data) * 100
+        print(f"  {label:>25}: {count:>6,} ({pct:>5.1f}%)")
+    
+    # Statistics for high-volume organizations
+    high_volume = rates_data[rates_data['high_volume']]
+    if len(high_volume) > 0:
+        print(f"\nHigh-volume organizations (10+ employees):")
+        print(f"  - Count: {len(high_volume):,}")
+        print(f"  - Mean rate: {high_volume['reappointment_rate'].mean():.1f}%")
+        print(f"  - Median rate: {high_volume['reappointment_rate'].median():.1f}%")
+
+def analyze_top_organizations(rates_data):
+    """Analyze organizations with highest reappointment rates."""
+    print("\n" + "-"*60)
+    print("TOP ORGANIZATIONS BY REAPPOINTMENT RATE:")
+    print("-"*60)
+    
+    # Filter for organizations with significant volume
+    significant_orgs = rates_data[rates_data['total_employees'] >= 10].copy()
+    
+    # Get top 15 by rate
+    top_by_rate = significant_orgs.nlargest(15, 'reappointment_rate')
+    
+    print("\nTop 15 organizations by reappointment rate (min 10 employees):")
+    print(f"{'Organization':<50} {'Year':>6} {'Rate':>8} {'Reapp':>8} {'Total':>8}")
+    print("-" * 82)
+    
+    for _, row in top_by_rate.iterrows():
+        org_display = row['org'][:47] + '...' if len(row['org']) > 50 else row['org']
+        print(f"{org_display:<50} {row['year']:>6.0f} {row['reappointment_rate']:>7.1f}% "
+              f"{row['reappointment_count']:>8} {row['total_employees']:>8}")
+    
+    # Organizations with 100% reappointment rate
+    perfect_reappointment = rates_data[
+        (rates_data['reappointment_rate'] == 100) & 
+        (rates_data['total_employees'] >= 5)
+    ]
+    
+    if len(perfect_reappointment) > 0:
+        print(f"\n{len(perfect_reappointment)} organizations with 100% reappointment rate (min 5 employees):")
+        for _, row in perfect_reappointment.head(5).iterrows():
+            print(f"  - {row['org'][:60]} ({row['year']:.0f}): "
+                  f"{row['reappointment_count']}/{row['total_employees']}")
+
+def analyze_yearly_trends(rates_data):
+    """Analyze reappointment rate trends by year."""
+    print("\n" + "-"*60)
+    print("YEARLY REAPPOINTMENT RATE TRENDS:")
+    print("-"*60)
+    
+    # Calculate weighted average rate by year
+    yearly_stats = rates_data.groupby('year').agg({
+        'reappointment_count': 'sum',
+        'total_employees': 'sum',
+        'org': 'nunique',
+        'has_reappointments': 'sum'
+    })
+    
+    yearly_stats['weighted_rate'] = (
+        yearly_stats['reappointment_count'] / yearly_stats['total_employees'] * 100
+    )
+    
+    print("\nWeighted average reappointment rates by year:")
+    print(f"{'Year':>6} {'Rate':>8} {'Reappointments':>16} {'Total Appointments':>17} {'Active Orgs':>13}")
+    print("-" * 62)
+    
+    for year, row in yearly_stats.iterrows():
+        print(f"{year:>6.0f} {row['weighted_rate']:>7.1f}% {row['reappointment_count']:>16,} "
+              f"{row['total_employees']:>17,} {row['org']:>13,}")
+    
+    # Calculate trend
+    if len(yearly_stats) >= 3:
+        first_year_rate = yearly_stats.iloc[0]['weighted_rate']
+        last_year_rate = yearly_stats.iloc[-1]['weighted_rate']
+        change = last_year_rate - first_year_rate
+        
+        print(f"\nOverall trend:")
+        print(f"  - First year ({yearly_stats.index[0]:.0f}): {first_year_rate:.1f}%")
+        print(f"  - Last year ({yearly_stats.index[-1]:.0f}): {last_year_rate:.1f}%")
+        print(f"  - Change: {change:+.1f} percentage points")
+        
+        if abs(change) < 2:
+            trend = "relatively stable"
+        elif change > 0:
+            trend = "increasing"
+        else:
+            trend = "decreasing"
+        print(f"  - Trend: {trend}")
+    
+    return yearly_stats
+
+def analyze_by_organization_category(rates_data):
+    """Analyze rates by organization categories."""
+    print("\n" + "-"*60)
+    print("ANALYSIS BY ORGANIZATION TYPE:")
+    print("-"*60)
+    
+    # Categorize organizations based on keywords
+    categories = {
+        'Board': ['board', 'bd.', 'bd '],
+        'Commission': ['commission', 'comm.', 'comm '],
+        'Corporation': ['corporation', 'corp.', 'corp ', 'inc.', 'limited', 'ltd'],
+        'Department': ['department', 'dept.', 'dept '],
+        'Authority': ['authority'],
+        'Council': ['council'],
+        'Committee': ['committee'],
+        'Service': ['service'],
+        'Agency': ['agency']
+    }
+    
+    # Create category column
+    rates_data['category'] = 'Other'
+    
+    for category, keywords in categories.items():
+        mask = rates_data['org'].str.lower().str.contains('|'.join(keywords), na=False)
+        rates_data.loc[mask, 'category'] = category
+    
+    # Calculate statistics by category
+    category_stats = rates_data.groupby('category').agg({
+        'reappointment_count': 'sum',
+        'total_employees': 'sum',
+        'org': 'nunique'
+    })
+    
+    category_stats['weighted_rate'] = (
+        category_stats['reappointment_count'] / category_stats['total_employees'] * 100
+    )
+    
+    category_stats = category_stats.sort_values('weighted_rate', ascending=False)
+    
+    print("\nReappointment rates by organization type:")
+    print(f"{'Category':<15} {'Rate':>8} {'Reappointments':>16} {'Total Appointments':>17} {'Orgs':>6}")
+    print("-" * 64)
+    
+    for category, row in category_stats.iterrows():
+        if row['total_employees'] >= 50:  # Only show categories with sufficient data
+            print(f"{category:<15} {row['weighted_rate']:>7.1f}% {row['reappointment_count']:>16,} "
+                  f"{row['total_employees']:>17,} {row['org']:>6,}")
+    
+    return rates_data
+
+def create_summary_pivot(rates_data):
+    """Create a summary pivot table of rates."""
+    print("\nCreating summary pivot table...")
+    
+    # Create pivot with rates
+    pivot_rates = rates_data.pivot(index='org', columns='year', values='reappointment_rate')
+    
+    # Calculate average rate for each organization
+    pivot_rates['Average'] = pivot_rates.mean(axis=1)
+    
+    # Sort by average rate
+    pivot_rates = pivot_rates.sort_values('Average', ascending=False)
+    
+    # Filter for organizations with data in multiple years
+    multi_year_orgs = pivot_rates[pivot_rates.notna().sum(axis=1) >= 3]
+    
+    if len(multi_year_orgs) > 0:
+        print(f"\n✓ Created pivot table with {len(multi_year_orgs)} organizations active in 3+ years")
+        
+        # Show top organizations
+        print("\nTop 10 organizations by average reappointment rate (3+ years of data):")
+        preview_cols = [col for col in multi_year_orgs.columns if col != 'Average'][-3:] + ['Average']
+        print(multi_year_orgs[preview_cols].head(10).round(1).to_string())
+    
+    return pivot_rates
+
+def save_outputs(rates_data, pivot_rates, yearly_stats, output_file):
+    """Save all output files."""
+    # Save main rates data
+    rates_data.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"\n✓ Saved reappointment rates to: {output_file}")
+    
+    # Save pivot table
+    pivot_file = output_file.parent / "step6_reappointment_rates_pivot.csv"
+    pivot_rates.to_csv(pivot_file, encoding='utf-8')
+    print(f"✓ Saved pivot table to: {pivot_file}")
+    
+    # Save yearly summary
+    yearly_file = output_file.parent / "step6_yearly_summary.csv"
+    yearly_stats.to_csv(yearly_file, encoding='utf-8')
+    print(f"✓ Saved yearly summary to: {yearly_file}")
+
+def process_reappointment_rates(employee_counts_file, reappointment_counts_file, output_file):
+    """Main processing function to calculate reappointment rates."""
+    print("\n" + "="*60)
+    print("STEP 6: CALCULATING REAPPOINTMENT RATES")
+    print("="*60)
+    
+    # Check if input files exist
+    for file, name in [(employee_counts_file, "Appointment counts"), 
+                       (reappointment_counts_file, "Reappointment counts")]:
+        if not file.exists():
+            print(f"\n✗ ERROR: {name} file not found: {file}")
+            print(f"Please run the previous steps first.")
+            return False
+    
+    # Load and merge data
+    merged_data = load_and_merge_data(employee_counts_file, reappointment_counts_file)
+    if merged_data is None:
+        return False
+    
+    # Calculate rates
+    rates_data = calculate_reappointment_rates(merged_data)
+    
+    # Analyze distribution
+    analyze_rate_distribution(rates_data)
+    
+    # Analyze top organizations
+    analyze_top_organizations(rates_data)
+    
+    # Analyze yearly trends
+    yearly_stats = analyze_yearly_trends(rates_data)
+    
+    # Analyze by organization type
+    rates_data = analyze_by_organization_category(rates_data)
+    
+    # Create summary pivot
+    pivot_rates = create_summary_pivot(rates_data)
+    
+    # Save all outputs
+    save_outputs(rates_data, pivot_rates, yearly_stats, output_file)
+    
+    # Final summary
+    print("\n" + "-"*60)
+    print("PROCESSING SUMMARY:")
+    print("-"*60)
+    print(f"Total org-year combinations: {len(rates_data):,}")
+    print(f"Organizations analyzed: {rates_data['org'].nunique():,}")
+    print(f"Years covered: {rates_data['year'].min():.0f} - {rates_data['year'].max():.0f}")
+    
+    # Overall statistics
+    overall_rate = (rates_data['reappointment_count'].sum() / 
+                   rates_data['total_employees'].sum() * 100)
+    print(f"\nOverall reappointment rate: {overall_rate:.1f}%")
+    print(f"Total appointments: {rates_data['total_employees'].sum():,}")
+    print(f"Total reappointments: {rates_data['reappointment_count'].sum():,}")
+    
+    # Key findings
+    print("\nKey findings:")
+    
+    # Organization with highest consistent rate
+    high_volume_orgs = rates_data[rates_data['total_employees'] >= 20]
+    if len(high_volume_orgs) > 0:
+        org_avg_rates = high_volume_orgs.groupby('org')['reappointment_rate'].mean()
+        top_org = org_avg_rates.idxmax()
+        top_rate = org_avg_rates.max()
+        print(f"  - Highest average rate (20+ employees): {top_org} ({top_rate:.1f}%)")
+    
+    # Year with highest overall rate
+    year_highest = yearly_stats['weighted_rate'].idxmax()
+    rate_highest = yearly_stats['weighted_rate'].max()
+    print(f"  - Year with highest rate: {year_highest:.0f} ({rate_highest:.1f}%)")
+    
+    print("\n✓ Step 6 completed successfully!")
+    print(f"✓ All outputs saved to analysis_data/")
+    print("="*60)
+    
+    return True
+
+def main():
+    """Main execution function."""
+    try:
+        # Setup paths
+        employee_counts_file, reappointment_counts_file, output_file, analysis_dir = setup_paths()
+        
+        # Ensure analysis directory exists
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Run the processing
+        success = process_reappointment_rates(
+            employee_counts_file, 
+            reappointment_counts_file, 
+            output_file
+        )
+        
+        if success:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"\n✗ CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

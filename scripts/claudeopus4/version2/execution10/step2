@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns: "reappointed", "name", "position", "org", and "year"
+from the combined dataset created in Step 1.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to extract key columns from the combined dataset."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution10/analysis_data")
+    output_dir = input_dir  # Same directory for output
+    
+    # Input and output files
+    input_file = input_dir / "step1_combined_appointments.csv"
+    output_file = output_dir / "step2_key_columns_data.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run Step 1 first to create the combined dataset.")
+        sys.exit(1)
+    
+    try:
+        # Load the combined dataset
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows and {len(df.columns)} columns")
+        
+        # Define target columns
+        target_columns = ["reappointed", "name", "position", "org", "year"]
+        
+        # Check which columns exist in the dataset
+        print("\nChecking for target columns:")
+        existing_columns = []
+        missing_columns = []
+        column_mapping = {}
+        
+        for target_col in target_columns:
+            if target_col in df.columns:
+                existing_columns.append(target_col)
+                column_mapping[target_col] = target_col
+                print(f"  ✓ '{target_col}' found")
+            else:
+                # Look for alternative column names
+                found_alternative = False
+                
+                # Special handling for 'org' which might be 'organization'
+                if target_col == "org":
+                    if "organization" in df.columns:
+                        column_mapping[target_col] = "organization"
+                        existing_columns.append(target_col)
+                        found_alternative = True
+                        print(f"  ✓ '{target_col}' found as 'organization'")
+                
+                # Special handling for 'year' which might be 'source_year' from Step 1
+                elif target_col == "year":
+                    if "source_year" in df.columns:
+                        column_mapping[target_col] = "source_year"
+                        existing_columns.append(target_col)
+                        found_alternative = True
+                        print(f"  ✓ '{target_col}' found as 'source_year'")
+                    # Also check for other year-related columns
+                    else:
+                        year_columns = [col for col in df.columns if 'year' in col.lower()]
+                        if year_columns:
+                            # Use the first year column found
+                            column_mapping[target_col] = year_columns[0]
+                            existing_columns.append(target_col)
+                            found_alternative = True
+                            print(f"  ✓ '{target_col}' found as '{year_columns[0]}'")
+                
+                if not found_alternative:
+                    missing_columns.append(target_col)
+                    print(f"  ❌ '{target_col}' not found")
+        
+        # Check if we have critical columns
+        critical_missing = [col for col in ["reappointed", "name"] if col in missing_columns]
+        if critical_missing:
+            print(f"\n❌ ERROR: Critical columns missing: {critical_missing}")
+            print("\nAvailable columns in the dataset:")
+            for i, col in enumerate(df.columns, 1):
+                print(f"  {i}. {col}")
+            sys.exit(1)
+        
+        # Create new dataframe with selected columns
+        print("\nExtracting key columns...")
+        selected_data = pd.DataFrame()
+        
+        for target_col in target_columns:
+            if target_col in existing_columns:
+                source_col = column_mapping[target_col]
+                selected_data[target_col] = df[source_col]
+                print(f"  ✓ Extracted '{target_col}' from '{source_col}'")
+        
+        # Handle missing columns by adding them with NaN values
+        for missing_col in missing_columns:
+            selected_data[missing_col] = np.nan
+            print(f"  ⚠️  Added '{missing_col}' with NaN values (column not found)")
+        
+        # Ensure columns are in the specified order
+        selected_data = selected_data[target_columns]
+        
+        # Data quality check for extracted data
+        print("\nData quality analysis of extracted columns:")
+        print(f"  ✓ Total rows: {len(selected_data)}")
+        print(f"  ✓ Total columns: {len(selected_data.columns)}")
+        
+        # Check for missing values in each column
+        print("\nMissing values analysis:")
+        for col in selected_data.columns:
+            missing_count = selected_data[col].isna().sum()
+            missing_pct = (missing_count / len(selected_data)) * 100
+            print(f"  - {col}: {missing_count} missing ({missing_pct:.1f}%)")
+        
+        # Analyze 'reappointed' column specifically
+        if 'reappointed' in selected_data.columns:
+            print("\nReappointed column analysis:")
+            print(f"  - Data type: {selected_data['reappointed'].dtype}")
+            unique_values = selected_data['reappointed'].unique()
+            print(f"  - Unique values: {unique_values}")
+            
+            # Convert to boolean if needed
+            if selected_data['reappointed'].dtype == 'object':
+                print("\n  Converting 'reappointed' to boolean...")
+                # Common mappings for boolean conversion
+                true_values = ['True', 'true', 'TRUE', 'Yes', 'yes', 'YES', 'Y', 'y', '1', 1, True]
+                false_values = ['False', 'false', 'FALSE', 'No', 'no', 'NO', 'N', 'n', '0', 0, False]
+                
+                # Create boolean column
+                selected_data['reappointed_bool'] = selected_data['reappointed'].apply(
+                    lambda x: True if x in true_values else (False if x in false_values else np.nan)
+                )
+                
+                # Check conversion results
+                conversion_check = pd.crosstab(
+                    selected_data['reappointed'].fillna('NaN'), 
+                    selected_data['reappointed_bool'].fillna('NaN'),
+                    margins=True
+                )
+                print("\n  Conversion mapping:")
+                print(conversion_check)
+                
+                # Replace original column with boolean version
+                selected_data['reappointed'] = selected_data['reappointed_bool']
+                selected_data = selected_data.drop('reappointed_bool', axis=1)
+                print("\n  ✓ Converted 'reappointed' to boolean type")
+        
+        # Check for duplicate entries
+        print("\nDuplicate analysis:")
+        duplicates = selected_data.duplicated().sum()
+        print(f"  - Total duplicate rows: {duplicates}")
+        
+        # Check for duplicates based on name + position
+        if 'name' in selected_data.columns and 'position' in selected_data.columns:
+            name_pos_duplicates = selected_data.duplicated(subset=['name', 'position']).sum()
+            print(f"  - Duplicate name-position combinations: {name_pos_duplicates}")
+        
+        # Year distribution check
+        if 'year' in selected_data.columns:
+            print("\nYear distribution:")
+            year_counts = selected_data['year'].value_counts().sort_index()
+            for year, count in year_counts.items():
+                if pd.notna(year):
+                    print(f"  - {int(year)}: {count} appointments")
+        
+        # Organization distribution preview (top 10)
+        if 'org' in selected_data.columns:
+            print("\nTop 10 organizations by appointment count:")
+            org_counts = selected_data['org'].value_counts().head(10)
+            for org, count in org_counts.items():
+                print(f"  - {org}: {count} appointments")
+        
+        # Save the extracted data
+        print(f"\nSaving extracted data to: {output_file}")
+        selected_data.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved {len(selected_data)} rows with {len(selected_data.columns)} columns")
+        
+        # Summary report
+        print("\n" + "="*60)
+        print("SUMMARY")
+        print("="*60)
+        print(f"Input file: {input_file}")
+        print(f"Output file: {output_file}")
+        print(f"Rows processed: {len(selected_data)}")
+        print(f"Columns extracted: {', '.join(selected_data.columns)}")
+        if missing_columns:
+            print(f"Missing columns (filled with NaN): {', '.join(missing_columns)}")
+        print("\n✓ Step 2 completed successfully!")
+        
+        # Return the dataframe for potential further use
+        return selected_data
+        
+    except Exception as e:
+        print(f"\n❌ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Run the main function
+    extracted_data = main()

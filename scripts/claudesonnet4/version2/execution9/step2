@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+New Brunswick Government Appointments Analysis
+
+This script extracts the key columns needed for reappointment analysis:
+"reappointed", "name", "position", "org", and "year" from the combined dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from typing import List, Dict, Any
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define file paths
+INPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+OUTPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+INPUT_FILE = "step1_combined_appointments.csv"
+OUTPUT_FILE = "step2_key_columns_data.csv"
+
+def setup_directories():
+    """Create output directories if they don't exist"""
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created/verified output directory: {OUTPUT_PATH}")
+
+def validate_input_file() -> bool:
+    """Check if the input file exists and is readable"""
+    input_file_path = INPUT_PATH / INPUT_FILE
+    if not input_file_path.exists():
+        logger.error(f"Input file not found: {input_file_path}")
+        return False
+    if not input_file_path.is_file():
+        logger.error(f"Path is not a file: {input_file_path}")
+        return False
+    return True
+
+def load_combined_data() -> pd.DataFrame:
+    """
+    Load the combined dataset from Step 1
+    
+    Returns:
+        DataFrame with combined appointment data
+    """
+    input_file_path = INPUT_PATH / INPUT_FILE
+    
+    try:
+        logger.info(f"Loading combined dataset from: {input_file_path}")
+        df = pd.read_csv(input_file_path, encoding='utf-8')
+        
+        logger.info(f"Loaded dataset with {len(df)} records and {len(df.columns)} columns")
+        logger.info(f"Available columns: {list(df.columns)}")
+        
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading combined dataset: {str(e)}")
+        raise
+
+def map_column_names(df: pd.DataFrame) -> Dict[str, str]:
+    """
+    Map available columns to required key columns
+    
+    Args:
+        df: Input DataFrame
+    
+    Returns:
+        Dictionary mapping required columns to available columns
+    """
+    # Required key columns
+    required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    # Available columns (normalized)
+    available_columns = [col.lower().strip() for col in df.columns]
+    
+    # Column mapping dictionary
+    column_mapping = {}
+    
+    # Map each required column to available column
+    for req_col in required_columns:
+        if req_col in available_columns:
+            # Direct match
+            original_col = df.columns[available_columns.index(req_col)]
+            column_mapping[req_col] = original_col
+            logger.info(f"Direct match: '{req_col}' -> '{original_col}'")
+        else:
+            # Look for alternative column names
+            alternatives = {
+                'year': ['data_year', 'appointment_year', 'posting_year'],
+                'org': ['organization', 'organisation', 'body', 'department'],
+                'position': ['title', 'role', 'appointment_position'],
+                'name': ['appointee_name', 'full_name', 'person_name'],
+                'reappointed': ['re_appointed', 'reappointed_flag', 'is_reappointed']
+            }
+            
+            found = False
+            if req_col in alternatives:
+                for alt in alternatives[req_col]:
+                    if alt.lower() in available_columns:
+                        original_col = df.columns[available_columns.index(alt.lower())]
+                        column_mapping[req_col] = original_col
+                        logger.info(f"Alternative match: '{req_col}' -> '{original_col}'")
+                        found = True
+                        break
+            
+            if not found:
+                logger.warning(f"No match found for required column: '{req_col}'")
+                column_mapping[req_col] = None
+    
+    return column_mapping
+
+def extract_key_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract the key columns needed for analysis
+    
+    Args:
+        df: Input DataFrame with all columns
+    
+    Returns:
+        DataFrame with only key columns
+    """
+    logger.info("Extracting key columns from combined dataset")
+    
+    # Map column names
+    column_mapping = map_column_names(df)
+    
+    # Check for missing required columns
+    missing_columns = [col for col, mapped in column_mapping.items() if mapped is None]
+    if missing_columns:
+        logger.error(f"Missing required columns: {missing_columns}")
+        raise ValueError(f"Cannot proceed without required columns: {missing_columns}")
+    
+    # Create new DataFrame with key columns
+    key_df = pd.DataFrame()
+    
+    for req_col, orig_col in column_mapping.items():
+        if orig_col is not None:
+            key_df[req_col] = df[orig_col]
+            logger.info(f"Extracted column '{req_col}' from '{orig_col}'")
+    
+    # Reorder columns in the desired sequence
+    column_order = ['reappointed', 'name', 'position', 'org', 'year']
+    key_df = key_df[column_order]
+    
+    logger.info(f"Key columns extracted. Shape: {key_df.shape}")
+    
+    return key_df
+
+def clean_and_validate_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean and validate the extracted key columns
+    
+    Args:
+        df: DataFrame with key columns
+    
+    Returns:
+        Cleaned DataFrame
+    """
+    logger.info("Cleaning and validating key columns data")
+    
+    # Create a copy to avoid modifying original
+    clean_df = df.copy()
+    
+    # Clean name column
+    if 'name' in clean_df.columns:
+        clean_df['name'] = clean_df['name'].astype(str).str.strip()
+        clean_df['name'] = clean_df['name'].replace(['nan', 'NaN', 'None', ''], pd.NA)
+    
+    # Clean position column
+    if 'position' in clean_df.columns:
+        clean_df['position'] = clean_df['position'].astype(str).str.strip()
+        clean_df['position'] = clean_df['position'].replace(['nan', 'NaN', 'None', ''], pd.NA)
+    
+    # Clean org column
+    if 'org' in clean_df.columns:
+        clean_df['org'] = clean_df['org'].astype(str).str.strip()
+        clean_df['org'] = clean_df['org'].replace(['nan', 'NaN', 'None', ''], pd.NA)
+    
+    # Validate and clean year column
+    if 'year' in clean_df.columns:
+        # Convert to numeric, handling any non-numeric values
+        clean_df['year'] = pd.to_numeric(clean_df['year'], errors='coerce')
+        
+        # Validate year range (should be 2013-2024)
+        valid_years = range(2013, 2025)
+        invalid_years = clean_df[~clean_df['year'].isin(valid_years)]['year'].unique()
+        if len(invalid_years) > 0:
+            logger.warning(f"Found invalid years: {invalid_years}")
+        
+        # Filter to valid years only
+        clean_df = clean_df[clean_df['year'].isin(valid_years)]
+    
+    # Validate and clean reappointed column
+    if 'reappointed' in clean_df.columns:
+        # Ensure boolean values
+        clean_df['reappointed'] = clean_df['reappointed'].astype(str).str.lower()
+        clean_df['reappointed'] = clean_df['reappointed'].replace({
+            'true': True, 'false': False, 'yes': True, 'no': False,
+            '1': True, '0': False, 'y': True, 'n': False,
+            'nan': False, 'none': False, '': False
+        })
+        clean_df['reappointed'] = clean_df['reappointed'].astype(bool)
+    
+    # Remove rows where essential columns are missing
+    essential_columns = ['name', 'position', 'org', 'year']
+    before_count = len(clean_df)
+    clean_df = clean_df.dropna(subset=essential_columns, how='any')
+    after_count = len(clean_df)
+    
+    if before_count != after_count:
+        logger.info(f"Removed {before_count - after_count} rows with missing essential data")
+    
+    # Remove duplicate records
+    before_count = len(clean_df)
+    clean_df = clean_df.drop_duplicates()
+    after_count = len(clean_df)
+    
+    if before_count != after_count:
+        logger.info(f"Removed {before_count - after_count} duplicate records")
+    
+    logger.info(f"Data cleaning completed. Final shape: {clean_df.shape}")
+    
+    return clean_df
+
+def generate_data_summary(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Generate summary statistics for the key columns dataset
+    
+    Args:
+        df: DataFrame with key columns
+    
+    Returns:
+        Dictionary with summary statistics
+    """
+    summary = {
+        'total_records': len(df),
+        'columns': list(df.columns),
+        'years_covered': sorted(df['year'].unique()) if 'year' in df.columns else [],
+        'records_per_year': df['year'].value_counts().sort_index().to_dict() if 'year' in df.columns else {},
+        'unique_names': df['name'].nunique() if 'name' in df.columns else 0,
+        'unique_positions': df['position'].nunique() if 'position' in df.columns else 0,
+        'unique_orgs': df['org'].nunique() if 'org' in df.columns else 0,
+        'reappointment_summary': df['reappointed'].value_counts().to_dict() if 'reappointed' in df.columns else {},
+        'missing_values': df.isnull().sum().to_dict(),
+        'data_types': df.dtypes.to_dict()
+    }
+    
+    return summary
+
+def save_results(df: pd.DataFrame):
+    """
+    Save the key columns dataset and generate summary report
+    
+    Args:
+        df: DataFrame with key columns to save
+    """
+    output_file_path = OUTPUT_PATH / OUTPUT_FILE
+    
+    try:
+        # Save key columns dataset
+        df.to_csv(output_file_path, index=False, encoding='utf-8')
+        logger.info(f"Key columns dataset saved to: {output_file_path}")
+        
+        # Generate summary statistics
+        summary = generate_data_summary(df)
+        
+        # Create summary report
+        reappointment_total = sum(summary['reappointment_summary'].values())
+        reappointed_count = summary['reappointment_summary'].get(True, 0)
+        reappointment_rate = (reappointed_count / reappointment_total * 100) if reappointment_total > 0 else 0
+        
+        summary_report = f"""
+STEP 2 - KEY COLUMNS EXTRACTION SUMMARY REPORT
+=============================================
+
+Dataset Overview:
+- Total Records: {summary['total_records']:,}
+- Columns Retained: {', '.join(summary['columns'])}
+- Years Covered: {summary['years_covered']}
+- Unique Names: {summary['unique_names']:,}
+- Unique Positions: {summary['unique_positions']:,}
+- Unique Organizations: {summary['unique_orgs']:,}
+
+Records per Year:
+{chr(10).join([f"  {year}: {count:,}" for year, count in summary['records_per_year'].items()])}
+
+Reappointment Summary:
+- Total Appointments: {reappointment_total:,}
+- Reappointed: {reappointed_count:,}
+- New Appointments: {summary['reappointment_summary'].get(False, 0):,}
+- Overall Reappointment Rate: {reappointment_rate:.2f}%
+
+Data Types:
+{chr(10).join([f"  {col}: {dtype}" for col, dtype in summary['data_types'].items()])}
+
+Missing Values:
+{chr(10).join([f"  {col}: {count}" for col, count in summary['missing_values'].items() if count > 0]) or "  None"}
+
+Data Quality Notes:
+- All required key columns successfully extracted
+- Data cleaned and validated
+- Duplicate records removed
+- Invalid years filtered out
+- Missing essential data removed
+- Ready for Step 3 analysis
+
+Output File: {output_file_path}
+"""
+        
+        # Save summary report
+        summary_path = OUTPUT_PATH / "step2_summary_report.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary_report)
+        
+        logger.info(f"Summary report saved to: {summary_path}")
+        print(summary_report)
+        
+    except Exception as e:
+        logger.error(f"Error saving results: {str(e)}")
+        raise
+
+def main():
+    """Main execution function"""
+    try:
+        logger.info("=" * 60)
+        logger.info("STEP 2: EXTRACTING KEY COLUMNS")
+        logger.info("=" * 60)
+        
+        # Setup directories
+        setup_directories()
+        
+        # Validate input file
+        if not validate_input_file():
+            logger.error("Input file validation failed")
+            sys.exit(1)
+        
+        # Load combined data
+        combined_df = load_combined_data()
+        
+        # Extract key columns
+        key_df = extract_key_columns(combined_df)
+        
+        # Clean and validate data
+        clean_df = clean_and_validate_data(key_df)
+        
+        if clean_df.empty:
+            logger.error("No valid data remaining after cleaning")
+            sys.exit(1)
+        
+        # Save results
+        save_results(clean_df)
+        
+        logger.info("Step 2 completed successfully!")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Step 2 failed: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

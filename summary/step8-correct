@@ -1,0 +1,66 @@
+import os
+import pandas as pd
+from pathlib import Path
+
+def extract_rounded_floats(df):
+    """Extract all float values in [0,1] rounded to 4 digits."""
+    float_vals = df.select_dtypes(include=['float']).values.flatten()
+    return sorted(set(round(val, 4) for val in float_vals if 0 <= val <= 1))
+
+# Load correct answer
+correct_path = Path("scripts/human/version1/analysis_data/step8_annual_proportions.csv")
+correct_df = pd.read_csv(correct_path)
+correct_vals = extract_rounded_floats(correct_df)
+
+# Root directory of all outputs
+root_dir = "scripts"
+
+# Counters
+total_executions = 0
+correct_executions = 0
+
+# Traverse structure
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path):
+        continue
+
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path):
+            continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"):
+                continue
+
+            exec_path = os.path.join(version_path, folder)
+            test_file = os.path.join(exec_path, "analysis_data", "step8_annual_proportions.csv")
+
+            if not os.path.exists(test_file):
+                continue
+
+            total_executions += 1
+
+            try:
+                test_df = pd.read_csv(test_file)
+                test_vals = extract_rounded_floats(test_df)
+
+                # Check if all correct values are in the test values
+                missing = [val for val in correct_vals if val not in test_vals]
+
+                if not missing:
+                    print(f"{test_file}: ✅ All values matched")
+                    correct_executions += 1
+                else:
+                    print(f"{test_file}: ❌ {len(missing)} values missing")
+                    print(f"Missing (sample): {missing[:5]}")
+
+            except Exception as e:
+                print(f"{test_file}: ❌ Failed to process ({e})")
+
+# Summary
+print("\n=== SUMMARY ===")
+print(f"Total Executions Checked: {total_executions}")
+print(f"Executions with All Correct Values: {correct_executions}")
+print(f"Executions with Errors: {total_executions - correct_executions}")

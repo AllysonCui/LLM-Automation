@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""
+Step 7: Identify Yearly Maximum Reappointment Rates
+Identifies the organization with the highest reappointment rate for each year
+and creates visualizations showing trends over time.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over 
+the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    script_dir = Path(__file__).parent
+    output_dir = script_dir / "analysis_data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def load_step6_data(output_dir):
+    """Load the reappointment rates data from Step 6."""
+    input_file = output_dir / "step6_reappointment_rates.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"Loading reappointment rates from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except Exception as e:
+        print(f"ERROR loading {input_file}: {str(e)}")
+        raise
+
+def validate_input_data(df):
+    """Validate the input dataset before processing."""
+    print("\nValidating input dataset...")
+    
+    # Check required columns
+    required_columns = ['org', 'year', 'reappointment_rate', 'total_appointments', 'reappointment_count']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        raise ValueError(f"Required columns missing: {missing_columns}")
+    
+    print("✓ All required columns present")
+    
+    # Check data quality
+    print(f"  Dataset shape: {df.shape}")
+    print(f"  Years covered: {df['year'].min()} - {df['year'].max()}")
+    print(f"  Organizations: {df['org'].nunique()}")
+    print(f"  Rate range: {df['reappointment_rate'].min():.3f} - {df['reappointment_rate'].max():.3f}")
+    
+    # Check for null values
+    null_counts = df[required_columns].isnull().sum()
+    if null_counts.any():
+        print(f"  Null values found: {null_counts[null_counts > 0].to_dict()}")
+    else:
+        print("  ✓ No null values in required columns")
+    
+    return True
+
+def apply_significance_filters(df):
+    """Apply filters to ensure statistically significant results."""
+    print("\nApplying significance filters...")
+    
+    original_size = len(df)
+    
+    # Filter 1: Minimum appointment threshold for meaningful rates
+    min_appointments = 3  # At least 3 appointments for a meaningful rate
+    df_filtered = df[df['total_appointments'] >= min_appointments].copy()
+    filter1_removed = original_size - len(df_filtered)
+    
+    # Filter 2: Remove rates of exactly 0 (no reappointments) for max identification
+    # We want to find the highest positive reappointment rates
+    df_positive = df_filtered[df_filtered['reappointment_rate'] > 0].copy()
+    filter2_removed = len(df_filtered) - len(df_positive)
+    
+    print(f"  Original records: {original_size}")
+    print(f"  After min appointments filter (>= {min_appointments}): {len(df_filtered)} (-{filter1_removed})")
+    print(f"  After positive rates filter (> 0): {len(df_positive)} (-{filter2_removed})")
+    
+    # Check if we have data for all years
+    original_years = set(df['year'].unique())
+    filtered_years = set(df_positive['year'].unique())
+    missing_years = original_years - filtered_years
+    
+    if missing_years:
+        print(f"  WARNING: Years with no qualifying organizations: {sorted(missing_years)}")
+        print("  These years will be excluded from maximum identification")
+    
+    return df_positive, df_filtered
+
+def identify_yearly_maximum_rates(df):
+    """Identify the organization with the highest reappointment rate for each year."""
+    print("\nIdentifying yearly maximum reappointment rates...")
+    
+    yearly_maxes = []
+    
+    for year in sorted(df['year'].unique()):
+        year_data = df[df['year'] == year]
+        
+        if len(year_data) == 0:
+            print(f"  {year}: No qualifying data")
+            continue
+        
+        # Find the organization with the highest rate
+        max_idx = year_data['reappointment_rate'].idxmax()
+        max_org = year_data.loc[max_idx]
+        
+        # Handle ties by collecting all organizations with the maximum rate
+        max_rate = max_org['reappointment_rate']
+        tied_orgs = year_data[year_data['reappointment_rate'] == max_rate]
+        
+        if len(tied_orgs) > 1:
+            print(f"  {year}: TIE - {len(tied_orgs)} organizations with {max_rate*100:.1f}% rate")
+            # For ties, select the one with more appointments (more robust result)
+            max_idx = tied_orgs['total_appointments'].idxmax()
+            max_org = tied_orgs.loc[max_idx]
+        
+        yearly_maxes.append({
+            'year': year,
+            'org': max_org['org'],
+            'reappointment_rate': max_org['reappointment_rate'],
+            'reappointment_rate_percent': max_org['reappointment_rate'] * 100,
+            'total_appointments': max_org['total_appointments'],
+            'reappointment_count': max_org['reappointment_count'],
+            'tied_organizations': len(tied_orgs)
+        })
+        
+        print(f"  {year}: {max_org['org']} - {max_rate*100:.1f}% "
+              f"({int(max_org['reappointment_count'])}/{int(max_org['total_appointments'])})")
+    
+    df_yearly_maxes = pd.DataFrame(yearly_maxes)
+    print(f"\nIdentified maximum rates for {len(df_yearly_maxes)} years")
+    
+    return df_yearly_maxes
+
+def analyze_yearly_maximum_patterns(df_maxes):
+    """Analyze patterns in the yearly maximum reappointment rates."""
+    print("\nAnalyzing yearly maximum patterns...")
+    
+    if len(df_maxes) == 0:
+        print("  No data to analyze")
+        return None, None
+    
+    # Overall statistics
+    mean_max_rate = df_maxes['reappointment_rate'].mean()
+    median_max_rate = df_maxes['reappointment_rate'].median()
+    min_max_rate = df_maxes['reappointment_rate'].min()
+    max_max_rate = df_maxes['reappointment_rate'].max()
+    
+    print(f"  Maximum rate statistics:")
+    print(f"    Mean: {mean_max_rate*100:.1f}%")
+    print(f"    Median: {median_max_rate*100:.1f}%")
+    print(f"    Range: {min_max_rate*100:.1f}% - {max_max_rate*100:.1f}%")
+    
+    # Trend analysis
+    if len(df_maxes) > 1:
+        years = df_maxes['year'].values
+        rates = df_maxes['reappointment_rate'].values
+        
+        # Calculate correlation with time
+        correlation = np.corrcoef(years, rates)[0, 1]
+        
+        print(f"\n  Trend analysis:")
+        print(f"    Correlation with time: {correlation:.3f}")
+        
+        if correlation > 0.3:
+            trend_description = "Strong increasing trend"
+        elif correlation > 0.1:
+            trend_description = "Moderate increasing trend"
+        elif correlation > -0.1:
+            trend_description = "No clear trend"
+        elif correlation > -0.3:
+            trend_description = "Moderate decreasing trend"
+        else:
+            trend_description = "Strong decreasing trend"
+        
+        print(f"    Trend: {trend_description}")
+        
+        # Year-over-year changes
+        df_maxes_sorted = df_maxes.sort_values('year')
+        df_maxes_sorted['rate_change'] = df_maxes_sorted['reappointment_rate'].diff()
+        df_maxes_sorted['rate_change_percent'] = (df_maxes_sorted['rate_change'] / df_maxes_sorted['reappointment_rate'].shift(1) * 100).round(1)
+        
+        print(f"\n  Year-over-year changes:")
+        for _, row in df_maxes_sorted[1:].iterrows():  # Skip first year
+            year = int(row['year'])
+            change = row['rate_change'] * 100
+            change_pct = row['rate_change_percent']
+            direction = "↑" if change > 0 else "↓" if change < 0 else "→"
+            print(f"    {year}: {direction} {change:+.1f}pp ({change_pct:+.1f}%)")
+    
+    # Organization frequency analysis
+    print(f"\n  Organizations appearing as yearly maximum:")
+    org_counts = df_maxes['org'].value_counts()
+    for org, count in org_counts.items():
+        years_list = sorted(df_maxes[df_maxes['org'] == org]['year'].values)
+        print(f"    {org}: {count} years ({years_list})")
+    
+    # Identify most consistent high performers
+    if len(org_counts) > 0:
+        most_frequent_org = org_counts.index[0]
+        most_frequent_count = org_counts.iloc[0]
+        print(f"\n  Most frequent maximum performer: {most_frequent_org} ({most_frequent_count} years)")
+    
+    return df_maxes_sorted if len(df_maxes) > 1 else df_maxes, org_counts
+
+def create_visualization(df_maxes, output_dir):
+    """Create visualizations of yearly maximum reappointment rates."""
+    print("\nCreating visualizations...")
+    
+    if len(df_maxes) == 0:
+        print("  No data to visualize")
+        return
+    
+    # Set up the plot
+    plt.style.use('default')
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    fig.suptitle('New Brunswick Government: Yearly Maximum Reappointment Rates\n(2013-2024)', 
+                 fontsize=16, fontweight='bold', y=0.98)
+    
+    # Sort data by year for plotting
+    df_plot = df_maxes.sort_values('year')
+    
+    # Plot 1: Line plot of maximum rates over time
+    ax1.plot(df_plot['year'], df_plot['reappointment_rate_percent'], 
+             marker='o', linewidth=2, markersize=8, color='#2E86AB', markerfacecolor='#A23B72')
+    
+    ax1.set_title('Maximum Reappointment Rate by Year', fontsize=14, fontweight='bold', pad=20)
+    ax1.set_xlabel('Year', fontsize=12)
+    ax1.set_ylabel('Reappointment Rate (%)', fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0, max(df_plot['reappointment_rate_percent']) * 1.1)
+    
+    # Add value labels on points
+    for _, row in df_plot.iterrows():
+        ax1.annotate(f"{row['reappointment_rate_percent']:.1f}%",
+                    (row['year'], row['reappointment_rate_percent']),
+                    textcoords="offset points", xytext=(0,10), ha='center',
+                    fontsize=9, fontweight='bold')
+    
+    # Add trend line if enough data points
+    if len(df_plot) > 2:
+        z = np.polyfit(df_plot['year'], df_plot['reappointment_rate_percent'], 1)
+        p = np.poly1d(z)
+        ax1.plot(df_plot['year'], p(df_plot['year']), "--", alpha=0.8, color='red', linewidth=1.5)
+        
+        # Add trend information
+        slope = z[0]
+        trend_text = f"Trend: {slope:+.2f}% per year"
+        ax1.text(0.02, 0.98, trend_text, transform=ax1.transAxes, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
+                verticalalignment='top', fontsize=10)
+    
+    # Set x-axis to show all years
+    ax1.set_xlim(df_plot['year'].min() - 0.5, df_plot['year'].max() + 0.5)
+    ax1.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    
+    # Plot 2: Bar chart showing organization frequency
+    org_counts = df_maxes['org'].value_counts()
+    colors = plt.cm.Set3(np.linspace(0, 1, len(org_counts)))
+    
+    bars = ax2.bar(range(len(org_counts)), org_counts.values, color=colors)
+    ax2.set_title('Organizations by Number of Years as Maximum Performer', fontsize=14, fontweight='bold', pad=20)
+    ax2.set_xlabel('Organizations', fontsize=12)
+    ax2.set_ylabel('Number of Years', fontsize=12)
+    ax2.set_xticks(range(len(org_counts)))
+    ax2.set_xticklabels([org[:30] + '...' if len(org) > 30 else org for org in org_counts.index], 
+                       rotation=45, ha='right')
+    ax2.grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, org_counts.values):
+        height = bar.get_height()
+        ax2.annotate(f'{value}',
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),  # 3 points vertical offset
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontweight='bold')
+    
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.93, bottom=0.15)
+    
+    # Save the plot
+    output_file = output_dir / "step7_yearly_max_reappointment_rates.png"
+    plt.savefig(output_file, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"  ✓ Saved visualization to: {output_file}")
+    
+    # Close the plot to free memory
+    plt.close()
+
+def create_detailed_analysis_table(df_maxes, df_all_rates):
+    """Create a detailed analysis table with additional context."""
+    print("\nCreating detailed analysis table...")
+    
+    detailed_analysis = []
+    
+    for _, row in df_maxes.iterrows():
+        year = row['year']
+        org = row['org']
+        max_rate = row['reappointment_rate']
+        
+        # Get additional context for this year
+        year_data = df_all_rates[df_all_rates['year'] == year]
+        
+        # Calculate statistics for this year
+        year_mean = year_data['reappointment_rate'].mean()
+        year_median = year_data['reappointment_rate'].median()
+        year_std = year_data['reappointment_rate'].std()
+        
+        # Find how many standard deviations above mean this max is
+        z_score = (max_rate - year_mean) / year_std if year_std > 0 else 0
+        
+        # Count how many organizations had positive rates
+        orgs_with_reappointments = (year_data['reappointment_rate'] > 0).sum()
+        total_orgs = len(year_data)
+        
+        detailed_analysis.append({
+            'year': year,
+            'max_org': org,
+            'max_rate_percent': max_rate * 100,
+            'appointments': row['total_appointments'],
+            'reappointments': row['reappointment_count'],
+            'year_mean_percent': year_mean * 100,
+            'year_median_percent': year_median * 100,
+            'z_score': z_score,
+            'orgs_with_reappointments': orgs_with_reappointments,
+            'total_orgs': total_orgs,
+            'percentile_rank': ((year_data['reappointment_rate'] < max_rate).sum() / len(year_data)) * 100
+        })
+    
+    df_detailed = pd.DataFrame(detailed_analysis)
+    
+    print(f"  Analysis table created with {len(df_detailed)} entries")
+    print(f"  Average z-score (how exceptional the maximums are): {df_detailed['z_score'].mean():.2f}")
+    
+    return df_detailed
+
+def save_yearly_maxes(df_maxes, output_dir):
+    """Save the yearly maximum rates dataset."""
+    output_file = output_dir / "step7_yearly_max_rates.csv"
+    
+    print(f"\nSaving yearly maximum rates to: {output_file}")
+    
+    try:
+        df_maxes.to_csv(output_file, index=False, encoding='utf-8')
+        
+        # Verify the saved file
+        if output_file.exists():
+            saved_df = pd.read_csv(output_file)
+            if len(saved_df) == len(df_maxes):
+                print(f"✓ Successfully saved {len(saved_df)} yearly maximum records")
+                print(f"  Columns: {list(saved_df.columns)}")
+                print(f"  File size: {output_file.stat().st_size / 1024:.1f} KB")
+            else:
+                print(f"ERROR: Saved file has {len(saved_df)} rows, expected {len(df_maxes)}")
+        else:
+            print(f"ERROR: Failed to save file to {output_file}")
+            
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        raise
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("STEP 7: IDENTIFY YEARLY MAXIMUM REAPPOINTMENT RATES")
+    print("="*60)
+    print("New Brunswick Government Appointments Analysis")
+    print("Finding the organization with highest reappointment rate each year")
+    print("="*60)
+    
+    try:
+        # Setup directories
+        output_dir = setup_directories()
+        print(f"Working directory: {output_dir}")
+        
+        # Load Step 6 data
+        df = load_step6_data(output_dir)
+        
+        # Validate input data
+        validate_input_data(df)
+        
+        # Apply significance filters
+        df_positive, df_filtered = apply_significance_filters(df)
+        
+        # Identify yearly maximum rates
+        df_yearly_maxes = identify_yearly_maximum_rates(df_positive)
+        
+        if len(df_yearly_maxes) == 0:
+            print("ERROR: No yearly maximums could be identified!")
+            sys.exit(1)
+        
+        # Analyze patterns in yearly maximums
+        df_maxes_with_changes, org_frequency = analyze_yearly_maximum_patterns(df_yearly_maxes)
+        
+        # Create detailed analysis table
+        df_detailed = create_detailed_analysis_table(df_yearly_maxes, df_filtered)
+        
+        # Create visualization
+        create_visualization(df_yearly_maxes, output_dir)
+        
+        # Save yearly maximums
+        save_yearly_maxes(df_yearly_maxes, output_dir)
+        
+        print("\n" + "="*60)
+        print("STEP 7 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Identified yearly maximum rates for {len(df_yearly_maxes)} years")
+        
+        if len(df_yearly_maxes) > 0:
+            overall_mean = df_yearly_maxes['reappointment_rate'].mean()
+            print(f"Average maximum rate: {overall_mean*100:.1f}%")
+            
+            if org_frequency is not None and len(org_frequency) > 0:
+                top_org = org_frequency.index[0]
+                top_count = org_frequency.iloc[0]
+                print(f"Most frequent maximum performer: {top_org} ({top_count} years)")
+        
+        print("Visualization saved as: step7_yearly_max_reappointment_rates.png")
+        
+    except Exception as e:
+        print(f"\nERROR in Step 7: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

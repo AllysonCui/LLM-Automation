@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis: 
+"reappointed", "name", "position", "org", and "year" (from source_year)
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to extract key columns from the combined dataset"""
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    output_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    
+    # Define input and output files
+    input_file = input_path / "step1_combined_appointments.csv"
+    output_file = output_path / "step2_key_columns_data.csv"
+    
+    print("=== Step 2: Extract Key Columns ===")
+    print(f"Input file: {input_file}")
+    print(f"Output file: {output_file}")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run step1_combine_appointments.py first.")
+        sys.exit(1)
+    
+    # Read the combined dataset
+    try:
+        print("\nReading combined dataset...")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✅ Successfully loaded data: {len(df)} rows, {len(df.columns)} columns")
+    except Exception as e:
+        print(f"❌ Error reading input file: {str(e)}")
+        sys.exit(1)
+    
+    # Print available columns
+    print("\n=== Available Columns ===")
+    for i, col in enumerate(df.columns):
+        print(f"  {i+1}. {col}")
+    
+    # Define the key columns we need
+    # Note: 'year' will come from 'source_year' column added in step 1
+    required_columns = {
+        'reappointed': 'reappointed',
+        'name': 'name',
+        'position': 'position',
+        'org': 'org',  # May also be 'organization' in some files
+        'year': 'source_year'  # This was added in step 1
+    }
+    
+    # Check for column availability and handle variations
+    print("\n=== Checking for Required Columns ===")
+    columns_to_extract = {}
+    missing_columns = []
+    
+    for target_col, source_col in required_columns.items():
+        if source_col in df.columns:
+            columns_to_extract[target_col] = source_col
+            print(f"✅ Found '{source_col}' for '{target_col}'")
+        else:
+            # Handle common variations
+            if target_col == 'org' and 'organization' in df.columns:
+                columns_to_extract[target_col] = 'organization'
+                print(f"✅ Found 'organization' for 'org'")
+            elif target_col == 'year' and 'year' in df.columns:
+                columns_to_extract[target_col] = 'year'
+                print(f"✅ Found 'year' column directly")
+            else:
+                print(f"❌ Missing column for '{target_col}' (looking for '{source_col}')")
+                missing_columns.append(target_col)
+    
+    # Check if we have critical columns
+    critical_missing = [col for col in ['name', 'reappointed'] if col in missing_columns]
+    if critical_missing:
+        print(f"\n❌ ERROR: Critical columns missing: {', '.join(critical_missing)}")
+        print("Cannot proceed without these columns.")
+        sys.exit(1)
+    
+    # Create the extracted dataset
+    print("\n=== Extracting Key Columns ===")
+    extracted_df = pd.DataFrame()
+    
+    for target_col, source_col in columns_to_extract.items():
+        extracted_df[target_col] = df[source_col]
+        non_null = extracted_df[target_col].notna().sum()
+        print(f"  - {target_col}: {non_null} non-null values ({non_null/len(df)*100:.1f}%)")
+    
+    # Handle missing columns with empty values
+    for col in missing_columns:
+        if col not in critical_missing:
+            print(f"  - {col}: Creating empty column (not found in source)")
+            extracted_df[col] = np.nan
+    
+    # Ensure column order matches requirement
+    column_order = ['reappointed', 'name', 'position', 'org', 'year']
+    existing_columns = [col for col in column_order if col in extracted_df.columns]
+    extracted_df = extracted_df[existing_columns]
+    
+    print(f"\n✅ Extracted {len(extracted_df.columns)} columns")
+    print(f"Column order: {', '.join(extracted_df.columns)}")
+    
+    # Data quality checks
+    print("\n=== Data Quality Checks ===")
+    
+    # Check reappointed column
+    if 'reappointed' in extracted_df.columns:
+        print("\nReappointed column:")
+        print(f"  - Data type: {extracted_df['reappointed'].dtype}")
+        
+        # Ensure boolean type
+        if extracted_df['reappointed'].dtype != bool:
+            print("  - Converting to boolean...")
+            # Try to convert common representations
+            extracted_df['reappointed'] = extracted_df['reappointed'].map({
+                True: True, 'True': True, 'true': True, 'TRUE': True, 
+                1: True, '1': True, 'Yes': True, 'yes': True, 'YES': True,
+                False: False, 'False': False, 'false': False, 'FALSE': False,
+                0: False, '0': False, 'No': False, 'no': False, 'NO': False
+            })
+        
+        reappointed_stats = extracted_df['reappointed'].value_counts()
+        print(f"  - True (reappointed): {reappointed_stats.get(True, 0)}")
+        print(f"  - False (not reappointed): {reappointed_stats.get(False, 0)}")
+        print(f"  - Missing/Invalid: {extracted_df['reappointed'].isna().sum()}")
+    
+    # Check name column
+    if 'name' in extracted_df.columns:
+        print("\nName column:")
+        print(f"  - Non-null entries: {extracted_df['name'].notna().sum()}")
+        print(f"  - Unique names: {extracted_df['name'].nunique()}")
+        print(f"  - Empty strings: {(extracted_df['name'] == '').sum()}")
+        
+        # Clean up names (remove extra spaces)
+        extracted_df['name'] = extracted_df['name'].str.strip()
+        extracted_df.loc[extracted_df['name'] == '', 'name'] = np.nan
+    
+    # Check year column
+    if 'year' in extracted_df.columns:
+        print("\nYear column:")
+        print(f"  - Year range: {extracted_df['year'].min()} to {extracted_df['year'].max()}")
+        print(f"  - Missing years: {extracted_df['year'].isna().sum()}")
+        year_counts = extracted_df['year'].value_counts().sort_index()
+        print("  - Records per year:")
+        for year, count in year_counts.items():
+            print(f"    - {int(year)}: {count} records")
+    
+    # Check org column
+    if 'org' in extracted_df.columns:
+        print("\nOrganization column:")
+        print(f"  - Non-null entries: {extracted_df['org'].notna().sum()}")
+        print(f"  - Unique organizations: {extracted_df['org'].nunique()}")
+        
+        # Show top organizations
+        top_orgs = extracted_df['org'].value_counts().head(5)
+        if not top_orgs.empty:
+            print("  - Top 5 organizations:")
+            for org, count in top_orgs.items():
+                print(f"    - {org}: {count} appointments")
+    
+    # Check position column
+    if 'position' in extracted_df.columns:
+        print("\nPosition column:")
+        print(f"  - Non-null entries: {extracted_df['position'].notna().sum()}")
+        print(f"  - Unique positions: {extracted_df['position'].nunique()}")
+    
+    # Summary statistics
+    print("\n=== Summary Statistics ===")
+    print(f"Total records: {len(extracted_df)}")
+    print(f"Complete records (no missing values): {extracted_df.dropna().shape[0]}")
+    print(f"Records with at least name and reappointed: {extracted_df[['name', 'reappointed']].dropna().shape[0]}")
+    
+    # Missing value analysis
+    print("\n=== Missing Value Analysis ===")
+    missing_counts = extracted_df.isna().sum()
+    missing_pct = (missing_counts / len(extracted_df) * 100).round(2)
+    for col in extracted_df.columns:
+        print(f"  - {col}: {missing_counts[col]} missing ({missing_pct[col]}%)")
+    
+    # Save the extracted dataset
+    print(f"\n=== Saving Extracted Dataset ===")
+    
+    try:
+        extracted_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✅ Successfully saved extracted dataset")
+        print(f"  - Output file: {output_file}")
+        print(f"  - File size: {output_file.stat().st_size / 1024:.2f} KB")
+        print(f"  - Total rows: {len(extracted_df)}")
+        print(f"  - Total columns: {len(extracted_df.columns)}")
+    except Exception as e:
+        print(f"❌ Error saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Display sample of the extracted data
+    print("\n=== Sample of Extracted Data (first 10 rows) ===")
+    print(extracted_df.head(10))
+    
+    # Display sample of reappointed records
+    if 'reappointed' in extracted_df.columns:
+        reappointed_sample = extracted_df[extracted_df['reappointed'] == True].head(5)
+        if not reappointed_sample.empty:
+            print("\n=== Sample of Reappointed Records ===")
+            print(reappointed_sample)
+    
+    print("\n✅ Step 2 completed successfully!")
+    print(f"Next step: Run step 3 to mark repeat appointments")
+
+if __name__ == "__main__":
+    main()

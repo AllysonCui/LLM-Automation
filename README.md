@@ -21,8 +21,8 @@ LLMs answer the question by generating scripts in numerical order, all scripts e
 - `step3_repeats_marked.py`  
   Marks `reappointed = True` for repeated `name`-`position`-`org` combinations.
 
-- `step4_employee_counts.py`  
-  Counts total employees per organization per year.
+- `step4_appointment_counts.py`  
+  Counts total appointments per organization per year.
 
 - `step5_reappointment_counts.py`  
   Counts reappointments per organization per year.
@@ -77,4 +77,3 @@ LLMs answer the question by generating scripts in numerical order, all scripts e
       * `version3/`
     * `human/` — Contains correct answer verified manually
   * `summary/` — Summary analysis over correctness of intermediate results
-

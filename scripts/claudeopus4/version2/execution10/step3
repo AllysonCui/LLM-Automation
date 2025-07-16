@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script marks "reappointed" as true for repeated "name"-"position"-"org" combinations
+except for the first appearance.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to mark repeated appointments based on name-position-org combinations."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution10/analysis_data")
+    output_dir = input_dir  # Same directory for output
+    
+    # Input and output files
+    input_file = input_dir / "step2_key_columns_data.csv"
+    output_file = output_dir / "step3_repeats_marked.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 3: MARKING REPEATED APPOINTMENTS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run Step 2 first to extract key columns.")
+        sys.exit(1)
+    
+    try:
+        # Load the data
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows and {len(df.columns)} columns")
+        
+        # Verify required columns exist
+        required_columns = ['name', 'position', 'org', 'year']
+        missing_required = [col for col in required_columns if col not in df.columns]
+        
+        if missing_required:
+            print(f"\n❌ ERROR: Required columns missing: {missing_required}")
+            print(f"Available columns: {list(df.columns)}")
+            sys.exit(1)
+        
+        # Store original reappointed column for comparison
+        original_reappointed = None
+        if 'reappointed' in df.columns:
+            original_reappointed = df['reappointed'].copy()
+            print(f"\n✓ Original 'reappointed' column found and preserved for comparison")
+        
+        # Sort by year to ensure chronological order
+        print("\nSorting data by year to ensure chronological order...")
+        df = df.sort_values('year', na_position='last').reset_index(drop=True)
+        
+        # Handle missing values in key columns
+        print("\nHandling missing values in key columns...")
+        for col in ['name', 'position', 'org']:
+            missing_count = df[col].isna().sum()
+            if missing_count > 0:
+                print(f"  - {col}: {missing_count} missing values (will be filled with 'Unknown')")
+                df[col] = df[col].fillna(f'Unknown_{col}')
+        
+        # Create composite key for tracking unique appointments
+        print("\nCreating composite key from name-position-org...")
+        df['appointment_key'] = df['name'] + '|' + df['position'] + '|' + df['org']
+        
+        # Initialize new reappointed column
+        df['reappointed_calculated'] = False
+        
+        # Track first appearances
+        first_appearances = {}
+        repeat_count = 0
+        
+        print("\nProcessing appointments chronologically...")
+        for idx, row in df.iterrows():
+            key = row['appointment_key']
+            year = row['year']
+            
+            if key in first_appearances:
+                # This is a repeat appointment
+                df.at[idx, 'reappointed_calculated'] = True
+                repeat_count += 1
+                
+                # Track the years for this appointment
+                if key not in first_appearances:
+                    first_appearances[key] = {'first_year': year, 'appearances': 1}
+                else:
+                    first_appearances[key]['appearances'] += 1
+            else:
+                # This is the first appearance
+                first_appearances[key] = {'first_year': year, 'appearances': 1}
+            
+            # Progress indicator every 10000 rows
+            if (idx + 1) % 10000 == 0:
+                print(f"  ✓ Processed {idx + 1} rows...")
+        
+        print(f"\n✓ Processing complete!")
+        print(f"  - Total unique appointment combinations: {len(first_appearances)}")
+        print(f"  - Total repeat appointments marked: {repeat_count}")
+        
+        # Analysis of repeat appointments
+        print("\nAnalyzing repeat appointment patterns...")
+        
+        # Count appointments by number of appearances
+        appearance_counts = {}
+        for key, info in first_appearances.items():
+            count = info['appearances']
+            appearance_counts[count] = appearance_counts.get(count, 0) + 1
+        
+        print("\nAppointment frequency distribution:")
+        for appearances, count in sorted(appearance_counts.items()):
+            if appearances == 1:
+                print(f"  - Appeared once: {count} unique appointments")
+            else:
+                print(f"  - Appeared {appearances} times: {count} unique appointments")
+        
+        # Compare with original reappointed column if it exists
+        if original_reappointed is not None:
+            print("\nComparing calculated values with original 'reappointed' column...")
+            
+            # Create comparison dataframe
+            comparison_df = pd.DataFrame({
+                'original': original_reappointed,
+                'calculated': df['reappointed_calculated']
+            })
+            
+            # Handle NaN values for comparison
+            comparison_df['original_bool'] = comparison_df['original'].fillna(False).astype(bool)
+            
+            # Calculate agreement
+            agreement = (comparison_df['original_bool'] == comparison_df['calculated']).sum()
+            disagreement = len(comparison_df) - agreement
+            agreement_pct = (agreement / len(comparison_df)) * 100
+            
+            print(f"\n  Agreement analysis:")
+            print(f"    - Matching values: {agreement} ({agreement_pct:.1f}%)")
+            print(f"    - Differing values: {disagreement} ({100-agreement_pct:.1f}%)")
+            
+            # Detailed breakdown
+            crosstab = pd.crosstab(
+                comparison_df['original'].fillna('NaN'),
+                comparison_df['calculated'],
+                margins=True
+            )
+            print(f"\n  Detailed comparison (Original vs Calculated):")
+            print(crosstab)
+        
+        # Year-wise analysis
+        print("\nYear-wise reappointment analysis:")
+        yearly_stats = df.groupby('year').agg({
+            'reappointed_calculated': ['sum', 'count', 'mean']
+        }).round(3)
+        yearly_stats.columns = ['reappointments', 'total', 'rate']
+        
+        print(yearly_stats)
+        
+        # Top organizations with most reappointments
+        print("\nTop 10 organizations by reappointment count:")
+        org_reappointments = df[df['reappointed_calculated']].groupby('org').size().sort_values(ascending=False).head(10)
+        for org, count in org_reappointments.items():
+            print(f"  - {org}: {count} reappointments")
+        
+        # Prepare final dataframe
+        print("\nPreparing final dataset...")
+        
+        # Replace original reappointed column with calculated values
+        df['reappointed'] = df['reappointed_calculated']
+        
+        # Drop helper columns
+        df = df.drop(['appointment_key', 'reappointed_calculated'], axis=1)
+        
+        # Ensure we maintain the original column order
+        column_order = ['reappointed', 'name', 'position', 'org', 'year']
+        df = df[column_order]
+        
+        # Save the results
+        print(f"\nSaving marked data to: {output_file}")
+        df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved {len(df)} rows")
+        
+        # Create a summary statistics file
+        summary_file = output_dir / "step3_summary_stats.txt"
+        print(f"\nCreating summary statistics file: {summary_file}")
+        
+        with open(summary_file, 'w') as f:
+            f.write("STEP 3: REPEATED APPOINTMENTS MARKING SUMMARY\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"Total appointments processed: {len(df)}\n")
+            f.write(f"Unique appointment combinations: {len(first_appearances)}\n")
+            f.write(f"Total reappointments marked: {repeat_count}\n")
+            f.write(f"Reappointment rate: {(repeat_count / len(df)) * 100:.2f}%\n\n")
+            
+            f.write("Appointment frequency distribution:\n")
+            for appearances, count in sorted(appearance_counts.items()):
+                f.write(f"  - Appeared {appearances} time(s): {count} unique appointments\n")
+            
+            if original_reappointed is not None:
+                f.write(f"\nComparison with original data:\n")
+                f.write(f"  - Agreement rate: {agreement_pct:.1f}%\n")
+                f.write(f"  - Disagreement count: {disagreement}\n")
+        
+        print("✓ Summary statistics saved")
+        
+        # Final summary
+        print("\n" + "="*60)
+        print("SUMMARY")
+        print("="*60)
+        print(f"Input file: {input_file}")
+        print(f"Output file: {output_file}")
+        print(f"Summary stats: {summary_file}")
+        print(f"Total appointments: {len(df)}")
+        print(f"Reappointments marked: {repeat_count} ({(repeat_count/len(df)*100):.1f}%)")
+        print(f"Unique appointment combinations: {len(first_appearances)}")
+        print("\n✓ Step 3 completed successfully!")
+        
+        return df
+        
+    except Exception as e:
+        print(f"\n❌ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Run the main function
+    marked_data = main()

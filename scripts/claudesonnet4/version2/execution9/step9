@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""
+Step 9: Run a linear regression on the annual reappointment proportions 
+to assess trend direction and significance
+New Brunswick Government Appointments Analysis
+
+This script performs statistical analysis to determine if there is a 
+statistically significant trend in reappointment proportions over time.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+from scipy.stats import pearsonr
+from pathlib import Path
+import sys
+from typing import List, Dict, Any, Tuple
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define file paths
+INPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+OUTPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+INPUT_FILE = "step8_annual_proportions.csv"
+OUTPUT_FILE = "step9_regression_results.txt"
+
+def setup_directories():
+    """Create output directories if they don't exist"""
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info("Created/verified output directory: " + str(OUTPUT_PATH))
+
+def validate_input_file() -> bool:
+    """Check if the input file exists and is readable"""
+    input_file_path = INPUT_PATH / INPUT_FILE
+    if not input_file_path.exists():
+        logger.error("Input file not found: " + str(input_file_path))
+        return False
+    if not input_file_path.is_file():
+        logger.error("Path is not a file: " + str(input_file_path))
+        return False
+    return True
+
+def load_annual_proportions() -> pd.DataFrame:
+    """
+    Load the annual reappointment proportions dataset from Step 8
+    
+    Returns:
+        DataFrame with annual proportions data
+    """
+    input_file_path = INPUT_PATH / INPUT_FILE
+    
+    try:
+        logger.info("Loading annual proportions dataset from: " + str(input_file_path))
+        df = pd.read_csv(input_file_path, encoding='utf-8')
+        
+        logger.info("Loaded annual proportions: " + str(len(df)) + " records")
+        logger.info("Columns: " + str(list(df.columns)))
+        
+        # Validate required columns
+        required_columns = ['year', 'reappointment_proportion']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError("Missing required columns: " + str(missing_columns))
+        
+        return df
+    
+    except Exception as e:
+        logger.error("Error loading annual proportions dataset: " + str(e))
+        raise
+
+def prepare_regression_data(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Prepare data for regression analysis
+    
+    Args:
+        df: DataFrame with annual proportions
+    
+    Returns:
+        Tuple of (years, proportions) as numpy arrays
+    """
+    logger.info("Preparing data for regression analysis")
+    
+    # Sort by year to ensure proper time series
+    df_sorted = df.sort_values('year').copy()
+    
+    # Remove any rows with missing data
+    df_clean = df_sorted.dropna(subset=['year', 'reappointment_proportion'])
+    
+    if len(df_clean) == 0:
+        raise ValueError("No valid data for regression analysis")
+    
+    # Extract years and proportions
+    years = df_clean['year'].values
+    proportions = df_clean['reappointment_proportion'].values
+    
+    logger.info("Regression data prepared:")
+    logger.info("  - Years: " + str(years.min()) + " to " + str(years.max()))
+    logger.info("  - Data points: " + str(len(years)))
+    logger.info("  - Proportion range: " + str(round(proportions.min(), 2)) + "% to " + str(round(proportions.max(), 2)) + "%")
+    
+    return years, proportions
+
+def perform_linear_regression(years: np.ndarray, proportions: np.ndarray) -> Dict[str, Any]:
+    """
+    Perform linear regression analysis on reappointment proportions over time
+    
+    Args:
+        years: Array of years
+        proportions: Array of reappointment proportions
+    
+    Returns:
+        Dictionary with regression results
+    """
+    logger.info("Performing linear regression analysis")
+    
+    # Perform linear regression using scipy.stats
+    slope, intercept, r_value, p_value, std_err = stats.linregress(years, proportions)
+    
+    # Calculate additional statistics
+    n = len(years)
+    degrees_freedom = n - 2
+    
+    # Calculate predicted values and residuals
+    predicted = slope * years + intercept
+    residuals = proportions - predicted
+    
+    # Calculate R-squared
+    r_squared = r_value ** 2
+    
+    # Calculate confidence intervals for slope (95%)
+    t_critical = stats.t.ppf(0.975, degrees_freedom)  # Two-tailed 95% CI
+    slope_ci_lower = slope - t_critical * std_err
+    slope_ci_upper = slope + t_critical * std_err
+    
+    # Calculate residual statistics
+    residual_mean = np.mean(residuals)
+    residual_std = np.std(residuals, ddof=1)
+    
+    # Mean squared error
+    mse = np.mean(residuals ** 2)
+    rmse = np.sqrt(mse)
+    
+    # Calculate predicted values at endpoints for interpretation
+    first_year = years.min()
+    last_year = years.max()
+    first_year_predicted = slope * first_year + intercept
+    last_year_predicted = slope * last_year + intercept
+    total_change = last_year_predicted - first_year_predicted
+    
+    # Durbin-Watson test for autocorrelation (approximate)
+    if n > 2:
+        dw_stat = np.sum(np.diff(residuals) ** 2) / np.sum(residuals ** 2)
+    else:
+        dw_stat = None
+    
+    regression_results = {
+        'slope': slope,
+        'intercept': intercept,
+        'r_value': r_value,
+        'r_squared': r_squared,
+        'p_value': p_value,
+        'standard_error': std_err,
+        'n_observations': n,
+        'degrees_freedom': degrees_freedom,
+        'slope_ci_lower': slope_ci_lower,
+        'slope_ci_upper': slope_ci_upper,
+        'predicted_values': predicted,
+        'residuals': residuals,
+        'residual_mean': residual_mean,
+        'residual_std': residual_std,
+        'mse': mse,
+        'rmse': rmse,
+        'first_year': first_year,
+        'last_year': last_year,
+        'first_year_predicted': first_year_predicted,
+        'last_year_predicted': last_year_predicted,
+        'total_predicted_change': total_change,
+        'annual_change_rate': slope,
+        'durbin_watson': dw_stat
+    }
+    
+    logger.info("Linear regression completed:")
+    logger.info("  - Slope: " + str(round(slope, 4)) + " pp/year")
+    logger.info("  - R-squared: " + str(round(r_squared, 4)))
+    logger.info("  - P-value: " + str(round(p_value, 6)))
+    logger.info("  - Standard error: " + str(round(std_err, 4)))
+    
+    return regression_results
+
+def interpret_regression_results(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Interpret regression results for practical significance
+    
+    Args:
+        results: Dictionary with regression results
+    
+    Returns:
+        Dictionary with interpretation
+    """
+    logger.info("Interpreting regression results")
+    
+    interpretation = {
+        'n_years': int(results['last_year'] - results['first_year'] + 1),
+        'time_span': str(int(results['first_year'])) + "-" + str(int(results['last_year']))
+    }
+    
+    # Trend direction
+    if abs(results['slope']) < 0.01:
+        trend_direction = 'stable'
+        trend_strength = 'no meaningful'
+    elif results['slope'] > 0:
+        trend_direction = 'increasing'
+        if results['slope'] > 1.0:
+            trend_strength = 'strong'
+        elif results['slope'] > 0.5:
+            trend_strength = 'moderate'
+        else:
+            trend_strength = 'weak'
+    else:
+        trend_direction = 'decreasing'
+        if results['slope'] < -1.0:
+            trend_strength = 'strong'
+        elif results['slope'] < -0.5:
+            trend_strength = 'moderate'
+        else:
+            trend_strength = 'weak'
+    
+    interpretation['trend_direction'] = trend_direction
+    interpretation['trend_strength'] = trend_strength
+    
+    # Statistical significance
+    alpha_levels = [0.001, 0.01, 0.05, 0.10]
+    significance_level = None
+    
+    for alpha in alpha_levels:
+        if results['p_value'] < alpha:
+            significance_level = alpha
+            break
+    
+    if significance_level is not None:
+        interpretation['statistically_significant'] = True
+        interpretation['significance_level'] = significance_level
+        if significance_level <= 0.001:
+            interpretation['significance_description'] = 'highly significant'
+        elif significance_level <= 0.01:
+            interpretation['significance_description'] = 'very significant'
+        elif significance_level <= 0.05:
+            interpretation['significance_description'] = 'significant'
+        else:
+            interpretation['significance_description'] = 'marginally significant'
+    else:
+        interpretation['statistically_significant'] = False
+        interpretation['significance_level'] = None
+        interpretation['significance_description'] = 'not significant'
+    
+    # Effect size interpretation (Cohen's conventions adapted)
+    if results['r_squared'] >= 0.26:
+        effect_size = 'large'
+    elif results['r_squared'] >= 0.13:
+        effect_size = 'medium'
+    elif results['r_squared'] >= 0.02:
+        effect_size = 'small'
+    else:
+        effect_size = 'negligible'
+    
+    interpretation['effect_size'] = effect_size
+    
+    # Confidence interval interpretation
+    ci_contains_zero = (results['slope_ci_lower'] <= 0 <= results['slope_ci_upper'])
+    interpretation['confidence_interval_contains_zero'] = ci_contains_zero
+    
+    # Practical significance
+    years_span = results['last_year'] - results['first_year']
+    total_change_magnitude = abs(results['total_predicted_change'])
+    
+    if total_change_magnitude >= 5.0:
+        practical_significance = 'high'
+    elif total_change_magnitude >= 2.0:
+        practical_significance = 'moderate'
+    elif total_change_magnitude >= 1.0:
+        practical_significance = 'low'
+    else:
+        practical_significance = 'negligible'
+    
+    interpretation['practical_significance'] = practical_significance
+    
+    # Model quality assessment
+    if results['r_squared'] >= 0.7:
+        model_fit = 'excellent'
+    elif results['r_squared'] >= 0.5:
+        model_fit = 'good'
+    elif results['r_squared'] >= 0.3:
+        model_fit = 'fair'
+    else:
+        model_fit = 'poor'
+    
+    interpretation['model_fit_quality'] = model_fit
+    
+    # Residual analysis
+    if abs(results['residual_mean']) < 0.1:
+        residual_bias = 'minimal'
+    elif abs(results['residual_mean']) < 0.5:
+        residual_bias = 'slight'
+    else:
+        residual_bias = 'concerning'
+    
+    interpretation['residual_bias'] = residual_bias
+    
+    return interpretation
+
+def create_regression_visualization(years: np.ndarray, proportions: np.ndarray, 
+                                   results: Dict[str, Any], interpretation: Dict[str, Any]) -> str:
+    """
+    Create visualization of regression analysis
+    
+    Args:
+        years: Array of years
+        proportions: Array of reappointment proportions
+        results: Regression results
+        interpretation: Interpretation results
+    
+    Returns:
+        Path to saved plot file
+    """
+    logger.info("Creating regression analysis visualization")
+    
+    # Set up the plot
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    
+    # Main regression plot
+    ax1.scatter(years, proportions, color='blue', alpha=0.7, s=80, label='Observed Data', zorder=3)
+    ax1.plot(years, results['predicted_values'], color='red', linewidth=2, label='Regression Line', zorder=2)
+    
+    # Confidence interval for regression line (approximate)
+    ci_width = 1.96 * results['rmse']  # Approximate 95% CI
+    ax1.fill_between(years, results['predicted_values'] - ci_width, 
+                    results['predicted_values'] + ci_width, 
+                    alpha=0.2, color='red', label='95% Confidence Band')
+    
+    ax1.set_title('Linear Regression: Reappointment Proportions vs Time', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Year', fontsize=11)
+    ax1.set_ylabel('Reappointment Proportion (%)', fontsize=11)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # Add regression equation
+    equation_text = ("y = " + str(round(results['slope'], 3)) + "x + " + 
+                    str(round(results['intercept'], 1)) + "\n" +
+                    "R² = " + str(round(results['r_squared'], 3)) + "\n" +
+                    "p = " + str(round(results['p_value'], 4)))
+    ax1.text(0.05, 0.95, equation_text, transform=ax1.transAxes, 
+            verticalalignment='top', fontsize=10,
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8))
+    
+    # Residuals plot
+    ax2.scatter(years, results['residuals'], color='green', alpha=0.7, s=60)
+    ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7)
+    ax2.set_title('Residuals vs Time', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Year', fontsize=11)
+    ax2.set_ylabel('Residuals', fontsize=11)
+    ax2.grid(True, alpha=0.3)
+    
+    # Q-Q plot for residual normality
+    from scipy.stats import probplot
+    probplot(results['residuals'], dist="norm", plot=ax3)
+    ax3.set_title('Q-Q Plot: Residual Normality', fontsize=12, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    
+    # Predicted vs Observed
+    ax4.scatter(results['predicted_values'], proportions, color='purple', alpha=0.7, s=60)
+    
+    # Perfect prediction line
+    min_val = min(min(results['predicted_values']), min(proportions))
+    max_val = max(max(results['predicted_values']), max(proportions))
+    ax4.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, label='Perfect Prediction')
+    
+    ax4.set_title('Predicted vs Observed Values', fontsize=12, fontweight='bold')
+    ax4.set_xlabel('Predicted Proportion (%)', fontsize=11)
+    ax4.set_ylabel('Observed Proportion (%)', fontsize=11)
+    ax4.grid(True, alpha=0.3)
+    ax4.legend()
+    
+    # Add overall summary text
+    summary_text = ("Trend: " + interpretation['trend_strength'].title() + " " + 
+                   interpretation['trend_direction'] + "\n" +
+                   "Significance: " + interpretation['significance_description'].title() + "\n" +
+                   "Effect Size: " + interpretation['effect_size'].title() + "\n" +
+                   "Annual Change: " + str(round(results['slope'], 2)) + " pp/year")
+    
+    fig.suptitle('Regression Analysis of Government-wide Reappointment Trends\n' + 
+                interpretation['time_span'], fontsize=14, fontweight='bold')
+    
+    plt.figtext(0.02, 0.02, summary_text, fontsize=10,
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92, bottom=0.12)
+    
+    # Save the plot
+    plot_path = OUTPUT_PATH / "step9_regression_analysis.png"
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    logger.info("Regression visualization saved to: " + str(plot_path))
+    return str(plot_path)
+
+def save_regression_results(years: np.ndarray, proportions: np.ndarray, 
+                           results: Dict[str, Any], interpretation: Dict[str, Any], 
+                           plot_path: str):
+    """
+    Save regression results and generate comprehensive report
+    
+    Args:
+        years: Array of years
+        proportions: Array of reappointment proportions
+        results: Regression results
+        interpretation: Interpretation results
+        plot_path: Path to saved visualization
+    """
+    output_file_path = OUTPUT_PATH / OUTPUT_FILE
+    
+    try:
+        # Build detailed results for each year
+        yearly_details_lines = []
+        for i, year in enumerate(years):
+            observed = proportions[i]
+            predicted = results['predicted_values'][i]
+            residual = results['residuals'][i]
+            line = ("  " + str(int(year)) + ": Observed=" + str(round(observed, 2)) + 
+                   "%, Predicted=" + str(round(predicted, 2)) + 
+                   "%, Residual=" + str(round(residual, 2)))
+            yearly_details_lines.append(line)
+        yearly_details_text = '\n'.join(yearly_details_lines)
+        
+        # Generate comprehensive report
+        report_lines = [
+            "",
+            "STEP 9 - LINEAR REGRESSION ANALYSIS OF REAPPOINTMENT TRENDS",
+            "=========================================================",
+            "",
+            "EXECUTIVE SUMMARY",
+            "================",
+            "Research Question: Is there a statistically significant trend in government-wide",
+            "reappointment proportions over the " + str(interpretation['n_years']) + "-year period (" + interpretation['time_span'] + ")?",
+            "",
+            "ANSWER: " + ("YES" if interpretation['statistically_significant'] else "NO"),
+            "",
+            "Key Findings:",
+            "- Trend Direction: " + interpretation['trend_strength'].title() + " " + interpretation['trend_direction'],
+            "- Statistical Significance: " + interpretation['significance_description'].title() + " (p=" + str(round(results['p_value'], 4)) + ")",
+            "- Effect Size: " + interpretation['effect_size'].title() + " (R² = " + str(round(results['r_squared'], 3)) + ")",
+            "- Annual Change Rate: " + str(round(results['slope'], 3)) + " percentage points per year",
+            "- Total Change Over Period: " + str(round(results['total_predicted_change'], 2)) + " percentage points",
+            "- Practical Significance: " + interpretation['practical_significance'].title(),
+            "",
+            "DETAILED REGRESSION RESULTS",
+            "===========================",
+            "",
+            "Model Specification:",
+            "- Dependent Variable: Annual Reappointment Proportion (%)",
+            "- Independent Variable: Year",
+            "- Model: Linear Regression (OLS)",
+            "- Sample Size: " + str(results['n_observations']) + " years",
+            "- Time Period: " + interpretation['time_span'],
+            "",
+            "Regression Coefficients:",
+            "- Intercept: " + str(round(results['intercept'], 4)),
+            "- Slope (Annual Change): " + str(round(results['slope'], 6)) + " pp/year",
+            "- Standard Error: " + str(round(results['standard_error'], 6)),
+            "- 95% Confidence Interval: [" + str(round(results['slope_ci_lower'], 4)) + ", " + str(round(results['slope_ci_upper'], 4)) + "]",
+            "",
+            "Model Fit Statistics:",
+            "- R-squared: " + str(round(results['r_squared'], 6)),
+            "- Correlation Coefficient: " + str(round(results['r_value'], 6)),
+            "- Root Mean Square Error: " + str(round(results['rmse'], 4)),
+            "- Mean Squared Error: " + str(round(results['mse'], 6)),
+            "",
+            "Hypothesis Testing:",
+            "- Null Hypothesis (H₀): β₁ = 0 (no trend)",
+            "- Alternative Hypothesis (H₁): β₁ ≠ 0 (trend exists)",
+            "- Test Statistic (t): " + str(round(results['slope'] / results['standard_error'], 4)),
+            "- P-value: " + str(round(results['p_value'], 6)),
+            "- Degrees of Freedom: " + str(results['degrees_freedom']),
+            "- Result: " + ("Reject H₀" if interpretation['statistically_significant'] else "Fail to reject H₀"),
+            "",
+            "STATISTICAL INTERPRETATION",
+            "==========================",
+            "",
+            "Trend Analysis:",
+            "- Direction: " + interpretation['trend_direction'].title(),
+            "- Strength: " + interpretation['trend_strength'].title(),
+            "- The slope of " + str(round(results['slope'], 3)) + " indicates reappointment proportions",
+            "  " + ("increase" if results['slope'] > 0 else "decrease" if results['slope'] < 0 else "remain stable") + " by " + str(abs(round(results['slope'], 3))) + " percentage points per year on average.",
+            "",
+            "Statistical Significance:",
+            "- Level: " + interpretation['significance_description'].title(),
+            "- The p-value of " + str(round(results['p_value'], 4)) + " indicates the probability of observing",
+            "  this trend (or stronger) by chance alone is " + str(round(results['p_value'] * 100, 2)) + "%.",
+            "- Confidence Interval " + ("excludes" if not interpretation['confidence_interval_contains_zero'] else "includes") + " zero, " + 
+            ("supporting" if not interpretation['confidence_interval_contains_zero'] else "questioning") + " evidence of a real trend.",
+            "",
+            "Effect Size:",
+            "- R² = " + str(round(results['r_squared'], 3)) + " (" + interpretation['effect_size'] + " effect)",
+            "- " + str(round(results['r_squared'] * 100, 1)) + "% of variance in reappointment proportions is explained by time.",
+            "- Model fit quality: " + interpretation['model_fit_quality'].title(),
+            "",
+            "Practical Significance:",
+            "- Total predicted change over " + str(interpretation['n_years']) + " years: " + str(round(results['total_predicted_change'], 2)) + " percentage points",
+            "- From " + str(round(results['first_year_predicted'], 2)) + "% to " + str(round(results['last_year_predicted'], 2)) + "%",
+            "- Practical importance: " + interpretation['practical_significance'].title(),
+            "",
+            "MODEL DIAGNOSTICS",
+            "================",
+            "",
+            "Residual Analysis:",
+            "- Mean of residuals: " + str(round(results['residual_mean'], 6)) + " (bias: " + interpretation['residual_bias'] + ")",
+            "- Standard deviation: " + str(round(results['residual_std'], 4)),
+            "- Durbin-Watson statistic: " + (str(round(results['durbin_watson'], 4)) if results['durbin_watson'] is not None else "N/A"),
+            "",
+            "Model Assumptions:",
+            "- Linearity: Assumed based on linear model specification",
+            "- Independence: " + ("Reasonable" if results['durbin_watson'] is None or 1.5 <= results['durbin_watson'] <= 2.5 else "Check for autocorrelation"),
+            "- Homoscedasticity: Check residuals plot in visualization",
+            "- Normality: Check Q-Q plot in visualization",
+            "",
+            "YEAR-BY-YEAR BREAKDOWN",
+            "======================",
+            "",
+            yearly_details_text,
+            "",
+            "CONCLUSION",
+            "==========",
+            "",
+            "Based on the linear regression analysis of " + str(results['n_observations']) + " years of data (" + interpretation['time_span'] + "),",
+            "there " + ("IS" if interpretation['statistically_significant'] else "IS NOT") + " statistically significant evidence of a trend in",
+            "government-wide reappointment proportions in New Brunswick.",
+            "",
+            ("The analysis reveals a " + interpretation['trend_strength'] + " " + interpretation['trend_direction'] + 
+             " trend with " + interpretation['significance_description'] + " statistical support." if interpretation['statistically_significant']
+             else "The observed changes appear to be consistent with random variation rather than a systematic trend."),
+            "",
+            "Implications:",
+            "- Reappointment practices " + ("ARE" if interpretation['statistically_significant'] else "are NOT") + " changing systematically over time",
+            "- The trend has " + interpretation['practical_significance'] + " practical significance",
+            "- Government policy " + ("may" if interpretation['statistically_significant'] else "does not appear to") + " be shifting toward " + 
+            ("more" if results['slope'] > 0 else "fewer" if results['slope'] < 0 else "stable") + " reappointments",
+            "",
+            "OUTPUT FILES",
+            "============",
+            "- Detailed Results: " + str(output_file_path),
+            "- Visualization: " + plot_path,
+            ""
+        ]
+        
+        report = '\n'.join(report_lines)
+        
+        # Save detailed results
+        with open(output_file_path, 'w', encoding='utf-8') as f:
+            f.write(report)
+        
+        logger.info("Regression results saved to: " + str(output_file_path))
+        print(report)
+        
+    except Exception as e:
+        logger.error("Error saving results: " + str(e))
+        raise
+
+def main():
+    """Main execution function"""
+    try:
+        logger.info("=" * 60)
+        logger.info("STEP 9: LINEAR REGRESSION ANALYSIS OF REAPPOINTMENT TRENDS")
+        logger.info("=" * 60)
+        
+        # Setup directories
+        setup_directories()
+        
+        # Validate input file
+        if not validate_input_file():
+            logger.error("Input file validation failed")
+            sys.exit(1)
+        
+        # Load annual proportions data
+        df = load_annual_proportions()
+        
+        # Prepare regression data
+        years, proportions = prepare_regression_data(df)
+        
+        if len(years) < 3:
+            logger.error("Insufficient data for regression analysis (need at least 3 years)")
+            sys.exit(1)
+        
+        # Perform linear regression
+        regression_results = perform_linear_regression(years, proportions)
+        
+        # Interpret results
+        interpretation = interpret_regression_results(regression_results)
+        
+        # Create visualization
+        plot_path = create_regression_visualization(years, proportions, regression_results, interpretation)
+        
+        # Save results
+        save_regression_results(years, proportions, regression_results, interpretation, plot_path)
+        
+        logger.info("Step 9 completed successfully!")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error("Step 9 failed: " + str(e))
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis:
+- reappointed
+- name
+- position
+- org
+- year (from source_year)
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to extract key columns from combined dataset."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution7/analysis_data")
+    input_file = input_dir / "step1_combined_appointments.csv"
+    output_file = input_dir / "step2_key_columns_data.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 1 first to generate the combined dataset.")
+        sys.exit(1)
+    
+    # Read the combined data
+    print(f"Reading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows and {len(df.columns)} columns")
+    except Exception as e:
+        print(f"ERROR reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Display current columns
+    print("\nCurrent columns in dataset:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"  {i:2d}. {col}")
+    
+    # Define key columns to extract
+    # Note: 'year' might be stored as 'source_year' from Step 1
+    key_columns_mapping = {
+        'reappointed': 'reappointed',
+        'name': 'name',
+        'position': 'position',
+        'org': 'org',
+        'year': 'source_year'  # Map source_year to year
+    }
+    
+    # Check which columns exist
+    print("\n" + "-"*60)
+    print("Checking for required columns:")
+    print("-"*60)
+    
+    missing_columns = []
+    found_columns = []
+    
+    for target_col, source_col in key_columns_mapping.items():
+        if source_col in df.columns:
+            print(f"✓ '{source_col}' found (will be mapped to '{target_col}')")
+            found_columns.append((target_col, source_col))
+        else:
+            # Try to find alternative column names
+            alt_found = False
+            for col in df.columns:
+                if col.lower() == source_col.lower():
+                    print(f"✓ '{col}' found (case mismatch, will be mapped to '{target_col}')")
+                    found_columns.append((target_col, col))
+                    key_columns_mapping[target_col] = col
+                    alt_found = True
+                    break
+            if not alt_found:
+                print(f"✗ '{source_col}' NOT FOUND")
+                missing_columns.append(target_col)
+    
+    # Handle missing columns
+    if missing_columns:
+        print(f"\nWARNING: {len(missing_columns)} required column(s) missing: {', '.join(missing_columns)}")
+        print("Attempting to find alternative column names...")
+        
+        # Special handling for 'org' column - might be 'organization'
+        if 'org' in missing_columns and 'organization' in df.columns:
+            print("  - Found 'organization' column, will use as 'org'")
+            key_columns_mapping['org'] = 'organization'
+            missing_columns.remove('org')
+            found_columns.append(('org', 'organization'))
+    
+    # Create new dataframe with key columns
+    print("\n" + "-"*60)
+    print("Extracting key columns:")
+    print("-"*60)
+    
+    # Build the new dataframe
+    new_df = pd.DataFrame()
+    
+    for target_col, source_col in found_columns:
+        if source_col in df.columns:
+            new_df[target_col] = df[source_col]
+            print(f"  - Extracted '{source_col}' as '{target_col}'")
+    
+    # Add any missing columns as NaN
+    for col in missing_columns:
+        new_df[col] = np.nan
+        print(f"  - Added '{col}' as empty column (all NaN)")
+    
+    # Ensure columns are in the desired order
+    desired_order = ['reappointed', 'name', 'position', 'org', 'year']
+    existing_cols = [col for col in desired_order if col in new_df.columns]
+    new_df = new_df[existing_cols]
+    
+    print(f"\nExtracted dataframe shape: {new_df.shape}")
+    print(f"Columns: {', '.join(new_df.columns)}")
+    
+    # Data quality summary
+    print("\n" + "="*60)
+    print("DATA QUALITY SUMMARY")
+    print("="*60)
+    
+    for col in new_df.columns:
+        non_null = new_df[col].notna().sum()
+        null_count = new_df[col].isna().sum()
+        null_pct = (null_count / len(new_df)) * 100
+        unique_values = new_df[col].nunique()
+        
+        print(f"\n{col.upper()}:")
+        print(f"  - Non-null values: {non_null:,} ({100-null_pct:.1f}%)")
+        print(f"  - Null values: {null_count:,} ({null_pct:.1f}%)")
+        print(f"  - Unique values: {unique_values:,}")
+        
+        # Show sample values for each column
+        if non_null > 0:
+            sample_values = new_df[col].dropna().head(3).tolist()
+            print(f"  - Sample values: {sample_values}")
+    
+    # Special analysis for 'reappointed' column
+    if 'reappointed' in new_df.columns:
+        print("\n" + "-"*60)
+        print("REAPPOINTED COLUMN ANALYSIS:")
+        print("-"*60)
+        value_counts = new_df['reappointed'].value_counts(dropna=False)
+        print("\nValue distribution:")
+        for value, count in value_counts.items():
+            pct = (count / len(new_df)) * 100
+            print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Year distribution
+    if 'year' in new_df.columns:
+        print("\n" + "-"*60)
+        print("YEAR DISTRIBUTION:")
+        print("-"*60)
+        year_counts = new_df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            if pd.notna(year):
+                print(f"  - {int(year)}: {count:,} appointments")
+    
+    # Save the extracted data
+    print("\n" + "-"*60)
+    print(f"Saving extracted data to: {output_file}")
+    new_df.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Verify saved file
+    saved_df = pd.read_csv(output_file)
+    if len(saved_df) == len(new_df):
+        print(f"SUCCESS: Data saved successfully ({len(saved_df):,} rows)")
+    else:
+        print("WARNING: Row count mismatch in saved file!")
+    
+    # Display sample of final data
+    print("\n" + "="*60)
+    print("SAMPLE OF EXTRACTED DATA (first 10 rows):")
+    print("="*60)
+    print(new_df.head(10).to_string())
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 2 COMPLETED SUCCESSFULLY")
+    print("="*60)
+    print(f"\nSummary:")
+    print(f"  - Input rows: {len(df):,}")
+    print(f"  - Output rows: {len(new_df):,}")
+    print(f"  - Columns extracted: {len(new_df.columns)}")
+    print(f"  - Output file: {output_file}")
+    
+    # Warnings for next steps
+    if missing_columns:
+        print(f"\n⚠️  WARNING: {len(missing_columns)} column(s) were missing and filled with NaN:")
+        print(f"   {', '.join(missing_columns)}")
+        print("   This may affect subsequent analysis steps.")
+    
+    if 'reappointed' in new_df.columns:
+        null_reappointed = new_df['reappointed'].isna().sum()
+        if null_reappointed > 0:
+            print(f"\n⚠️  WARNING: 'reappointed' column has {null_reappointed:,} null values ({(null_reappointed/len(new_df)*100):.1f}%)")
+            print("   These will need to be handled in subsequent steps.")
+
+if __name__ == "__main__":
+    main()

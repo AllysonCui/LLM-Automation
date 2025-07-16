@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""
+Step 5: Count reappointments by organization and year
+This script counts how many times each organization appears with 
+"reappointed" marked as True for each year.
+Output: step5_reappointment_counts.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def load_marked_data(input_path):
+    """Load the marked dataset from Step 3."""
+    try:
+        print("📂 Loading marked dataset...")
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except FileNotFoundError:
+        print(f"✗ File not found: {input_path}")
+        return None
+    except Exception as e:
+        print(f"✗ Error loading file: {e}")
+        return None
+
+def analyze_reappointed_column(df):
+    """Analyze the reappointed column values."""
+    print("\n📊 Analyzing 'reappointed' column:")
+    
+    # Check data type and values
+    print(f"  Data type: {df['reappointed'].dtype}")
+    
+    # Value counts
+    value_counts = df['reappointed'].value_counts(dropna=False)
+    print("\n  Value distribution:")
+    for value, count in value_counts.items():
+        pct = (count / len(df)) * 100
+        if pd.isna(value):
+            print(f"    - NaN: {count} ({pct:.1f}%)")
+        else:
+            print(f"    - {value}: {count} ({pct:.1f}%)")
+    
+    # Convert to boolean if needed
+    if df['reappointed'].dtype == 'object':
+        print("\n  Converting to boolean type...")
+        # Handle various representations of True/False
+        true_values = ['True', 'true', 'TRUE', '1', 1, True]
+        df['reappointed'] = df['reappointed'].isin(true_values)
+    
+    # Count total reappointments
+    total_reappointed = df['reappointed'].sum()
+    print(f"\n  Total reappointments: {total_reappointed}")
+    
+    return df
+
+def standardize_org_names(df):
+    """Standardize organization names to match Step 4."""
+    print("\n🔄 Standardizing organization names...")
+    
+    # Create standardized org column
+    df['org_standardized'] = df['org'].copy()
+    
+    # Handle missing values
+    df['org_standardized'] = df['org_standardized'].fillna('UNKNOWN_ORG')
+    
+    # Basic standardization
+    df['org_standardized'] = df['org_standardized'].astype(str)
+    df['org_standardized'] = df['org_standardized'].str.strip()
+    df['org_standardized'] = df['org_standardized'].str.replace(r'\s+', ' ', regex=True)
+    
+    print("  ✓ Organization names standardized")
+    
+    return df
+
+def count_reappointments_by_org_year(df):
+    """Count reappointments for each organization by year."""
+    print("\n📊 Counting reappointments by organization and year...")
+    
+    # Filter only reappointed records
+    reappointed_df = df[df['reappointed'] == True].copy()
+    print(f"  Filtering {len(reappointed_df)} reappointed records")
+    
+    # Group by org and year to count reappointments
+    reappointment_counts = reappointed_df.groupby(['org_standardized', 'year']).size().reset_index(name='reappointment_count')
+    
+    print(f"  ✓ Created reappointment counts")
+    print(f"  - Total org-year combinations with reappointments: {len(reappointment_counts)}")
+    
+    # Create pivot table
+    pivot_df = reappointment_counts.pivot(index='org_standardized', columns='year', values='reappointment_count')
+    pivot_df = pivot_df.fillna(0).astype(int)
+    
+    print(f"  - Organizations with reappointments: {len(pivot_df)}")
+    print(f"  - Years covered: {sorted(pivot_df.columns.tolist())}")
+    
+    return reappointment_counts, pivot_df, reappointed_df
+
+def analyze_reappointment_patterns(reappointment_counts, pivot_df, reappointed_df):
+    """Analyze patterns in reappointments."""
+    print("\n📈 Analyzing reappointment patterns:")
+    
+    # Overall statistics
+    total_reappointments = reappointment_counts['reappointment_count'].sum()
+    avg_per_org_year = reappointment_counts['reappointment_count'].mean()
+    
+    print(f"\n  Overall statistics:")
+    print(f"    - Total reappointments across all years: {total_reappointments}")
+    print(f"    - Average reappointments per org-year: {avg_per_org_year:.1f}")
+    
+    # Yearly totals
+    yearly_totals = reappointment_counts.groupby('year')['reappointment_count'].sum()
+    print(f"\n  Total reappointments by year:")
+    for year in sorted(yearly_totals.index):
+        count = yearly_totals[year]
+        print(f"    - {year}: {count} reappointments")
+    
+    # Organizations with most reappointments (total across all years)
+    org_totals = pivot_df.sum(axis=1).sort_values(ascending=False)
+    print(f"\n  Top 10 organizations by total reappointments (all years):")
+    for org, total in org_totals.head(10).items():
+        print(f"    - {org}: {total} reappointments")
+    
+    # Organizations with consistent reappointments
+    years = sorted(pivot_df.columns)
+    orgs_all_years = pivot_df[(pivot_df > 0).all(axis=1)]
+    print(f"\n  Organizations with reappointments in all {len(years)} years: {len(orgs_all_years)}")
+    if len(orgs_all_years) > 0 and len(orgs_all_years) <= 10:
+        print("    Organizations:")
+        for org in orgs_all_years.index:
+            print(f"      - {org}")
+    
+    # Analyze individual reappointments
+    if 'name' in reappointed_df.columns:
+        print("\n  Individual reappointment patterns:")
+        
+        # People with most reappointments
+        person_reappointments = reappointed_df.groupby('name').size().sort_values(ascending=False)
+        print(f"    - Total individuals reappointed: {len(person_reappointments)}")
+        print(f"    - Top 5 most reappointed individuals:")
+        for name, count in person_reappointments.head(5).items():
+            if pd.notna(name) and name.strip():
+                print(f"        {name}: {count} reappointments")
+
+def compare_with_total_employees(reappointment_counts):
+    """Compare reappointment counts with total employee counts from Step 4."""
+    print("\n🔄 Comparing with total employee counts...")
+    
+    # Try to load employee counts from Step 4
+    employee_counts_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step4_employee_counts.csv")
+    
+    if employee_counts_path.exists():
+        try:
+            employee_counts = pd.read_csv(employee_counts_path)
+            print("  ✓ Loaded employee counts from Step 4")
+            
+            # Merge the datasets
+            comparison = pd.merge(
+                employee_counts,
+                reappointment_counts,
+                on=['org_standardized', 'year'],
+                how='left'
+            )
+            
+            # Fill NaN reappointment counts with 0
+            comparison['reappointment_count'] = comparison['reappointment_count'].fillna(0).astype(int)
+            
+            # Calculate preliminary rates
+            comparison['reappointment_rate'] = (
+                comparison['reappointment_count'] / comparison['employee_count']
+            ).round(4)
+            
+            # Show sample of the comparison
+            print("\n  Sample comparison (first 10 org-years with reappointments):")
+            sample = comparison[comparison['reappointment_count'] > 0].head(10)
+            for _, row in sample.iterrows():
+                org = row['org_standardized'][:30] + '...' if len(row['org_standardized']) > 30 else row['org_standardized']
+                print(f"    {row['year']} - {org}: {row['reappointment_count']}/{row['employee_count']} = {row['reappointment_rate']:.1%}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Could not load employee counts: {e}")
+    else:
+        print("  ⚠️  Appointment counts file not found. Run Step 4 first for comparison.")
+
+def create_complete_dataset(reappointment_counts):
+    """Create a complete dataset including organizations with zero reappointments."""
+    print("\n📊 Creating complete dataset...")
+    
+    # Load employee counts to get all org-year combinations
+    employee_counts_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step4_employee_counts.csv")
+    
+    if employee_counts_path.exists():
+        try:
+            employee_counts = pd.read_csv(employee_counts_path)
+            
+            # Get all unique org-year combinations
+            all_org_years = employee_counts[['org_standardized', 'year']].copy()
+            
+            # Merge with reappointment counts
+            complete_counts = pd.merge(
+                all_org_years,
+                reappointment_counts,
+                on=['org_standardized', 'year'],
+                how='left'
+            )
+            
+            # Fill missing values with 0
+            complete_counts['reappointment_count'] = complete_counts['reappointment_count'].fillna(0).astype(int)
+            
+            # Sort by year and org
+            complete_counts = complete_counts.sort_values(['year', 'org_standardized'])
+            
+            print(f"  ✓ Created complete dataset with {len(complete_counts)} org-year combinations")
+            
+            # Count organizations with no reappointments
+            orgs_no_reappointments = complete_counts.groupby('org_standardized')['reappointment_count'].sum()
+            orgs_no_reappointments = orgs_no_reappointments[orgs_no_reappointments == 0]
+            print(f"  - Organizations with zero reappointments: {len(orgs_no_reappointments)}")
+            
+            return complete_counts
+            
+        except Exception as e:
+            print(f"  ⚠️  Could not create complete dataset: {e}")
+            return reappointment_counts
+    else:
+        print("  ⚠️  Appointment counts file not found. Using only organizations with reappointments.")
+        return reappointment_counts
+
+def save_reappointment_counts(reappointment_counts, pivot_df, output_path):
+    """Save the reappointment counts in a structured format."""
+    try:
+        # Save the complete dataset (including zeros)
+        reappointment_counts.to_csv(output_path, index=False, encoding='utf-8')
+        print(f"\n✅ Reappointment counts saved to: {output_path}")
+        print(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
+        
+        # Also save the pivot table
+        pivot_path = output_path.parent / "step5_reappointment_counts_pivot.csv"
+        pivot_df.to_csv(pivot_path, encoding='utf-8')
+        print(f"✅ Pivot table saved to: {pivot_path}")
+        print(f"   File size: {pivot_path.stat().st_size / 1024:.2f} KB")
+        
+        return True
+    except Exception as e:
+        print(f"\n✗ Error saving files: {e}")
+        return False
+
+def main():
+    """Main execution function."""
+    print("=" * 60)
+    print("STEP 5: Count Reappointments by Organization and Year")
+    print("=" * 60)
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step3_repeats_marked.csv")
+    output_path = Path("scripts/claudeopus4/version2/execution6/analysis_data/step5_reappointment_counts.csv")
+    
+    # Check if input file exists
+    if not input_path.exists():
+        print(f"\n✗ Input file not found: {input_path}")
+        print("  Please run Step 3 first to create the marked dataset.")
+        sys.exit(1)
+    
+    # Load marked data
+    df = load_marked_data(input_path)
+    if df is None:
+        sys.exit(1)
+    
+    # Analyze and prepare reappointed column
+    df = analyze_reappointed_column(df)
+    
+    # Standardize organization names
+    df = standardize_org_names(df)
+    
+    # Count reappointments by organization and year
+    reappointment_counts, pivot_df, reappointed_df = count_reappointments_by_org_year(df)
+    
+    # Analyze patterns
+    analyze_reappointment_patterns(reappointment_counts, pivot_df, reappointed_df)
+    
+    # Compare with total employee counts
+    compare_with_total_employees(reappointment_counts)
+    
+    # Create complete dataset (including orgs with zero reappointments)
+    complete_counts = create_complete_dataset(reappointment_counts)
+    
+    # Save the results
+    if not save_reappointment_counts(complete_counts, pivot_df, output_path):
+        sys.exit(1)
+    
+    # Print final summary
+    print("\n📋 Final Summary:")
+    print(f"  - Total reappointments counted: {reappointment_counts['reappointment_count'].sum()}")
+    print(f"  - Organizations with reappointments: {len(pivot_df)}")
+    print(f"  - Org-year combinations saved: {len(complete_counts)}")
+    print(f"  - Ready for rate calculation in Step 6")
+    
+    print("\n✅ Step 5 completed successfully!")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()

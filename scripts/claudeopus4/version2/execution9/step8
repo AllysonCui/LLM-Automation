@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""
+Step 8: Compute government-wide reappointment proportions
+This script calculates the overall government reappointment proportion for each year
+by aggregating data across all organizations.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to compute annual government-wide reappointment proportions."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    output_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    
+    # Input files
+    rates_file = input_dir / "step6_reappointment_rates.csv"
+    marked_file = input_dir / "step3_repeats_marked.csv"
+    
+    # Output files
+    output_file = output_dir / "step8_annual_proportions.csv"
+    output_plot = output_dir / "step8_annual_reappointment_proportions.png"
+    
+    print("\n" + "="*60)
+    print("STEP 8: COMPUTE GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS")
+    print("="*60 + "\n")
+    
+    # Load reappointment rates data
+    print("Loading reappointment rates data...")
+    if not rates_file.exists():
+        print(f"ERROR: Rates file not found: {rates_file}")
+        print("Please run Step 6 first.")
+        sys.exit(1)
+    
+    try:
+        rates_df = pd.read_csv(rates_file, encoding='utf-8')
+        print(f"Successfully loaded {len(rates_df):,} org-year combinations")
+    except Exception as e:
+        print(f"ERROR: Failed to load rates file: {str(e)}")
+        sys.exit(1)
+    
+    # Load marked appointments data for additional analysis
+    print("\nLoading marked appointments data...")
+    if not marked_file.exists():
+        print(f"ERROR: Marked file not found: {marked_file}")
+        print("Please run Step 3 first.")
+        sys.exit(1)
+    
+    try:
+        marked_df = pd.read_csv(marked_file, encoding='utf-8')
+        print(f"Successfully loaded {len(marked_df):,} individual appointments")
+    except Exception as e:
+        print(f"ERROR: Failed to load marked file: {str(e)}")
+        sys.exit(1)
+    
+    # Calculate government-wide proportions by year
+    print("\n" + "-"*60)
+    print("CALCULATING ANNUAL PROPORTIONS:")
+    print("-"*60)
+    
+    # Method 1: Aggregate from org-year data
+    annual_stats = rates_df.groupby('year').agg({
+        'employee_count': 'sum',
+        'total_appointments': 'sum',
+        'reappointment_count': 'sum',
+        'unique_reappointed_individuals': 'sum',
+        'org': 'count'
+    }).reset_index()
+    
+    annual_stats.columns = ['year', 'total_employees', 'total_appointments', 
+                           'total_reappointments', 'unique_reappointed_individuals', 
+                           'active_organizations']
+    
+    # Calculate proportions
+    annual_stats['reappointment_proportion'] = (
+        annual_stats['total_reappointments'] / annual_stats['total_appointments'] * 100
+    ).round(2)
+    
+    annual_stats['unique_reappointment_proportion'] = (
+        annual_stats['unique_reappointed_individuals'] / annual_stats['total_employees'] * 100
+    ).round(2)
+    
+    # Method 2: Direct calculation from marked data for validation
+    print("\nValidating with direct calculation from appointment data...")
+    direct_stats = marked_df.groupby('year').agg({
+        'name': 'count',
+        'reappointed': lambda x: x.sum() if x.dtype == bool else (x == True).sum()
+    }).reset_index()
+    direct_stats.columns = ['year', 'appointments_direct', 'reappointments_direct']
+    direct_stats['proportion_direct'] = (
+        direct_stats['reappointments_direct'] / direct_stats['appointments_direct'] * 100
+    ).round(2)
+    
+    # Merge validation data
+    annual_stats = annual_stats.merge(direct_stats, on='year', how='left')
+    
+    # Check for discrepancies
+    annual_stats['validation_diff'] = (
+        annual_stats['total_appointments'] - annual_stats['appointments_direct']
+    )
+    
+    print("\nData validation results:")
+    if annual_stats['validation_diff'].abs().sum() == 0:
+        print("✓ Perfect match between aggregated and direct calculations")
+    else:
+        print("⚠ Discrepancies found:")
+        print(annual_stats[['year', 'total_appointments', 'appointments_direct', 'validation_diff']])
+    
+    # Display annual proportions
+    print("\n" + "-"*60)
+    print("GOVERNMENT-WIDE REAPPOINTMENT PROPORTIONS BY YEAR:")
+    print("-"*60)
+    
+    display_cols = ['year', 'total_appointments', 'total_reappointments', 
+                    'reappointment_proportion', 'active_organizations']
+    print("\n" + annual_stats[display_cols].to_string(index=False))
+    
+    # Trend analysis
+    print("\n" + "-"*60)
+    print("TREND ANALYSIS:")
+    print("-"*60)
+    
+    # Calculate year-over-year changes
+    annual_stats['yoy_change'] = annual_stats['reappointment_proportion'].diff()
+    annual_stats['yoy_pct_change'] = (
+        annual_stats['reappointment_proportion'].pct_change() * 100
+    ).round(2)
+    
+    # Overall trend
+    first_year = annual_stats.iloc[0]
+    last_year = annual_stats.iloc[-1]
+    overall_change = last_year['reappointment_proportion'] - first_year['reappointment_proportion']
+    
+    print(f"\nOverall trend from {int(first_year['year'])} to {int(last_year['year'])}:")
+    print(f"  Starting proportion: {first_year['reappointment_proportion']:.2f}%")
+    print(f"  Ending proportion: {last_year['reappointment_proportion']:.2f}%")
+    print(f"  Total change: {overall_change:+.2f} percentage points")
+    print(f"  Direction: {'INCREASING' if overall_change > 0 else 'DECREASING'}")
+    
+    # Year with highest/lowest proportions
+    max_year = annual_stats.loc[annual_stats['reappointment_proportion'].idxmax()]
+    min_year = annual_stats.loc[annual_stats['reappointment_proportion'].idxmin()]
+    
+    print(f"\nHighest proportion: {max_year['reappointment_proportion']:.2f}% in {int(max_year['year'])}")
+    print(f"Lowest proportion: {min_year['reappointment_proportion']:.2f}% in {int(min_year['year'])}")
+    
+    # Volatility analysis
+    volatility = annual_stats['reappointment_proportion'].std()
+    print(f"\nVolatility (std dev): {volatility:.2f} percentage points")
+    
+    # Largest year-over-year changes
+    print("\n" + "-"*60)
+    print("SIGNIFICANT YEAR-OVER-YEAR CHANGES:")
+    print("-"*60)
+    
+    significant_changes = annual_stats[annual_stats['yoy_change'].abs() > 2].copy()
+    if len(significant_changes) > 0:
+        print("\nYears with >2pp change from previous year:")
+        for _, row in significant_changes.iterrows():
+            if pd.notna(row['yoy_change']):
+                prev_year = int(row['year'] - 1)
+                print(f"  {prev_year}→{int(row['year'])}: {row['yoy_change']:+.2f}pp "
+                      f"({annual_stats[annual_stats['year'] == prev_year]['reappointment_proportion'].iloc[0]:.2f}% "
+                      f"→ {row['reappointment_proportion']:.2f}%)")
+    
+    # Statistical summary
+    print("\n" + "-"*60)
+    print("STATISTICAL SUMMARY:")
+    print("-"*60)
+    
+    stats_summary = annual_stats['reappointment_proportion'].describe()
+    print(f"\nReappointment proportion statistics across {len(annual_stats)} years:")
+    print(f"  Mean: {stats_summary['mean']:.2f}%")
+    print(f"  Median: {stats_summary['50%']:.2f}%")
+    print(f"  Std Dev: {stats_summary['std']:.2f}%")
+    print(f"  Min: {stats_summary['min']:.2f}%")
+    print(f"  Max: {stats_summary['max']:.2f}%")
+    print(f"  Range: {stats_summary['max'] - stats_summary['min']:.2f}pp")
+    
+    # Create visualization
+    print("\n" + "-"*60)
+    print("CREATING VISUALIZATION:")
+    print("-"*60)
+    
+    # Set up the plot
+    plt.style.use('seaborn-darkgrid')
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 14))
+    
+    # Plot 1: Main trend line with markers
+    ax1.plot(annual_stats['year'], annual_stats['reappointment_proportion'], 
+             marker='o', markersize=10, linewidth=3, color='darkblue', label='Actual')
+    
+    # Add trend line
+    z = np.polyfit(annual_stats['year'], annual_stats['reappointment_proportion'], 1)
+    p = np.poly1d(z)
+    ax1.plot(annual_stats['year'], p(annual_stats['year']), 
+             '--', color='red', linewidth=2, alpha=0.8, 
+             label=f'Trend (slope: {z[0]:.2f}pp/year)')
+    
+    # Add value labels
+    for _, row in annual_stats.iterrows():
+        ax1.annotate(f"{row['reappointment_proportion']:.1f}%", 
+                    (row['year'], row['reappointment_proportion']),
+                    textcoords="offset points", 
+                    xytext=(0, 10), 
+                    ha='center',
+                    fontsize=9)
+    
+    ax1.set_xlabel('Year', fontsize=12)
+    ax1.set_ylabel('Reappointment Proportion (%)', fontsize=12)
+    ax1.set_title('Government-wide Reappointment Proportion by Year', fontsize=14, fontweight='bold')
+    ax1.legend(loc='best')
+    ax1.set_ylim(bottom=0)
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Year-over-year changes
+    colors = ['green' if x > 0 else 'red' for x in annual_stats['yoy_change'].fillna(0)]
+    bars = ax2.bar(annual_stats['year'][1:], annual_stats['yoy_change'][1:], 
+                    color=colors[1:], alpha=0.7, width=0.6)
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, annual_stats['yoy_change'][1:]):
+        if pd.notna(value):
+            ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                    f'{value:+.1f}', ha='center', 
+                    va='bottom' if value > 0 else 'top',
+                    fontsize=9)
+    
+    ax2.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+    ax2.set_xlabel('Year', fontsize=12)
+    ax2.set_ylabel('Year-over-Year Change (pp)', fontsize=12)
+    ax2.set_title('Annual Changes in Reappointment Proportion', fontsize=14, fontweight='bold')
+    ax2.grid(True, axis='y', alpha=0.3)
+    
+    # Plot 3: Components breakdown
+    ax3.plot(annual_stats['year'], annual_stats['total_appointments'], 
+             marker='s', label='Total Appointments', linewidth=2)
+    ax3.plot(annual_stats['year'], annual_stats['total_reappointments'], 
+             marker='^', label='Reappointments', linewidth=2)
+    
+    ax3.set_xlabel('Year', fontsize=12)
+    ax3.set_ylabel('Count', fontsize=12)
+    ax3.set_title('Total Appointments vs Reappointments', fontsize=14, fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    try:
+        plt.savefig(output_plot, dpi=300, bbox_inches='tight')
+        print(f"\nVisualization saved to: {output_plot}")
+    except Exception as e:
+        print(f"\nWARNING: Failed to save plot: {str(e)}")
+    
+    plt.close()
+    
+    # Additional analysis: Organization contribution
+    print("\n" + "-"*60)
+    print("ORGANIZATIONAL CONTRIBUTION ANALYSIS:")
+    print("-"*60)
+    
+    # Which organizations contribute most to government-wide reappointments?
+    org_contribution = rates_df.groupby('org').agg({
+        'reappointment_count': 'sum',
+        'total_appointments': 'sum'
+    }).reset_index()
+    
+    org_contribution['proportion'] = (
+        org_contribution['reappointment_count'] / org_contribution['total_appointments'] * 100
+    ).round(2)
+    
+    org_contribution['govt_contribution'] = (
+        org_contribution['reappointment_count'] / org_contribution['reappointment_count'].sum() * 100
+    ).round(2)
+    
+    top_contributors = org_contribution.nlargest(10, 'govt_contribution')
+    
+    print("\nTop 10 organizations by contribution to government-wide reappointments:")
+    for idx, row in top_contributors.iterrows():
+        print(f"  {row['org'][:40]:<40} : {row['govt_contribution']:>5.1f}% of all reappointments "
+              f"({int(row['reappointment_count'])} reappointments, {row['proportion']:.1f}% internal rate)")
+    
+    # Save results
+    print("\n" + "-"*60)
+    print("SAVING RESULTS:")
+    print("-"*60)
+    
+    # Prepare output dataframe
+    output_df = annual_stats[[
+        'year', 'total_appointments', 'total_reappointments', 
+        'unique_reappointed_individuals', 'total_employees',
+        'reappointment_proportion', 'unique_reappointment_proportion',
+        'active_organizations', 'yoy_change'
+    ]].copy()
+    
+    try:
+        output_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nSuccessfully saved to: {output_file}")
+        print(f"Output file contains {len(output_df)} rows (one per year)")
+        
+    except Exception as e:
+        print(f"\nERROR: Failed to save output file: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("SUMMARY:")
+    print("="*60)
+    
+    print(f"\nAnalyzed: {len(annual_stats)} years ({int(first_year['year'])}-{int(last_year['year'])})")
+    print(f"Total appointments across all years: {annual_stats['total_appointments'].sum():,}")
+    print(f"Total reappointments across all years: {annual_stats['total_reappointments'].sum():,}")
+    print(f"Overall reappointment proportion: {(annual_stats['total_reappointments'].sum() / annual_stats['total_appointments'].sum() * 100):.2f}%")
+    
+    # Key finding
+    if overall_change > 0:
+        print(f"\n🔺 KEY FINDING: Government-wide reappointment rates are INCREASING")
+        print(f"   The proportion has grown by {overall_change:.2f} percentage points over {len(annual_stats)} years")
+    else:
+        print(f"\n🔻 KEY FINDING: Government-wide reappointment rates are DECREASING")
+        print(f"   The proportion has declined by {abs(overall_change):.2f} percentage points over {len(annual_stats)} years")
+    
+    print("\n" + "="*60)
+    print("Step 8 completed successfully!")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

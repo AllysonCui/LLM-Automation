@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine Raw Datasets
+Combines 12 years of New Brunswick government appointment data (2013-2024)
+into a single dataset for analysis.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over 
+the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    script_dir = Path(__file__).parent
+    output_dir = script_dir / "analysis_data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def validate_raw_data_files():
+    """Check if all required raw data files exist."""
+    raw_data_dir = Path("raw_data")
+    
+    if not raw_data_dir.exists():
+        print(f"ERROR: Raw data directory '{raw_data_dir}' does not exist!")
+        return False, []
+    
+    # Check for all 12 years of data files
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    missing_files = []
+    existing_files = []
+    
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        if file_path.exists():
+            existing_files.append(file_path)
+            print(f"✓ Found: {file_path}")
+        else:
+            missing_files.append(file_path)
+            print(f"✗ Missing: {file_path}")
+    
+    if missing_files:
+        print(f"\nWARNING: {len(missing_files)} files are missing:")
+        for file in missing_files:
+            print(f"  - {file}")
+        print(f"\nProceeding with {len(existing_files)} available files...")
+    
+    return len(existing_files) > 0, existing_files
+
+def load_and_validate_csv(file_path):
+    """Load a CSV file and perform basic validation."""
+    try:
+        # Load CSV with error handling for different encodings
+        try:
+            df = pd.read_csv(file_path, encoding='utf-8')
+        except UnicodeDecodeError:
+            print(f"  UTF-8 failed, trying ISO-8859-1 encoding for {file_path}")
+            df = pd.read_csv(file_path, encoding='iso-8859-1')
+        
+        # Extract year from filename
+        year = int(file_path.stem.split('_')[1])
+        
+        # Add year column if not present
+        if 'year' not in df.columns:
+            df['year'] = year
+        
+        # Basic validation
+        if df.empty:
+            print(f"  WARNING: {file_path} is empty!")
+            return None
+        
+        print(f"  Loaded {len(df)} rows, {len(df.columns)} columns")
+        return df
+        
+    except Exception as e:
+        print(f"  ERROR loading {file_path}: {str(e)}")
+        return None
+
+def standardize_column_names(df):
+    """Standardize column names across all datasets."""
+    # Common column name variations and their standard forms
+    column_mapping = {
+        'organization': 'org',
+        'organisation': 'org',
+        'reappointed': 'reappointed',
+        're-appointed': 'reappointed',
+        're_appointed': 'reappointed',
+        'oic': 'oic',
+        'o_i_c': 'oic',
+        'order_in_council': 'oic'
+    }
+    
+    # Convert all column names to lowercase for consistency
+    df.columns = df.columns.str.lower().str.strip()
+    
+    # Apply mappings
+    df = df.rename(columns=column_mapping)
+    
+    return df
+
+def standardize_reappointed_column(df):
+    """Standardize the reappointed column to boolean values."""
+    if 'reappointed' not in df.columns:
+        print("  WARNING: 'reappointed' column not found, setting all to False")
+        df['reappointed'] = False
+        return df
+    
+    # Handle different formats of reappointed column
+    original_type = df['reappointed'].dtype
+    
+    if original_type == 'bool':
+        # Already boolean, no change needed
+        return df
+    elif original_type == 'object':
+        # Convert text values to boolean
+        df['reappointed'] = df['reappointed'].astype(str).str.lower().str.strip()
+        df['reappointed'] = df['reappointed'].map({
+            'true': True,
+            'false': False,
+            'yes': True,
+            'no': False,
+            'y': True,
+            'n': False,
+            '1': True,
+            '0': False,
+            'nan': False,
+            'none': False
+        })
+        # Fill any remaining NaN values with False
+        df['reappointed'] = df['reappointed'].fillna(False)
+    else:
+        # Numeric values
+        df['reappointed'] = df['reappointed'].fillna(0) > 0
+    
+    return df
+
+def combine_datasets(file_paths):
+    """Combine all datasets into a single DataFrame."""
+    print("\nCombining datasets...")
+    combined_data = []
+    total_rows = 0
+    
+    for file_path in file_paths:
+        print(f"\nProcessing: {file_path}")
+        
+        # Load and validate
+        df = load_and_validate_csv(file_path)
+        if df is None:
+            continue
+            
+        # Standardize column names
+        df = standardize_column_names(df)
+        
+        # Standardize reappointed column
+        df = standardize_reappointed_column(df)
+        
+        # Add source file information
+        df['source_file'] = file_path.name
+        
+        combined_data.append(df)
+        total_rows += len(df)
+        
+        print(f"  Processed: {len(df)} rows")
+    
+    if not combined_data:
+        raise ValueError("No valid data files found to combine!")
+    
+    # Combine all DataFrames
+    print(f"\nCombining {len(combined_data)} datasets...")
+    combined_df = pd.concat(combined_data, ignore_index=True, sort=False)
+    
+    print(f"Combined dataset contains {len(combined_df)} total rows")
+    return combined_df
+
+def validate_combined_data(df):
+    """Validate the combined dataset."""
+    print("\nValidating combined dataset...")
+    
+    # Basic statistics
+    print(f"Total rows: {len(df)}")
+    print(f"Total columns: {len(df.columns)}")
+    print(f"Years covered: {sorted(df['year'].unique())}")
+    
+    # Check for essential columns
+    essential_columns = ['name', 'position', 'org', 'reappointed', 'year']
+    missing_essential = [col for col in essential_columns if col not in df.columns]
+    
+    if missing_essential:
+        print(f"WARNING: Missing essential columns: {missing_essential}")
+    else:
+        print("✓ All essential columns present")
+    
+    # Data quality checks
+    print(f"\nData Quality Summary:")
+    print(f"- Missing names: {df['name'].isna().sum()}")
+    print(f"- Missing positions: {df['position'].isna().sum()}")
+    print(f"- Missing organizations: {df['org'].isna().sum()}")
+    print(f"- Reappointments: {df['reappointed'].sum()} ({df['reappointed'].mean()*100:.1f}%)")
+    
+    # Year distribution
+    print(f"\nRecords by year:")
+    year_counts = df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count} records")
+    
+    return True
+
+def save_combined_data(df, output_dir):
+    """Save the combined dataset."""
+    output_file = output_dir / "step1_combined_appointments.csv"
+    
+    print(f"\nSaving combined dataset to: {output_file}")
+    df.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Verify the saved file
+    if output_file.exists():
+        saved_df = pd.read_csv(output_file)
+        if len(saved_df) == len(df):
+            print(f"✓ Successfully saved {len(saved_df)} rows to {output_file}")
+        else:
+            print(f"ERROR: Saved file has {len(saved_df)} rows, expected {len(df)}")
+    else:
+        print(f"ERROR: Failed to save file to {output_file}")
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("STEP 1: COMBINE RAW DATASETS")
+    print("="*60)
+    print("New Brunswick Government Appointments Analysis")
+    print("Combining 12 years of appointment data (2013-2024)")
+    print("="*60)
+    
+    try:
+        # Setup directories
+        output_dir = setup_directories()
+        print(f"Output directory: {output_dir}")
+        
+        # Validate raw data files
+        files_exist, file_paths = validate_raw_data_files()
+        if not files_exist:
+            print("ERROR: No valid data files found!")
+            sys.exit(1)
+        
+        # Combine datasets
+        combined_df = combine_datasets(file_paths)
+        
+        # Validate combined data
+        validate_combined_data(combined_df)
+        
+        # Save combined data
+        save_combined_data(combined_df, output_dir)
+        
+        print("\n" + "="*60)
+        print("STEP 1 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Combined dataset ready for Step 2")
+        print(f"Total records: {len(combined_df)}")
+        print(f"Years covered: {min(combined_df['year'])} - {max(combined_df['year'])}")
+        
+    except Exception as e:
+        print(f"\nERROR in Step 1: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

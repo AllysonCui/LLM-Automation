@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw appointment datasets from 2013-2024
+This script reads all appointment CSV files and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+RAW_DATA_DIR = Path("raw_data")
+OUTPUT_DIR = Path("scripts/claudeopus4/version2/execution5/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step1_combined_appointments.csv"
+
+def setup_directories():
+    """Create output directory if it doesn't exist"""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Output directory created/verified: {OUTPUT_DIR}")
+
+def validate_csv_structure(df, filename, year):
+    """Validate the structure of each CSV file"""
+    print(f"\n--- Validating {filename} ---")
+    
+    # Check for expected columns (based on the provided CSV info)
+    expected_columns = {
+        'name', 'position', 'org', 'location', 'region', 
+        'posted_date', 'start_date', 'end_date', 'term_length',
+        'acts', 'remuneration', 'reappointed', 'oic', 
+        'href', 'body', 'link'
+    }
+    
+    actual_columns = set(df.columns)
+    missing_columns = expected_columns - actual_columns
+    extra_columns = actual_columns - expected_columns
+    
+    if missing_columns:
+        print(f"  ⚠ Missing columns: {missing_columns}")
+    if extra_columns:
+        print(f"  ⚠ Extra columns: {extra_columns}")
+    
+    # Add year column for tracking
+    df['source_year'] = year
+    
+    # Print basic statistics
+    print(f"  • Rows: {len(df)}")
+    print(f"  • Columns: {len(df.columns)}")
+    
+    # Check for critical columns
+    if 'name' in df.columns:
+        print(f"  • Unique names: {df['name'].nunique()}")
+    if 'org' in df.columns:
+        print(f"  • Unique organizations: {df['org'].nunique()}")
+    if 'reappointed' in df.columns:
+        reappointed_counts = df['reappointed'].value_counts()
+        print(f"  • Reappointed distribution: {reappointed_counts.to_dict()}")
+    
+    return df
+
+def load_and_combine_datasets():
+    """Load all appointment CSV files and combine them"""
+    combined_data = []
+    years_processed = []
+    
+    print("Starting to load appointment datasets...")
+    
+    # Process each year from 2013 to 2024
+    for year in range(2013, 2025):
+        filename = f"appointments_{year}.csv"
+        filepath = RAW_DATA_DIR / filename
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Validate and add year column
+            df = validate_csv_structure(df, filename, year)
+            
+            combined_data.append(df)
+            years_processed.append(year)
+            
+            print(f"✓ Successfully loaded {filename}")
+            
+        except FileNotFoundError:
+            print(f"✗ File not found: {filepath}")
+            print(f"  Skipping year {year}")
+            continue
+            
+        except pd.errors.EmptyDataError:
+            print(f"✗ Empty file: {filepath}")
+            print(f"  Skipping year {year}")
+            continue
+            
+        except Exception as e:
+            print(f"✗ Error loading {filename}: {str(e)}")
+            print(f"  Skipping year {year}")
+            continue
+    
+    # Check if we have any data
+    if not combined_data:
+        print("\n✗ ERROR: No data files were successfully loaded!")
+        sys.exit(1)
+    
+    print(f"\n✓ Successfully loaded {len(years_processed)} files")
+    print(f"Years processed: {years_processed}")
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    combined_df = pd.concat(combined_data, ignore_index=True)
+    
+    return combined_df, years_processed
+
+def analyze_combined_data(df):
+    """Analyze the combined dataset and print summary statistics"""
+    print("\n" + "="*50)
+    print("COMBINED DATASET ANALYSIS")
+    print("="*50)
+    
+    # Basic statistics
+    print(f"\nTotal rows: {len(df):,}")
+    print(f"Total columns: {len(df.columns)}")
+    print(f"\nColumns: {list(df.columns)}")
+    
+    # Year distribution
+    print("\nRows per year:")
+    year_counts = df['source_year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count:,} rows")
+    
+    # Data quality checks
+    print("\nData quality summary:")
+    null_counts = df.isnull().sum()
+    columns_with_nulls = null_counts[null_counts > 0]
+    
+    if len(columns_with_nulls) > 0:
+        print("Columns with missing values:")
+        for col, count in columns_with_nulls.items():
+            pct = (count / len(df)) * 100
+            print(f"  • {col}: {count:,} missing ({pct:.1f}%)")
+    else:
+        print("  ✓ No missing values found")
+    
+    # Reappointment analysis
+    if 'reappointed' in df.columns:
+        print("\nReappointment summary:")
+        reappointed_stats = df['reappointed'].value_counts()
+        for value, count in reappointed_stats.items():
+            pct = (count / len(df)) * 100
+            print(f"  • {value}: {count:,} ({pct:.1f}%)")
+    
+    # Organization analysis
+    if 'org' in df.columns:
+        print(f"\nUnique organizations: {df['org'].nunique()}")
+        top_orgs = df['org'].value_counts().head(10)
+        print("\nTop 10 organizations by appointment count:")
+        for org, count in top_orgs.items():
+            print(f"  • {org}: {count:,}")
+    
+    # Name analysis
+    if 'name' in df.columns:
+        print(f"\nUnique appointees: {df['name'].nunique()}")
+        # Find people with multiple appointments
+        name_counts = df['name'].value_counts()
+        multiple_appointments = name_counts[name_counts > 1]
+        print(f"People with multiple appointments: {len(multiple_appointments)}")
+        
+        if len(multiple_appointments) > 0:
+            print("\nTop 10 people by appointment count:")
+            for name, count in multiple_appointments.head(10).items():
+                print(f"  • {name}: {count} appointments")
+
+def save_combined_data(df):
+    """Save the combined dataset to CSV"""
+    print(f"\nSaving combined dataset to: {OUTPUT_FILE}")
+    
+    try:
+        df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved combined dataset")
+        print(f"  File size: {OUTPUT_FILE.stat().st_size / 1024 / 1024:.2f} MB")
+        
+    except Exception as e:
+        print(f"✗ ERROR saving file: {str(e)}")
+        sys.exit(1)
+
+def main():
+    """Main execution function"""
+    print("="*50)
+    print("STEP 1: COMBINE APPOINTMENT DATASETS")
+    print("="*50)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Setup
+    setup_directories()
+    
+    # Load and combine data
+    combined_df, years_processed = load_and_combine_datasets()
+    
+    # Analyze combined data
+    analyze_combined_data(combined_df)
+    
+    # Save results
+    save_combined_data(combined_df)
+    
+    # Final summary
+    print("\n" + "="*50)
+    print("STEP 1 COMPLETED SUCCESSFULLY")
+    print("="*50)
+    print(f"✓ Combined {len(years_processed)} years of data")
+    print(f"✓ Total records: {len(combined_df):,}")
+    print(f"✓ Output saved to: {OUTPUT_FILE}")
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if __name__ == "__main__":
+    main()

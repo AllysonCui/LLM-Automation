@@ -90,7 +90,7 @@ def validate_and_clean_data(df):
     org_missing = df_clean['org'].isna().sum()
     if org_missing > 0:
         print(f"  Organization missing: {org_missing:,} records")
-        df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
+        df_clean.loc[:, 'org'] = df_clean['org'].fillna('Unknown Organization')
     
     # Handle missing years
     year_missing = df_clean['year'].isna().sum()
@@ -101,7 +101,7 @@ def validate_and_clean_data(df):
     # Validate and convert years to integers
     try:
         # Convert to numeric first, then to int
-        df_clean['year'] = pd.to_numeric(df_clean['year'], errors='coerce')
+        df_clean.loc[:, 'year'] = pd.to_numeric(df_clean['year'], errors='coerce')
         year_invalid = df_clean['year'].isna().sum()
         
         if year_invalid > 0:
@@ -117,7 +117,7 @@ def validate_and_clean_data(df):
             df_clean = df_clean[valid_years]
         
         # Convert to integer
-        df_clean['year'] = df_clean['year'].astype(int)
+        df_clean.loc[:, 'year'] = df_clean['year'].astype(int)
         
     except Exception as e:
         print(f"  Error processing years: {e}")
@@ -139,10 +139,13 @@ def debug_grouped_data(df):
     
     Args:
         df (pd.DataFrame): Clean reappointment dataset
+    
+    Returns:
+        pd.DataFrame: Grouped data for pivot table creation
     """
     if len(df) == 0:
         print("No data available for debugging output")
-        return
+        return pd.DataFrame()
     
     print("\nDebugging: Sample grouped data before pivot table creation")
     print("-" * 60)
@@ -168,7 +171,8 @@ def debug_grouped_data(df):
     print(f"\nTop 5 organization-year combinations by reappointment count:")
     top_combinations = grouped.nlargest(5, 'reappointment_count')
     for _, row in top_combinations.iterrows():
-        print(f"  {row['org']} ({row['year']}): {row['reappointment_count']} reappointments")
+        org_name = row['org'][:50] + "..." if len(row['org']) > 50 else row['org']
+        print(f"  {org_name} ({row['year']}): {row['reappointment_count']} reappointments")
     
     return grouped
 
@@ -188,22 +192,26 @@ def create_reappointment_pivot(grouped_data):
     
     print("\nCreating reappointment pivot table...")
     
-    # Create pivot table
-    pivot_table = grouped_data.pivot(index='org', columns='year', values='reappointment_count')
-    
-    # Fill missing values with 0 (no reappointments in that year)
-    pivot_table = pivot_table.fillna(0).astype(int)
-    
-    # Ensure year columns are integers (not floats)
-    pivot_table.columns = pivot_table.columns.astype(int)
-    
-    # Add total column
-    pivot_table['Total'] = pivot_table.sum(axis=1)
-    
-    # Sort by total reappointments (descending)
-    pivot_table = pivot_table.sort_values('Total', ascending=False)
-    
-    print(f"✓ Created pivot table: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]-1} years")
+    try:
+        # Create pivot table
+        pivot_table = grouped_data.pivot(index='org', columns='year', values='reappointment_count')
+        
+        # Fill missing values with 0 (no reappointments in that year)
+        pivot_table = pivot_table.fillna(0).astype(int)
+        
+        # Ensure year columns are integers (not floats)
+        pivot_table.columns = pivot_table.columns.astype(int)
+        
+        # Add total column
+        pivot_table.loc[:, 'Total'] = pivot_table.sum(axis=1)
+        
+        # Sort by total reappointments (descending)
+        pivot_table = pivot_table.sort_values('Total', ascending=False)
+        
+        print(f"✓ Created pivot table: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]-1} years")
+        
+    except Exception as e:
+        raise Exception(f"Error creating pivot table: {e}")
     
     return pivot_table
 
@@ -230,13 +238,13 @@ def validate_pivot_table(pivot_table):
     
     # Validation statistics
     orgs_with_reappointments = (pivot_table['Total'] > 0).sum()
-    years_with_data = (pivot_table[year_columns].sum() > 0).sum()
+    years_with_data = (pivot_table[year_columns].sum() > 0).sum() if year_columns else 0
     max_reappointments = pivot_table['Total'].max()
     
     print(f"✓ Validation passed:")
     print(f"  Total reappointments: {total_reappointments:,}")
     print(f"  Organizations with reappointments: {orgs_with_reappointments}/{len(pivot_table)}")
-    print(f"  Years with reappointment data: {years_with_data}/{len(year_columns)}")
+    print(f"  Years with reappointment data: {years_with_data}/{len(year_columns) if year_columns else 0}")
     print(f"  Maximum reappointments (single org): {max_reappointments}")
 
 def analyze_reappointment_patterns(pivot_table):
@@ -261,37 +269,43 @@ def analyze_reappointment_patterns(pivot_table):
     print(f"Summary statistics:")
     print(f"  Total reappointments: {total_reappointments:,}")
     print(f"  Organizations with reappointments: {len(pivot_table):,}")
-    print(f"  Year range: {min(year_columns)}-{max(year_columns)}")
-    print(f"  Average reappointments per org: {total_reappointments/len(pivot_table):.1f}")
+    if year_columns:
+        print(f"  Year range: {min(year_columns)}-{max(year_columns)}")
+        print(f"  Average reappointments per org: {total_reappointments/len(pivot_table):.1f}")
     
     # Top organizations by reappointments
     print(f"\nTop 10 organizations by total reappointments:")
     top_orgs = pivot_table.head(10)
     for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
         total = row['Total']
-        years_active = (row[year_columns] > 0).sum()
-        print(f"  {i:2d}. {org:<50} {total:3d} reappointments ({years_active} years)")
+        years_active = (row[year_columns] > 0).sum() if year_columns else 0
+        org_display = org[:50] + "..." if len(org) > 50 else org
+        print(f"  {i:2d}. {org_display:<53} {total:3d} reappointments ({years_active} years)")
     
     # Yearly reappointment totals
-    print(f"\nReappointments by year:")
-    yearly_totals = pivot_table[year_columns].sum().sort_index()
-    for year, total in yearly_totals.items():
-        print(f"  {year}: {total:,} reappointments")
+    if year_columns:
+        print(f"\nReappointments by year:")
+        yearly_totals = pivot_table[year_columns].sum().sort_index()
+        for year, total in yearly_totals.items():
+            print(f"  {year}: {total:,} reappointments")
     
     # Organizations with most reappointments in a single year
-    print(f"\nHighest single-year reappointment counts:")
-    max_values = []
-    for _, row in pivot_table.iterrows():
-        org = row.name
-        year_data = row[year_columns]
-        if year_data.max() > 0:
-            max_year = year_data.idxmax()
-            max_count = year_data.max()
-            max_values.append((org, max_year, max_count))
-    
-    max_values.sort(key=lambda x: x[2], reverse=True)
-    for i, (org, year, count) in enumerate(max_values[:5], 1):
-        print(f"  {i}. {org} in {year}: {count} reappointments")
+    if year_columns:
+        print(f"\nHighest single-year reappointment counts:")
+        max_values = []
+        for _, row in pivot_table.iterrows():
+            org = row.name
+            year_data = row[year_columns]
+            if len(year_data) > 0 and year_data.max() > 0:
+                max_year = year_data.idxmax()
+                max_count = year_data.max()
+                max_values.append((org, max_year, max_count))
+        
+        if max_values:
+            max_values.sort(key=lambda x: x[2], reverse=True)
+            for i, (org, year, count) in enumerate(max_values[:5], 1):
+                org_display = org[:45] + "..." if len(org) > 45 else org
+                print(f"  {i}. {org_display} in {year}: {count} reappointments")
 
 def save_reappointment_counts(pivot_table, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
     """
@@ -310,9 +324,13 @@ def save_reappointment_counts(pivot_table, output_dir="scripts/claudesonnet4/ver
     # Define output file path
     output_file = os.path.join(output_dir, "step5_reappointment_counts.csv")
     
-    # Save to CSV with organization names as index
-    pivot_table.to_csv(output_file, index=True)
-    print(f"\n✓ Reappointment counts table saved to: {output_file}")
+    try:
+        # Save to CSV with organization names as index
+        pivot_table.to_csv(output_file, index=True)
+        print(f"\n✓ Reappointment counts table saved to: {output_file}")
+        
+    except Exception as e:
+        raise Exception(f"Error saving reappointment counts: {e}")
     
     return output_file
 
@@ -366,6 +384,8 @@ def main():
         
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

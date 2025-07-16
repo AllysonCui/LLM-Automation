@@ -1,0 +1,127 @@
+import os
+import pandas as pd
+import re
+import matplotlib.pyplot as plt
+from collections import Counter
+
+def normalize_text_column(series: pd.Series) -> pd.Series:
+    """Robust normalization: lowercase, strip, remove extra spaces, fix 'and'."""
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(r"\s*,\s*", ", ", regex=True)  # Standardize comma spacing
+        .str.replace(r"\s{2,}", " ", regex=True)    # Remove extra spacing
+        .str.replace(r"\band\b", "and", flags=re.IGNORECASE, regex=True)  # Force lowercase "and"
+        .str.replace(r"\s+", " ", regex=True)       # Collapse all space to single
+        .str.strip()
+    )
+
+def normalize_and_standardize(df):
+    """Standardize relevant columns for fair comparison."""
+    df = df.rename(columns={
+        "organization": "org",
+        "source_year": "year"
+    })
+
+    df = df[["reappointed", "name", "position", "org", "year"]].copy()
+
+    for col in ["name", "position", "org"]:
+        df[col] = normalize_text_column(df[col])
+
+    # Now re-title-case only after full normalization (optional, or keep lowercase if comparing)
+    df["position"] = df["position"].str.title()
+    df["name"] = df["name"].str.title()
+    df["org"] = df["org"].str.title()
+
+    df["reappointed"] = df["reappointed"].astype(bool)
+    df["year"] = df["year"].astype(int)
+
+    return df
+
+
+def is_visibly_missing(org_val):
+    return str(org_val).strip().lower() in ["", "nan", "unknown"]
+
+def drop_rows_with_missing_org(df):
+    return df[~df["org"].apply(is_visibly_missing)]
+
+# Load and normalize full correct dataset
+correct_path = "scripts/human/version1/analysis_data/step3_repeats_marked.csv"
+correct_df = pd.read_csv(correct_path)
+correct_df = normalize_and_standardize(correct_df)
+filtered_correct_df = drop_rows_with_missing_org(correct_df)
+
+# Root directory of all outputs
+root_dir = "scripts"
+
+# Track wrong rows and successes
+wrong_row_counts = []
+total_executions = 0
+correct_executions = 0
+
+# Traverse and compare
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path):
+        continue
+
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path):
+            continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"):
+                continue
+
+            exec_path = os.path.join(version_path, folder)
+            test_file = os.path.join(exec_path, "analysis_data", "step3_repeats_marked.csv")
+
+            if not os.path.exists(test_file):
+                continue
+
+            total_executions += 1
+
+            try:
+                test_df = pd.read_csv(test_file)
+                test_df = normalize_and_standardize(test_df)
+                num_rows = len(test_df)
+
+                # Choose reference
+                if num_rows == 3718:
+                    reference_df = correct_df
+                    label = "full correct answer"
+                else:
+                    print(f"{test_file}: ⚠️ Unexpected row count ({num_rows})")
+                    continue
+
+                merged = reference_df.merge(
+                    test_df.drop_duplicates(),
+                    on=["reappointed", "name", "position", "org", "year"],
+                    how="left",
+                    indicator=True
+                )
+                missing_rows = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+
+                visibly_missing = missing_rows["org"].apply(is_visibly_missing)
+                num_wrong = len(missing_rows[~visibly_missing])
+
+                if num_wrong == 0:
+                    print(f"{test_file}: ✅ All valid rows from {label} are present in tested dataset")
+                    correct_executions += 1
+                else:
+                    print(f"{test_file}: ❌ {num_wrong} missing valid rows from {label}")
+                    print(missing_rows[~visibly_missing].head(5))
+
+                wrong_row_counts.append(num_wrong)
+
+            except Exception as e:
+                print(f"{test_file}: ❌ Failed to process ({e})")
+
+# Summarize results
+print("\n=== SUMMARY ===")
+print(f"Total Executions Checked: {total_executions}")
+print(f"Executions with All Correct Rows: {correct_executions}")
+print(f"Executions with Errors: {total_executions - correct_executions}")

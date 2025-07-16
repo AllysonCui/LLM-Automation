@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script identifies repeated name-position-org combinations and marks
+"reappointed" as True for all appearances except the first one.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+INPUT_DIR = Path("scripts/claudeopus4/version2/execution5/analysis_data")
+INPUT_FILE = INPUT_DIR / "step2_key_columns_data.csv"
+OUTPUT_FILE = INPUT_DIR / "step3_repeats_marked.csv"
+
+def load_key_columns_data():
+    """Load the key columns dataset from step 2"""
+    print(f"Loading key columns data from: {INPUT_FILE}")
+    
+    if not INPUT_FILE.exists():
+        print(f"✗ ERROR: Input file not found: {INPUT_FILE}")
+        print("  Please run step 2 first to create the key columns dataset.")
+        sys.exit(1)
+    
+    try:
+        df = pd.read_csv(INPUT_FILE, encoding='utf-8')
+        print(f"✓ Successfully loaded dataset")
+        print(f"  • Total rows: {len(df):,}")
+        print(f"  • Columns: {list(df.columns)}")
+        
+        # Convert reappointed to boolean type if needed
+        if 'reappointed' in df.columns and df['reappointed'].dtype == 'object':
+            df['reappointed'] = df['reappointed'].map({'True': True, 'False': False, 'true': True, 'false': False})
+        
+        return df
+    
+    except Exception as e:
+        print(f"✗ ERROR loading file: {str(e)}")
+        sys.exit(1)
+
+def analyze_current_reappointments(df):
+    """Analyze the current state of reappointments before marking"""
+    print("\nAnalyzing current reappointment data...")
+    
+    # Current reappointed statistics
+    reappointed_counts = df['reappointed'].value_counts(dropna=False)
+    print("\nCurrent 'reappointed' distribution:")
+    for value, count in reappointed_counts.items():
+        pct = (count / len(df)) * 100
+        print(f"  • {value}: {count:,} ({pct:.1f}%)")
+    
+    # Check for missing values in key columns
+    print("\nMissing values in key columns:")
+    for col in ['name', 'position', 'org']:
+        null_count = df[col].isnull().sum()
+        if null_count > 0:
+            pct = (null_count / len(df)) * 100
+            print(f"  • {col}: {null_count:,} missing ({pct:.1f}%)")
+    
+    # Count existing name-position-org combinations
+    df_temp = df.copy()
+    df_temp['combo_key'] = df_temp['name'].astype(str) + '|' + \
+                           df_temp['position'].astype(str) + '|' + \
+                           df_temp['org'].astype(str)
+    
+    unique_combos = df_temp['combo_key'].nunique()
+    total_records = len(df_temp)
+    potential_reappointments = total_records - unique_combos
+    
+    print(f"\nCombination analysis:")
+    print(f"  • Total records: {total_records:,}")
+    print(f"  • Unique name-position-org combinations: {unique_combos:,}")
+    print(f"  • Potential reappointments (duplicates): {potential_reappointments:,}")
+    
+    return df_temp
+
+def mark_repeated_appointments(df):
+    """Mark repeated name-position-org combinations as reappointed"""
+    print("\nMarking repeated appointments...")
+    
+    # Create a copy to preserve original data
+    df_marked = df.copy()
+    
+    # Sort by year to ensure chronological order
+    df_marked = df_marked.sort_values(['year', 'name', 'position', 'org'], 
+                                      na_position='last').reset_index(drop=True)
+    
+    # Create combination key for grouping
+    # Handle NaN values by converting to string
+    df_marked['combo_key'] = (df_marked['name'].fillna('MISSING_NAME').astype(str) + '|' + 
+                              df_marked['position'].fillna('MISSING_POSITION').astype(str) + '|' + 
+                              df_marked['org'].fillna('MISSING_ORG').astype(str))
+    
+    # Create new reappointed column based on logic
+    df_marked['reappointed_new'] = False
+    
+    # Track first appearances
+    first_appearances = set()
+    marked_count = 0
+    
+    # Process each row
+    print("  Processing appointments chronologically...")
+    for idx, row in df_marked.iterrows():
+        combo = row['combo_key']
+        
+        # Skip if any key field is missing
+        if 'MISSING_' in combo:
+            continue
+            
+        if combo in first_appearances:
+            # This is a repeated appointment
+            df_marked.at[idx, 'reappointed_new'] = True
+            marked_count += 1
+        else:
+            # This is the first appearance
+            first_appearances.add(combo)
+            df_marked.at[idx, 'reappointed_new'] = False
+        
+        # Progress indicator for large datasets
+        if (idx + 1) % 10000 == 0:
+            print(f"    Processed {idx + 1:,} records...")
+    
+    print(f"✓ Marking completed")
+    print(f"  • Total combinations marked as reappointed: {marked_count:,}")
+    print(f"  • Unique first appearances: {len(first_appearances):,}")
+    
+    # Compare with original reappointed column
+    if 'reappointed' in df_marked.columns:
+        print("\nComparing new markings with original 'reappointed' column:")
+        
+        # Create comparison
+        df_marked['match'] = df_marked['reappointed'] == df_marked['reappointed_new']
+        
+        # Handle NaN values in comparison
+        both_nan = df_marked['reappointed'].isna() & df_marked['reappointed_new'].isna()
+        df_marked.loc[both_nan, 'match'] = True
+        
+        matches = df_marked['match'].sum()
+        mismatches = len(df_marked) - matches
+        match_pct = (matches / len(df_marked)) * 100
+        
+        print(f"  • Matches: {matches:,} ({match_pct:.1f}%)")
+        print(f"  • Mismatches: {mismatches:,} ({100-match_pct:.1f}%)")
+        
+        if mismatches > 0:
+            print("\n  Analyzing mismatches:")
+            mismatch_df = df_marked[~df_marked['match']]
+            
+            # Original True, New False
+            orig_true_new_false = mismatch_df[
+                (mismatch_df['reappointed'] == True) & 
+                (mismatch_df['reappointed_new'] == False)
+            ]
+            print(f"    - Original=True, New=False: {len(orig_true_new_false):,}")
+            
+            # Original False, New True
+            orig_false_new_true = mismatch_df[
+                (mismatch_df['reappointed'] == False) & 
+                (mismatch_df['reappointed_new'] == True)
+            ]
+            print(f"    - Original=False, New=True: {len(orig_false_new_true):,}")
+            
+            # Other mismatches (involving NaN)
+            other_mismatches = len(mismatch_df) - len(orig_true_new_false) - len(orig_false_new_true)
+            print(f"    - Other (involving NaN): {other_mismatches:,}")
+    
+    # Replace the original reappointed column with the new one
+    df_marked['reappointed'] = df_marked['reappointed_new']
+    
+    # Drop temporary columns
+    df_marked = df_marked.drop(columns=['combo_key', 'reappointed_new', 'match'], errors='ignore')
+    
+    return df_marked
+
+def analyze_results_by_year(df):
+    """Analyze the results of marking by year"""
+    print("\n" + "="*50)
+    print("RESULTS ANALYSIS BY YEAR")
+    print("="*50)
+    
+    # Group by year and calculate statistics
+    yearly_stats = df.groupby('year').agg({
+        'reappointed': ['count', 'sum', lambda x: x.sum() / x.count() * 100]
+    }).round(2)
+    
+    yearly_stats.columns = ['Total_Appointments', 'Reappointments', 'Reappointment_Rate_%']
+    
+    print("\nYearly reappointment statistics:")
+    print(yearly_stats.to_string())
+    
+    # Overall statistics
+    total_appointments = len(df)
+    total_reappointments = df['reappointed'].sum()
+    overall_rate = (total_reappointments / total_appointments) * 100
+    
+    print(f"\nOverall statistics:")
+    print(f"  • Total appointments: {total_appointments:,}")
+    print(f"  • Total reappointments: {total_reappointments:,}")
+    print(f"  • Overall reappointment rate: {overall_rate:.2f}%")
+    
+    return yearly_stats
+
+def analyze_results_by_organization(df):
+    """Analyze the results by organization"""
+    print("\nTop 20 organizations by reappointment count:")
+    
+    # Group by organization
+    org_stats = df.groupby('org').agg({
+        'reappointed': ['count', 'sum']
+    })
+    org_stats.columns = ['Total_Appointments', 'Reappointments']
+    org_stats['Reappointment_Rate_%'] = (org_stats['Reappointments'] / 
+                                          org_stats['Total_Appointments'] * 100).round(2)
+    
+    # Sort by reappointment count
+    org_stats_sorted = org_stats.sort_values('Reappointments', ascending=False).head(20)
+    
+    for org, stats in org_stats_sorted.iterrows():
+        print(f"  • {org}")
+        print(f"    - Total appointments: {stats['Total_Appointments']:,}")
+        print(f"    - Reappointments: {stats['Reappointments']:,}")
+        print(f"    - Rate: {stats['Reappointment_Rate_%']:.1f}%")
+
+def find_most_reappointed_people(df):
+    """Find people with the most reappointments"""
+    print("\nTop 10 people with most reappointments:")
+    
+    # Group by name and count reappointments
+    person_reappointments = df[df['reappointed'] == True].groupby('name').size()
+    top_people = person_reappointments.sort_values(ascending=False).head(10)
+    
+    for name, count in top_people.items():
+        # Get details of this person's appointments
+        person_df = df[df['name'] == name].sort_values('year')
+        positions = person_df['position'].unique()
+        orgs = person_df['org'].unique()
+        years = person_df['year'].tolist()
+        
+        print(f"\n  • {name}: {count} reappointments")
+        print(f"    - Years active: {min(years)}-{max(years)}")
+        print(f"    - Positions held: {len(positions)}")
+        print(f"    - Organizations: {len(orgs)}")
+
+def save_marked_data(df):
+    """Save the dataset with marked reappointments"""
+    print(f"\nSaving marked dataset to: {OUTPUT_FILE}")
+    
+    try:
+        df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved marked dataset")
+        print(f"  • File size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB")
+        print(f"  • Total records: {len(df):,}")
+        
+    except Exception as e:
+        print(f"✗ ERROR saving file: {str(e)}")
+        sys.exit(1)
+
+def main():
+    """Main execution function"""
+    print("="*50)
+    print("STEP 3: MARK REPEATED APPOINTMENTS")
+    print("="*50)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load data
+    df = load_key_columns_data()
+    
+    # Analyze current state
+    df_with_combo = analyze_current_reappointments(df)
+    
+    # Mark repeated appointments
+    df_marked = mark_repeated_appointments(df_with_combo)
+    
+    # Analyze results
+    yearly_stats = analyze_results_by_year(df_marked)
+    analyze_results_by_organization(df_marked)
+    find_most_reappointed_people(df_marked)
+    
+    # Save results
+    save_marked_data(df_marked)
+    
+    # Final summary
+    print("\n" + "="*50)
+    print("STEP 3 COMPLETED SUCCESSFULLY")
+    print("="*50)
+    print(f"✓ Processed {len(df_marked):,} appointment records")
+    print(f"✓ Marked {df_marked['reappointed'].sum():,} as reappointments")
+    print(f"✓ Output saved to: {OUTPUT_FILE}")
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if __name__ == "__main__":
+    main()

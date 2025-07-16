@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets
+This script loads all appointment CSV files from 2013-2024 and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+RAW_DATA_DIR = Path("raw_data")
+OUTPUT_DIR = Path("scripts/claudeopus4/version2/execution8/analysis_data")
+OUTPUT_FILE = OUTPUT_DIR / "step1_combined_appointments.csv"
+
+def create_output_directory():
+    """Create output directory if it doesn't exist."""
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Output directory created/verified: {OUTPUT_DIR}")
+        return True
+    except Exception as e:
+        print(f"✗ Error creating output directory: {e}")
+        return False
+
+def load_appointment_file(year):
+    """
+    Load a single appointment CSV file for a given year.
+    
+    Parameters:
+    year (int): The year of the appointment file to load
+    
+    Returns:
+    tuple: (DataFrame or None, error message or None)
+    """
+    filename = f"appointments_{year}.csv"
+    filepath = RAW_DATA_DIR / filename
+    
+    try:
+        # Check if file exists
+        if not filepath.exists():
+            return None, f"File not found: {filepath}"
+        
+        # Load CSV with error handling
+        df = pd.read_csv(filepath, encoding='utf-8')
+        
+        # Add year column for tracking
+        df['source_year'] = year
+        
+        # Basic validation
+        if df.empty:
+            return None, f"Empty dataframe for year {year}"
+        
+        print(f"✓ Loaded {filename}: {len(df)} rows, {len(df.columns)} columns")
+        
+        return df, None
+        
+    except Exception as e:
+        return None, f"Error loading {filename}: {str(e)}"
+
+def standardize_columns(df):
+    """
+    Standardize column names across different years.
+    Some files might have 'org' while others have 'organization'.
+    """
+    # Create a mapping of potential column variations
+    column_mapping = {
+        'org': 'organization',
+        'Organisation': 'organization',
+        'Organization': 'organization',
+        # Add more mappings as needed based on actual data
+    }
+    
+    # Apply mapping
+    for old_name, new_name in column_mapping.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df.rename(columns={old_name: new_name}, inplace=True)
+            print(f"  → Renamed column '{old_name}' to '{new_name}'")
+    
+    return df
+
+def validate_combined_data(combined_df):
+    """
+    Validate the combined dataset and print summary statistics.
+    """
+    print("\n" + "="*60)
+    print("COMBINED DATASET VALIDATION")
+    print("="*60)
+    
+    # Basic statistics
+    print(f"\nTotal rows: {len(combined_df):,}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    print(f"Years covered: {combined_df['source_year'].min()} - {combined_df['source_year'].max()}")
+    
+    # Rows per year
+    print("\nRows per year:")
+    year_counts = combined_df['source_year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"  {year}: {count:,} rows")
+    
+    # Column information
+    print("\nColumn names and types:")
+    for col in sorted(combined_df.columns):
+        dtype = combined_df[col].dtype
+        non_null = combined_df[col].notna().sum()
+        null_pct = (1 - non_null / len(combined_df)) * 100
+        print(f"  - {col}: {dtype} ({non_null:,} non-null, {null_pct:.1f}% missing)")
+    
+    # Check for critical columns
+    critical_columns = ['name', 'position', 'reappointed']
+    print("\nCritical columns check:")
+    for col in critical_columns:
+        if col in combined_df.columns:
+            print(f"  ✓ '{col}' column present")
+        else:
+            print(f"  ✗ '{col}' column MISSING")
+    
+    # Sample data
+    print("\nSample of combined data (first 5 rows):")
+    print(combined_df.head())
+    
+    return True
+
+def main():
+    """Main execution function."""
+    print("STEP 1: COMBINING RAW DATASETS")
+    print("="*60)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Create output directory
+    if not create_output_directory():
+        sys.exit(1)
+    
+    # Initialize lists to store dataframes and errors
+    all_dataframes = []
+    errors = []
+    
+    # Load all files from 2013 to 2024
+    print("\nLoading appointment files...")
+    for year in range(2013, 2025):
+        df, error = load_appointment_file(year)
+        
+        if error:
+            errors.append(error)
+            print(f"✗ {error}")
+        else:
+            # Standardize columns
+            df = standardize_columns(df)
+            all_dataframes.append(df)
+    
+    # Check if we have any data
+    if not all_dataframes:
+        print("\n✗ ERROR: No data files could be loaded!")
+        print("Errors encountered:")
+        for error in errors:
+            print(f"  - {error}")
+        sys.exit(1)
+    
+    # Report on loading results
+    print(f"\n✓ Successfully loaded {len(all_dataframes)} out of 12 files")
+    if errors:
+        print(f"✗ Failed to load {len(errors)} files:")
+        for error in errors:
+            print(f"  - {error}")
+    
+    # Combine all dataframes
+    print("\nCombining dataframes...")
+    try:
+        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+        print(f"✓ Successfully combined {len(all_dataframes)} dataframes")
+    except Exception as e:
+        print(f"✗ Error combining dataframes: {e}")
+        sys.exit(1)
+    
+    # Validate combined data
+    validate_combined_data(combined_df)
+    
+    # Save combined dataset
+    print(f"\nSaving combined dataset to: {OUTPUT_FILE}")
+    try:
+        combined_df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved combined dataset")
+        print(f"  File size: {OUTPUT_FILE.stat().st_size / 1024 / 1024:.2f} MB")
+    except Exception as e:
+        print(f"✗ Error saving combined dataset: {e}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 1 COMPLETED SUCCESSFULLY")
+    print(f"Output file: {OUTPUT_FILE}")
+    print(f"Total records: {len(combined_df):,}")
+    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

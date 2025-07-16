@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets
+This script combines appointment data from 2013-2024 into a single CSV file.
+
+Author: Data Analysis Script
+Date: 2025-07-05
+Output: analysis_data/step1_combined_appointments.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    script_dir = Path(__file__).parent
+    analysis_dir = script_dir / "analysis_data"
+    
+    # Create analysis_data directory if it doesn't exist
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Created/verified directory: {analysis_dir}")
+    
+    return script_dir, analysis_dir
+
+def validate_columns(df, year, expected_columns):
+    """Validate that required columns exist in the dataframe."""
+    missing_columns = set(expected_columns) - set(df.columns)
+    if missing_columns:
+        print(f"  ⚠ Warning: Year {year} missing columns: {missing_columns}")
+    return df
+
+def load_single_year(file_path, year):
+    """Load a single year's CSV file with error handling."""
+    try:
+        # Read CSV with proper encoding
+        df = pd.read_csv(file_path, encoding='utf-8')
+        
+        # Add year column for tracking
+        df['data_year'] = year
+        
+        # Print basic info about the loaded file
+        print(f"  ✓ Loaded {file_path.name}: {len(df)} rows, {len(df.columns)} columns")
+        
+        # Handle potential column name variations
+        # Standardize 'org' vs 'organization' column names
+        if 'organization' in df.columns and 'org' not in df.columns:
+            df['org'] = df['organization']
+            print(f"    → Renamed 'organization' to 'org' for consistency")
+        
+        return df
+        
+    except FileNotFoundError:
+        print(f"  ✗ File not found: {file_path}")
+        return None
+    except pd.errors.EmptyDataError:
+        print(f"  ✗ Empty file: {file_path}")
+        return None
+    except Exception as e:
+        print(f"  ✗ Error loading {file_path}: {str(e)}")
+        return None
+
+def combine_datasets(raw_data_dir, output_file):
+    """Combine all appointment CSV files from 2013-2024."""
+    print("\n" + "="*60)
+    print("STEP 1: COMBINING RAW DATASETS")
+    print("="*60)
+    
+    # List to store all dataframes
+    all_dfs = []
+    
+    # Expected columns based on the provided schema
+    expected_columns = [
+        'name', 'position', 'org', 'location', 'region', 
+        'posted_date', 'start_date', 'end_date', 'term_length',
+        'acts', 'remuneration', 'reappointed', 'oic', 
+        'href', 'body', 'link'
+    ]
+    
+    # Track statistics
+    total_rows = 0
+    files_loaded = 0
+    files_failed = 0
+    
+    print(f"\nSearching for files in: {raw_data_dir}")
+    print(f"Expected columns: {', '.join(expected_columns[:5])}... (and {len(expected_columns)-5} more)")
+    
+    # Load each year's data
+    print("\nLoading files:")
+    for year in range(2013, 2025):  # 2013 to 2024 inclusive
+        file_name = f"appointments_{year}.csv"
+        file_path = raw_data_dir / file_name
+        
+        df = load_single_year(file_path, year)
+        
+        if df is not None:
+            # Validate columns
+            df = validate_columns(df, year, expected_columns)
+            
+            all_dfs.append(df)
+            total_rows += len(df)
+            files_loaded += 1
+        else:
+            files_failed += 1
+    
+    # Check if we loaded any data
+    if not all_dfs:
+        print("\n✗ ERROR: No data files could be loaded!")
+        return False
+    
+    # Combine all dataframes
+    print(f"\n→ Combining {len(all_dfs)} dataframes...")
+    combined_df = pd.concat(all_dfs, ignore_index=True, sort=False)
+    
+    # Sort by year and any date columns if available
+    if 'posted_date' in combined_df.columns:
+        combined_df = combined_df.sort_values(['data_year', 'posted_date'], 
+                                              na_position='last')
+    else:
+        combined_df = combined_df.sort_values('data_year')
+    
+    # Save combined dataset
+    print(f"\n→ Saving combined dataset to: {output_file}")
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Print summary statistics
+    print("\n" + "-"*60)
+    print("SUMMARY STATISTICS:")
+    print("-"*60)
+    print(f"Files successfully loaded: {files_loaded}/12")
+    print(f"Files failed to load: {files_failed}")
+    print(f"Total rows combined: {total_rows:,}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    print(f"Years covered: {combined_df['data_year'].min()}-{combined_df['data_year'].max()}")
+    
+    # Data quality checks
+    print("\nDATA QUALITY CHECKS:")
+    print(f"Rows with missing 'name': {combined_df['name'].isna().sum():,}")
+    print(f"Rows with missing 'org': {combined_df['org'].isna().sum():,}")
+    print(f"Rows with missing 'position': {combined_df['position'].isna().sum():,}")
+    
+    if 'reappointed' in combined_df.columns:
+        print(f"\nReappointment column analysis:")
+        print(f"  - Total non-null values: {combined_df['reappointed'].notna().sum():,}")
+        print(f"  - Unique values: {combined_df['reappointed'].unique()}")
+        
+        # Check data type and values
+        if combined_df['reappointed'].dtype == 'bool':
+            reapp_counts = combined_df['reappointed'].value_counts()
+            print(f"  - True (reappointed): {reapp_counts.get(True, 0):,}")
+            print(f"  - False (not reappointed): {reapp_counts.get(False, 0):,}")
+        else:
+            print("  - Data type: text/string (will need conversion in later steps)")
+    
+    # Column availability report
+    print("\nCOLUMN AVAILABILITY:")
+    for col in expected_columns:
+        if col in combined_df.columns:
+            non_null = combined_df[col].notna().sum()
+            pct = (non_null / len(combined_df)) * 100
+            print(f"  ✓ {col}: {non_null:,} non-null values ({pct:.1f}%)")
+        else:
+            print(f"  ✗ {col}: NOT FOUND")
+    
+    print("\n✓ Step 1 completed successfully!")
+    print(f"✓ Output saved to: {output_file}")
+    print("="*60)
+    
+    return True
+
+def main():
+    """Main execution function."""
+    try:
+        # Setup directories
+        script_dir, analysis_dir = setup_directories()
+        
+        # Define input and output paths
+        # Go up to find raw_data directory (assuming script is in scripts/claudeopus4/version2/execution2/)
+        project_root = script_dir.parent.parent.parent.parent
+        raw_data_dir = project_root / "raw_data"
+        output_file = analysis_dir / "step1_combined_appointments.csv"
+        
+        # Check if raw_data directory exists
+        if not raw_data_dir.exists():
+            print(f"\n✗ ERROR: raw_data directory not found at: {raw_data_dir}")
+            print("Please ensure the raw_data directory exists and contains the CSV files.")
+            return 1
+        
+        # Run the combination process
+        success = combine_datasets(raw_data_dir, output_file)
+        
+        if success:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"\n✗ CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+============================
+
+This script extracts and retains the key columns from the combined appointments dataset:
+- "reappointed", "name", "position", "org", and "year"
+
+Research Question: Which government branch in New Brunswick most frequently reappoints 
+past appointees, and is this trend increasing or declining over the past 12 years?
+
+Author: Claude Sonnet 4
+Version: 2
+Execution: 7
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution7/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def load_combined_dataset(input_dir):
+    """
+    Load the combined dataset from Step 1.
+    
+    Args:
+        input_dir (Path): Directory containing the combined dataset
+    
+    Returns:
+        pd.DataFrame or None: Loaded dataset or None if failed
+    """
+    input_file = input_dir / "step1_combined_appointments.csv"
+    
+    try:
+        print(f"📂 Loading combined dataset from: {input_file}")
+        
+        if not input_file.exists():
+            print(f"❌ ERROR: Combined dataset not found: {input_file}")
+            print("Please run Step 1 first to create the combined dataset.")
+            return None
+        
+        df = pd.read_csv(input_file)
+        
+        if df.empty:
+            print("❌ ERROR: Combined dataset is empty")
+            return None
+        
+        print(f"✅ Loaded combined dataset: {len(df):,} records with {len(df.columns)} columns")
+        return df
+        
+    except Exception as e:
+        print(f"❌ ERROR: Failed to load combined dataset: {str(e)}")
+        return None
+
+def identify_key_columns(df):
+    """
+    Identify which columns correspond to our key variables.
+    
+    Args:
+        df (pd.DataFrame): Combined dataset
+    
+    Returns:
+        dict: Mapping of key variables to actual column names
+    """
+    print("\n🔍 Identifying key columns...")
+    
+    # Define target columns and possible variations
+    target_columns = {
+        'reappointed': ['reappointed', 'reappointed_flag', 'is_reappointed'],
+        'name': ['name', 'person_name', 'appointee_name', 'full_name'],
+        'position': ['position', 'title', 'job_title', 'role'],
+        'org': ['org', 'organization', 'department', 'agency', 'body'],
+        'year': ['source_year', 'year', 'appointment_year']
+    }
+    
+    column_mapping = {}
+    available_columns = df.columns.tolist()
+    
+    print(f"📋 Available columns in dataset: {len(available_columns)}")
+    for i, col in enumerate(available_columns, 1):
+        print(f"   {i:2d}. {col}")
+    
+    # Find matching columns
+    for key, possible_names in target_columns.items():
+        found_column = None
+        for possible_name in possible_names:
+            if possible_name in available_columns:
+                found_column = possible_name
+                break
+        
+        if found_column:
+            column_mapping[key] = found_column
+            print(f"✅ Found '{key}' column: {found_column}")
+        else:
+            print(f"❌ Missing '{key}' column. Looked for: {possible_names}")
+    
+    return column_mapping
+
+def validate_key_columns(df, column_mapping):
+    """
+    Validate the identified key columns for data quality.
+    
+    Args:
+        df (pd.DataFrame): Combined dataset
+        column_mapping (dict): Mapping of key variables to column names
+    
+    Returns:
+        bool: True if validation passes, False otherwise
+    """
+    print("\n🔍 Validating key columns...")
+    
+    validation_passed = True
+    
+    for key, column_name in column_mapping.items():
+        if column_name not in df.columns:
+            print(f"❌ ERROR: Column '{column_name}' not found in dataset")
+            validation_passed = False
+            continue
+        
+        # Check for missing values
+        missing_count = df[column_name].isnull().sum()
+        missing_percent = (missing_count / len(df)) * 100
+        
+        print(f"📊 {key} ({column_name}):")
+        print(f"   Missing values: {missing_count:,} ({missing_percent:.1f}%)")
+        
+        # Specific validation for each column type
+        if key == 'reappointed':
+            # Check reappointed column values
+            unique_values = df[column_name].value_counts(dropna=False)
+            print(f"   Unique values: {list(unique_values.index)}")
+            
+            # Check if values are boolean-like
+            boolean_like_values = {'True', 'False', True, False, 1, 0, '1', '0', 'Yes', 'No', 'yes', 'no'}
+            actual_values = set(df[column_name].dropna().unique())
+            
+            if not actual_values.issubset(boolean_like_values):
+                print(f"⚠️  WARNING: Unexpected values in reappointed column: {actual_values - boolean_like_values}")
+        
+        elif key == 'year':
+            # Check year column values
+            if not df[column_name].isnull().all():
+                year_range = f"{df[column_name].min():.0f}-{df[column_name].max():.0f}"
+                print(f"   Year range: {year_range}")
+                
+                # Check if years are reasonable (2013-2024)
+                expected_years = set(range(2013, 2025))
+                actual_years = set(df[column_name].dropna().astype(int).unique())
+                unexpected_years = actual_years - expected_years
+                
+                if unexpected_years:
+                    print(f"⚠️  WARNING: Unexpected years found: {unexpected_years}")
+        
+        elif key in ['name', 'position', 'org']:
+            # Check text columns
+            if not df[column_name].isnull().all():
+                unique_count = df[column_name].nunique()
+                print(f"   Unique values: {unique_count:,}")
+                
+                # Check for very short or suspicious values
+                if key == 'name':
+                    short_names = df[column_name].dropna().str.len() < 3
+                    if short_names.sum() > 0:
+                        print(f"⚠️  WARNING: {short_names.sum()} names with < 3 characters")
+    
+    return validation_passed
+
+def standardize_reappointed_column(df, reappointed_col):
+    """
+    Standardize the reappointed column to boolean values.
+    
+    Args:
+        df (pd.DataFrame): Dataset
+        reappointed_col (str): Name of the reappointed column
+    
+    Returns:
+        pd.Series: Standardized boolean series
+    """
+    print(f"\n🔧 Standardizing reappointed column: {reappointed_col}")
+    
+    original_values = df[reappointed_col].value_counts(dropna=False)
+    print(f"📊 Original values distribution:")
+    for value, count in original_values.items():
+        print(f"   {value}: {count:,}")
+    
+    # Create standardized boolean column
+    reappointed_series = df[reappointed_col].copy()
+    
+    # Convert various representations to boolean
+    # True values: True, 'True', 'true', 'YES', 'yes', 'Y', 'y', 1, '1'
+    true_values = {True, 'True', 'true', 'TRUE', 'YES', 'yes', 'Y', 'y', 1, '1'}
+    # False values: False, 'False', 'false', 'NO', 'no', 'N', 'n', 0, '0'
+    false_values = {False, 'False', 'false', 'FALSE', 'NO', 'no', 'N', 'n', 0, '0'}
+    
+    # Apply standardization
+    reappointed_standardized = reappointed_series.map(lambda x: 
+        True if x in true_values else 
+        False if x in false_values else 
+        np.nan
+    )
+    
+    # Check conversion results
+    converted_values = reappointed_standardized.value_counts(dropna=False)
+    print(f"📊 Standardized values distribution:")
+    for value, count in converted_values.items():
+        print(f"   {value}: {count:,}")
+    
+    # Report any values that couldn't be converted
+    unconverted = reappointed_series[reappointed_standardized.isnull() & reappointed_series.notnull()]
+    if len(unconverted) > 0:
+        print(f"⚠️  WARNING: {len(unconverted)} values could not be converted:")
+        unconverted_values = unconverted.value_counts()
+        for value, count in unconverted_values.items():
+            print(f"   {value}: {count}")
+    
+    return reappointed_standardized
+
+def clean_text_columns(df, column_mapping):
+    """
+    Clean text columns (name, position, org) by removing extra whitespace and standardizing.
+    
+    Args:
+        df (pd.DataFrame): Dataset
+        column_mapping (dict): Mapping of key variables to column names
+    
+    Returns:
+        pd.DataFrame: Dataset with cleaned text columns
+    """
+    print("\n🧹 Cleaning text columns...")
+    
+    text_columns = ['name', 'position', 'org']
+    df_cleaned = df.copy()
+    
+    for key in text_columns:
+        if key in column_mapping:
+            col_name = column_mapping[key]
+            print(f"   Cleaning {key} ({col_name})...")
+            
+            # Remove extra whitespace and standardize
+            df_cleaned[col_name] = df_cleaned[col_name].astype(str).str.strip()
+            
+            # Replace empty strings with NaN
+            df_cleaned[col_name] = df_cleaned[col_name].replace('', np.nan)
+            df_cleaned[col_name] = df_cleaned[col_name].replace('nan', np.nan)
+            
+            # Count changes
+            before_null = df[col_name].isnull().sum()
+            after_null = df_cleaned[col_name].isnull().sum()
+            
+            if after_null != before_null:
+                print(f"     Null values: {before_null:,} → {after_null:,}")
+    
+    return df_cleaned
+
+def extract_key_columns():
+    """
+    Main function to extract key columns from the combined dataset.
+    
+    Returns:
+        pd.DataFrame: Dataset with only key columns
+    """
+    print("🚀 Starting Step 2: Extract Key Columns")
+    print("=" * 50)
+    
+    # Setup directories
+    output_dir = setup_directories()
+    
+    # Load combined dataset
+    combined_df = load_combined_dataset(output_dir)
+    if combined_df is None:
+        return None
+    
+    # Identify key columns
+    column_mapping = identify_key_columns(combined_df)
+    
+    # Check if all required columns are found
+    required_keys = ['reappointed', 'name', 'position', 'org', 'year']
+    missing_keys = [key for key in required_keys if key not in column_mapping]
+    
+    if missing_keys:
+        print(f"\n❌ ERROR: Missing required columns: {missing_keys}")
+        print("Cannot proceed without all key columns.")
+        return None
+    
+    # Validate key columns
+    if not validate_key_columns(combined_df, column_mapping):
+        print("\n⚠️  WARNING: Some validation issues found, but proceeding...")
+    
+    # Extract key columns
+    print(f"\n✂️  Extracting key columns...")
+    
+    # Create new DataFrame with key columns
+    key_df = pd.DataFrame()
+    
+    # Add each key column with standardized name
+    for key in required_keys:
+        original_col = column_mapping[key]
+        
+        if key == 'reappointed':
+            # Standardize reappointed column to boolean
+            key_df[key] = standardize_reappointed_column(combined_df, original_col)
+        else:
+            # Copy other columns as-is
+            key_df[key] = combined_df[original_col].copy()
+    
+    # Clean text columns
+    text_column_mapping = {k: k for k in ['name', 'position', 'org']}
+    key_df = clean_text_columns(key_df, text_column_mapping)
+    
+    # Final validation and summary
+    print(f"\n📈 Key Columns Dataset Summary:")
+    print(f"   Total Records: {len(key_df):,}")
+    print(f"   Total Columns: {len(key_df.columns)}")
+    print(f"   Columns: {list(key_df.columns)}")
+    
+    # Data quality summary
+    print(f"\n🔍 Data Quality Summary:")
+    for col in key_df.columns:
+        missing = key_df[col].isnull().sum()
+        missing_pct = (missing / len(key_df)) * 100
+        print(f"   {col}: {missing:,} missing ({missing_pct:.1f}%)")
+    
+    # Year distribution
+    if 'year' in key_df.columns:
+        year_dist = key_df['year'].value_counts().sort_index()
+        print(f"\n📊 Records by Year:")
+        for year, count in year_dist.items():
+            print(f"   {year:.0f}: {count:,} records")
+    
+    # Reappointment summary
+    if 'reappointed' in key_df.columns:
+        reappointed_dist = key_df['reappointed'].value_counts(dropna=False)
+        print(f"\n📊 Reappointment Distribution:")
+        for value, count in reappointed_dist.items():
+            print(f"   {value}: {count:,} records")
+    
+    # Save key columns dataset
+    output_file = output_dir / "step2_key_columns_data.csv"
+    key_df.to_csv(output_file, index=False)
+    print(f"\n💾 Key columns dataset saved to: {output_file}")
+    
+    return key_df
+
+def main():
+    """Main execution function."""
+    try:
+        key_data = extract_key_columns()
+        
+        if key_data is not None:
+            print("\n🎉 Step 2 completed successfully!")
+            print("📁 Output: step2_key_columns_data.csv")
+            print("🔜 Ready for Step 3: Mark Repeat Appointments")
+        else:
+            print("\n❌ Step 2 failed. Please check the error messages above.")
+            sys.exit(1)
+            
+    except KeyboardInterrupt:
+        print("\n⏹️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main execution: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

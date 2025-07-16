@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-New Brunswick Government Appointments Count Summary
+New Brunswick Government Appointments Appointment Counts
 
-This script creates a summary table of appointment counts by organization and year,
-with validation and data quality handling.
+This script creates a summary table of appointment counts by organization and year.
 
 Author: Claude Sonnet 4
 Date: June 30, 2025
@@ -15,86 +14,172 @@ import os
 from pathlib import Path
 import sys
 
-def clean_organization_names(org_series):
+def validate_data(df):
     """
-    Clean and standardize organization names.
+    Validate the input data and report any quality issues.
     
     Args:
-        org_series (pd.Series): Series containing organization names
+        df (pd.DataFrame): Input dataset
     
     Returns:
-        pd.Series: Cleaned organization names
+        pd.DataFrame: Cleaned dataset
     """
-    # Convert to string and handle missing values
-    cleaned = org_series.astype(str).str.strip()
     
-    # Replace common variations of missing values
-    missing_values = ['nan', 'none', 'null', '', 'unknown', 'n/a', 'na']
-    cleaned = cleaned.replace(missing_values, 'Unknown Organization', regex=False)
-    cleaned = cleaned.replace('nan', 'Unknown Organization')
+    print("Validating data quality...")
     
-    # Remove extra whitespace
-    cleaned = cleaned.str.replace(r'\s+', ' ', regex=True)
+    # Check for required columns
+    required_columns = ['org', 'year', 'name', 'position']
+    missing_columns = [col for col in required_columns if col not in df.columns]
     
-    return cleaned
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Report missing values
+    print(f"\nMissing values in key columns:")
+    for col in ['org', 'year']:
+        missing_count = df[col].isnull().sum()
+        if missing_count > 0:
+            percentage = (missing_count / len(df)) * 100
+            print(f"  {col}: {missing_count:,} missing ({percentage:.1f}%)")
+        else:
+            print(f"  {col}: No missing values")
+    
+    # Check year range
+    valid_years = df['year'].dropna()
+    if len(valid_years) > 0:
+        min_year = valid_years.min()
+        max_year = valid_years.max()
+        print(f"\nYear range: {min_year} to {max_year}")
+        
+        # Check for unreasonable years
+        if min_year < 2000 or max_year > 2025:
+            print(f"Warning: Year range {min_year}-{max_year} may contain errors")
+    
+    # Check for duplicate rows
+    duplicate_count = df.duplicated().sum()
+    if duplicate_count > 0:
+        print(f"\nWarning: Found {duplicate_count} duplicate rows")
+    
+    # Handle missing organizations
+    missing_org_count = df['org'].isnull().sum()
+    if missing_org_count > 0:
+        print(f"\nHandling {missing_org_count} records with missing organization:")
+        # Replace missing org with 'Unknown Organization'
+        df_clean = df.copy()
+        df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
+        print(f"  Replaced missing organizations with 'Unknown Organization'")
+    else:
+        df_clean = df.copy()
+    
+    # Handle missing years
+    missing_year_count = df['year'].isnull().sum()
+    if missing_year_count > 0:
+        print(f"\nWarning: {missing_year_count} records with missing year will be excluded from analysis")
+        df_clean = df_clean.dropna(subset=['year'])
+    
+    # Ensure year is integer
+    df_clean['year'] = df_clean['year'].astype(int)
+    
+    print(f"\nData after cleaning: {len(df_clean)} rows (removed {len(df) - len(df_clean)} rows)")
+    
+    return df_clean
 
-def validate_year_data(year_series):
+def create_counts_table(df):
     """
-    Validate and clean year data.
+    Create a summary table of appointment counts by organization and year.
     
     Args:
-        year_series (pd.Series): Series containing year values
+        df (pd.DataFrame): Cleaned dataset
     
     Returns:
-        pd.Series: Cleaned year data
-    """
-    # Convert to numeric, handling non-numeric values
-    years_numeric = pd.to_numeric(year_series, errors='coerce')
-    
-    # Check for reasonable year range (assuming appointments from 2000-2030)
-    valid_range = (years_numeric >= 2000) & (years_numeric <= 2030)
-    
-    # Mark invalid years as missing
-    years_cleaned = years_numeric.where(valid_range)
-    
-    return years_cleaned
-
-def create_appointment_counts_table(df):
-    """
-    Create a pivot table of appointment counts by organization and year.
-    
-    Args:
-        df (pd.DataFrame): The appointments dataset
-    
-    Returns:
-        pd.DataFrame: Pivot table with organizations as rows, years as columns
+        pd.DataFrame: Summary table with organizations as rows, years as columns
     """
     
-    # Clean organization names
-    df_clean = df.copy()
-    df_clean['org_clean'] = clean_organization_names(df_clean['org'])
-    
-    # Validate and clean years
-    df_clean['year_clean'] = validate_year_data(df_clean['year'])
-    
-    # Remove rows with invalid years
-    df_valid = df_clean.dropna(subset=['year_clean'])
-    df_valid['year_clean'] = df_valid['year_clean'].astype(int)
+    print("\nCreating appointment counts table...")
     
     # Group by organization and year, count appointments
-    counts = df_valid.groupby(['org_clean', 'year_clean']).size().reset_index(name='appointment_count')
+    counts = df.groupby(['org', 'year']).size().reset_index(name='count')
     
-    # Create pivot table
-    pivot_table = counts.pivot(index='org_clean', columns='year_clean', values='appointment_count')
+    # Create pivot table with organizations as rows, years as columns
+    pivot_table = counts.pivot(index='org', columns='year', values='count')
     
     # Fill missing values with 0
     pivot_table = pivot_table.fillna(0).astype(int)
     
-    # Sort by total appointments (descending)
+    # Sort columns (years) in ascending order
+    pivot_table = pivot_table.sort_index(axis=1)
+    
+    # Add total column
     pivot_table['Total'] = pivot_table.sum(axis=1)
+    
+    # Sort by total (descending) to show most active organizations first
     pivot_table = pivot_table.sort_values('Total', ascending=False)
     
-    return pivot_table, df_valid
+    return pivot_table
+
+def analyze_counts(pivot_table):
+    """
+    Analyze the counts table and provide insights.
+    
+    Args:
+        pivot_table (pd.DataFrame): Summary table
+    """
+    
+    print("\n" + "="*50)
+    print("APPOINTMENT COUNTS ANALYSIS")
+    print("="*50)
+    
+    # Basic statistics
+    total_appointments = pivot_table['Total'].sum()
+    num_organizations = len(pivot_table)
+    
+    print(f"Total appointments across all organizations: {total_appointments:,}")
+    print(f"Number of organizations: {num_organizations}")
+    print(f"Average appointments per organization: {total_appointments/num_organizations:.1f}")
+    
+    # Top organizations
+    print(f"\nTop 10 organizations by total appointments:")
+    top_10 = pivot_table.head(10)
+    for i, (org, row) in enumerate(top_10.iterrows(), 1):
+        percentage = (row['Total'] / total_appointments) * 100
+        print(f"  {i:2d}. {org[:50]:<50} {row['Total']:,} ({percentage:.1f}%)")
+    
+    # Year-by-year totals
+    year_columns = [col for col in pivot_table.columns if col != 'Total']
+    if year_columns:
+        print(f"\nAppointments by year:")
+        yearly_totals = pivot_table[year_columns].sum()
+        for year in sorted(yearly_totals.index):
+            print(f"  {year}: {yearly_totals[year]:,}")
+    
+    # Organizations with most activity in recent years
+    if len(year_columns) >= 3:
+        recent_years = sorted(year_columns)[-3:]  # Last 3 years
+        print(f"\nMost active organizations in recent years ({recent_years}):")
+        recent_totals = pivot_table[recent_years].sum(axis=1).sort_values(ascending=False)
+        for i, (org, total) in enumerate(recent_totals.head(5).items(), 1):
+            print(f"  {i}. {org[:50]:<50} {total:,}")
+    
+    # Check for data quality issues
+    print(f"\nData quality checks:")
+    
+    # Organizations with very high counts (potential data issues)
+    high_threshold = pivot_table['Total'].quantile(0.95)
+    high_count_orgs = pivot_table[pivot_table['Total'] > high_threshold]
+    if len(high_count_orgs) > 0:
+        print(f"  Organizations with unusually high counts (>95th percentile: {high_threshold:.0f}):")
+        for org, row in high_count_orgs.iterrows():
+            print(f"    {org[:50]:<50} {row['Total']:,}")
+    
+    # Organizations with activity in only one year
+    single_year_orgs = pivot_table[(pivot_table > 0).sum(axis=1) == 2]  # 2 because Total column
+    if len(single_year_orgs) > 0:
+        print(f"  Organizations active in only one year: {len(single_year_orgs)}")
+    
+    # Check for zero counts (should not happen with our logic)
+    zero_total_orgs = pivot_table[pivot_table['Total'] == 0]
+    if len(zero_total_orgs) > 0:
+        print(f"  Warning: Organizations with zero total appointments: {len(zero_total_orgs)}")
 
 def main():
     """Main execution function."""
@@ -108,118 +193,47 @@ def main():
             raise FileNotFoundError(f"Input file not found: {input_file}")
         
         # Load the dataset
-        print(f"Loading reappointments dataset from: {input_file}")
+        print(f"Loading dataset from: {input_file}")
         df = pd.read_csv(input_file)
         print(f"Loaded dataset with shape: {df.shape}")
         
-        # Check for required columns
-        required_columns = ['org', 'year']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {missing_columns}")
+        # Validate and clean the data
+        df_clean = validate_data(df)
         
-        # Data quality assessment
-        print(f"\nData Quality Assessment:")
-        print(f"  Total records: {len(df):,}")
-        print(f"  Missing organization names: {df['org'].isna().sum():,}")
-        print(f"  Missing years: {df['year'].isna().sum():,}")
-        
-        # Identify unique organizations and years before cleaning
-        unique_orgs_raw = df['org'].nunique()
-        unique_years_raw = df['year'].nunique()
-        print(f"  Unique organizations (raw): {unique_orgs_raw:,}")
-        print(f"  Unique years (raw): {unique_years_raw:,}")
-        
-        # Create appointment counts table
-        print(f"\nCreating appointment counts summary...")
-        counts_table, df_valid = create_appointment_counts_table(df)
-        
-        # Data validation
-        total_valid_records = len(df_valid)
-        total_counted = counts_table.drop('Total', axis=1).sum().sum()
-        
-        if total_valid_records != total_counted:
-            print(f"Warning: Record count mismatch. Valid records: {total_valid_records}, Counted: {total_counted}")
+        # Create counts table
+        counts_table = create_counts_table(df_clean)
         
         # Define output file path
         output_dir = Path("scripts/claudesonnet4/version1/execution2/analysis_data")
-        output_file = output_dir / "step4_employee_counts.csv"
+        output_file = output_dir / "step4_appointment_counts.csv"
         
         # Save the counts table
-        print(f"\nSaving appointment counts to: {output_file}")
+        print(f"\nSaving counts table to: {output_file}")
         counts_table.to_csv(output_file)
         
-        # Print comprehensive results
-        print("\n" + "="*80)
-        print("APPOINTMENT COUNTS SUMMARY")
-        print("="*80)
+        # Analyze and print results
+        analyze_counts(counts_table)
         
-        print(f"Summary Statistics:")
-        print(f"  Total valid records processed: {total_valid_records:,}")
-        print(f"  Records with invalid/missing years removed: {len(df) - total_valid_records:,}")
-        print(f"  Organizations in summary: {len(counts_table):,}")
-        print(f"  Years covered: {counts_table.columns[:-1].min()}-{counts_table.columns[:-1].max()}")
+        # Display sample of the table
+        print(f"\nSample of counts table (first 10 rows):")
+        print(counts_table.head(10))
         
-        print(f"\nTop 10 Organizations by Total Appointments:")
-        top_orgs = counts_table.head(10)
-        for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
-            print(f"  {i:2d}. {org}: {row['Total']:,} appointments")
-        
-        print(f"\nAppointments by Year (All Organizations):")
-        yearly_totals = counts_table.drop('Total', axis=1).sum()
-        for year, total in yearly_totals.items():
-            print(f"  {year}: {total:,} appointments")
-        
-        print(f"\nSummary Table Preview (Top 5 Organizations):")
-        print("-" * 80)
-        # Display first few organizations and years
-        display_table = counts_table.head(5)
-        # Limit to first 10 years for display if there are many years
-        year_cols = [col for col in display_table.columns if col != 'Total']
-        if len(year_cols) > 10:
-            display_cols = year_cols[:10] + ['Total']
-            display_table = display_table[display_cols]
-            print("(Showing first 10 years only)")
-        
-        print(display_table.to_string())
-        
-        print(f"\nData Quality Summary:")
-        print(f"  Organizations with single appointments: {(counts_table['Total'] == 1).sum():,}")
-        print(f"  Organizations with 10+ appointments: {(counts_table['Total'] >= 10).sum():,}")
-        print(f"  Organizations with 50+ appointments: {(counts_table['Total'] >= 50).sum():,}")
-        
-        # Identify years with unusually high/low activity
-        yearly_stats = yearly_totals.describe()
-        print(f"\nYearly Appointment Statistics:")
-        print(f"  Average per year: {yearly_stats['mean']:.1f}")
-        print(f"  Highest year: {yearly_totals.idxmax()} ({yearly_totals.max():,} appointments)")
-        print(f"  Lowest year: {yearly_totals.idxmin()} ({yearly_totals.min():,} appointments)")
-        
-        # Check for potential data quality issues
-        print(f"\nData Quality Flags:")
-        if (counts_table['Total'] > yearly_totals.mean() * 2).any():
-            super_active_orgs = counts_table[counts_table['Total'] > yearly_totals.mean() * 2]
-            print(f"  Organizations with unusually high activity (>{yearly_totals.mean() * 2:.0f} appointments): {len(super_active_orgs)}")
-        
-        unknown_org_count = counts_table.loc['Unknown Organization', 'Total'] if 'Unknown Organization' in counts_table.index else 0
-        if unknown_org_count > 0:
-            print(f"  Records with unknown/missing organization: {unknown_org_count:,}")
-        
-        print(f"\nAppointment counts table successfully saved to: {output_file}")
+        print(f"\nTable dimensions: {counts_table.shape[0]} organizations × {counts_table.shape[1]} columns")
+        print(f"Counts table successfully saved to: {output_file}")
         
     except Exception as e:
         print(f"Error in main execution: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Document assumptions and approach
-    print("APPOINTMENT COUNTS ANALYSIS ASSUMPTIONS:")
-    print("1. Each row represents one appointment (including reappointments)")
-    print("2. Organizations with missing/invalid names are labeled 'Unknown Organization'")
-    print("3. Years outside reasonable range (2000-2030) are considered invalid")
-    print("4. Pivot table shows appointment counts, not unique individuals")
-    print("5. Organizations are sorted by total appointment count (descending)")
-    print("6. Missing values in the pivot table are filled with 0")
-    print("-" * 80)
+    # Document assumptions
+    print("EMPLOYEE COUNTS ASSUMPTIONS:")
+    print("1. Each row in the dataset represents one appointment")
+    print("2. Missing organizations are replaced with 'Unknown Organization'")
+    print("3. Records with missing years are excluded from analysis")
+    print("4. Zero counts indicate no appointments for that org/year combination")
+    print("5. 'Total' column shows sum across all years for each organization")
+    print("6. Organizations are sorted by total appointments (descending)")
+    print("-" * 50)
     
     main()

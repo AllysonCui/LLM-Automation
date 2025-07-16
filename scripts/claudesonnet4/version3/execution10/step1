@@ -1,0 +1,519 @@
+"""
+New Brunswick Government Reappointment Analysis
+Research Question: Which government branch in New Brunswick most frequently reappoints 
+past appointees, and is this trend increasing or declining over the past 12 years?
+
+Author: Claude Sonnet 4
+Version: 3, Execution 10
+"""
+
+import pandas as pd
+import numpy as np
+from scipy.stats import linregress
+from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories for analysis outputs."""
+    output_dir = Path("scripts/claudesonnet4/version3/execution10/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def load_and_combine_data(raw_data_dir="raw_data"):
+    """
+    Step 1: Combine all 12 CSV files from 2013-2024
+    Returns: Combined DataFrame with year column added
+    """
+    print("Step 1: Loading and combining datasets...")
+    
+    combined_data = []
+    raw_path = Path(raw_data_dir)
+    
+    # Check if raw_data directory exists
+    if not raw_path.exists():
+        print(f"Warning: {raw_data_dir} directory not found. Creating it...")
+        raw_path.mkdir(parents=True, exist_ok=True)
+    
+    years_processed = []
+    
+    for year in range(2013, 2025):  # 2013 to 2024 inclusive
+        file_path = raw_path / f"appointments_{year}.csv"
+        
+        if file_path.exists():
+            try:
+                df = pd.read_csv(file_path)
+                df['year'] = year
+                combined_data.append(df)
+                years_processed.append(year)
+                print(f"  ✓ Loaded {file_path.name}: {len(df)} records")
+            except Exception as e:
+                print(f"  ✗ Error loading {file_path.name}: {e}")
+        else:
+            print(f"  ⚠ File not found: {file_path.name}")
+    
+    if not combined_data:
+        raise FileNotFoundError("No CSV files found in raw_data directory")
+    
+    # Combine all dataframes
+    combined_df = pd.concat(combined_data, ignore_index=True)
+    
+    print(f"Step 1 Complete: Combined {len(years_processed)} files")
+    print(f"  Years processed: {years_processed}")
+    print(f"  Total records: {len(combined_df)}")
+    print(f"  Date range: {combined_df['year'].min()} - {combined_df['year'].max()}")
+    
+    return combined_df, years_processed
+
+def extract_key_columns(df, output_dir):
+    """
+    Step 2: Extract and retain key columns: reappointed, name, position, org, year
+    """
+    print("\nStep 2: Extracting key columns...")
+    
+    # Define required columns
+    required_cols = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    # Check which columns exist
+    available_cols = df.columns.tolist()
+    print(f"  Available columns: {available_cols}")
+    
+    missing_cols = [col for col in required_cols if col not in available_cols]
+    if missing_cols:
+        print(f"  ⚠ Missing columns: {missing_cols}")
+        # Handle missing columns gracefully
+        for col in missing_cols:
+            if col == 'reappointed':
+                df['reappointed'] = False  # Default to False
+                print(f"    Added default '{col}' column")
+    
+    # Extract key columns
+    key_data = df[required_cols].copy()
+    
+    # Clean and standardize data
+    key_data['name'] = key_data['name'].astype(str).str.strip().str.upper()
+    key_data['position'] = key_data['position'].astype(str).str.strip()
+    key_data['org'] = key_data['org'].astype(str).str.strip()
+    
+    # Handle reappointed column - convert to boolean if needed
+    if key_data['reappointed'].dtype == 'object':
+        key_data['reappointed'] = key_data['reappointed'].astype(str).str.lower().isin(['true', '1', 'yes', 'y'])
+    
+    # Remove records with missing essential data
+    initial_count = len(key_data)
+    key_data = key_data.dropna(subset=['name', 'org'])
+    final_count = len(key_data)
+    
+    print(f"  Records after cleaning: {final_count} (removed {initial_count - final_count} incomplete records)")
+    print(f"  Unique organizations: {key_data['org'].nunique()}")
+    print(f"  Unique individuals: {key_data['name'].nunique()}")
+    
+    # Save step 2 results
+    output_file = output_dir / "step2_key_columns_data.csv"
+    key_data.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    return key_data
+
+def mark_reappointments(df, output_dir):
+    """
+    Step 3: Mark reappointed as true for repeated name-position-org combinations 
+    except for the first appearance
+    """
+    print("\nStep 3: Marking reappointments...")
+    
+    df_marked = df.copy()
+    
+    # Sort by year to ensure chronological order
+    df_marked = df_marked.sort_values(['name', 'position', 'org', 'year'])
+    
+    # Create a unique identifier for each person-position-org combination
+    df_marked['person_role_key'] = (
+        df_marked['name'] + '|||' + 
+        df_marked['position'] + '|||' + 
+        df_marked['org']
+    )
+    
+    # Mark reappointments (all but first occurrence)
+    df_marked['is_reappointment'] = df_marked.groupby('person_role_key').cumcount() > 0
+    
+    # Update the reappointed column with our analysis
+    original_reappointed = df_marked['reappointed'].sum()
+    df_marked['reappointed'] = df_marked['is_reappointment']
+    analytical_reappointed = df_marked['reappointed'].sum()
+    
+    print(f"  Original reappointed count: {original_reappointed}")
+    print(f"  Analytical reappointed count: {analytical_reappointed}")
+    print(f"  Unique person-role combinations: {df_marked['person_role_key'].nunique()}")
+    
+    # Clean up temporary columns
+    df_marked = df_marked.drop(['person_role_key', 'is_reappointment'], axis=1)
+    
+    # Save step 3 results
+    output_file = output_dir / "step3_repeats_marked.csv"
+    df_marked.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    return df_marked
+
+def count_appointments_by_org_year(df, output_dir):
+    """
+    Step 4: Count total number of appointments for each org in each year
+    """
+    print("\nStep 4: Counting appointments by organization and year...")
+    
+    # Count unique individuals per org per year
+    appointment_counts = df.groupby(['org', 'year']).agg({
+        'name': 'nunique',  # Count unique names
+        'position': 'count'  # Count total appointments
+    }).reset_index()
+    
+    appointment_counts.columns = ['org', 'year', 'unique_appointments', 'total_appointments']
+    
+    print(f"  Total org-year combinations: {len(appointment_counts)}")
+    print(f"  Years covered: {sorted(appointment_counts['year'].unique())}")
+    print(f"  Organizations: {appointment_counts['org'].nunique()}")
+    
+    # Summary statistics
+    print(f"  Average appointments per org-year: {appointment_counts['unique_appointments'].mean():.1f}")
+    print(f"  Max appointments in single org-year: {appointment_counts['unique_appointments'].max()}")
+    
+    # Save step 4 results
+    output_file = output_dir / "step4_appointment_counts.csv"
+    appointment_counts.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    return appointment_counts
+
+def count_reappointments_by_org_year(df, output_dir):
+    """
+    Step 5: Count reappointments for each org in each year
+    """
+    print("\nStep 5: Counting reappointments by organization and year...")
+    
+    # Count reappointments per org per year
+    reappointment_counts = df[df['reappointed'] == True].groupby(['org', 'year']).agg({
+        'name': 'nunique',  # Count unique reappointed individuals
+        'reappointed': 'sum'  # Count total reappointments
+    }).reset_index()
+    
+    reappointment_counts.columns = ['org', 'year', 'unique_reappointed', 'total_reappointments']
+    
+    print(f"  Total org-year combinations with reappointments: {len(reappointment_counts)}")
+    print(f"  Total reappointments across all years: {reappointment_counts['total_reappointments'].sum()}")
+    print(f"  Average reappointments per org-year: {reappointment_counts['total_reappointments'].mean():.1f}")
+    
+    # Save step 5 results
+    output_file = output_dir / "step5_reappointment_counts.csv"
+    reappointment_counts.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    return reappointment_counts
+
+def calculate_reappointment_rates(appointment_counts, reappointment_counts, output_dir):
+    """
+    Step 6: Calculate reappointment rates for each org-year pair
+    """
+    print("\nStep 6: Calculating reappointment rates...")
+    
+    # Merge appointment counts with reappointment counts
+    rates_df = appointment_counts.merge(
+        reappointment_counts[['org', 'year', 'total_reappointments']], 
+        on=['org', 'year'], 
+        how='left'
+    )
+    
+    # Fill NaN values with 0 (no reappointments)
+    rates_df['total_reappointments'] = rates_df['total_reappointments'].fillna(0)
+    
+    # Calculate reappointment rate
+    rates_df['reappointment_rate'] = rates_df['total_reappointments'] / rates_df['total_appointments']
+    
+    # Add percentage column for readability
+    rates_df['reappointment_rate_pct'] = rates_df['reappointment_rate'] * 100
+    
+    print(f"  Org-year pairs analyzed: {len(rates_df)}")
+    print(f"  Average reappointment rate: {rates_df['reappointment_rate_pct'].mean():.1f}%")
+    print(f"  Max reappointment rate: {rates_df['reappointment_rate_pct'].max():.1f}%")
+    
+    # Save step 6 results
+    output_file = output_dir / "step6_reappointment_rates.csv"
+    rates_df.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    return rates_df
+
+def identify_yearly_max_rates(rates_df, output_dir):
+    """
+    Step 7: Identify organization with highest reappointment rate each year
+    """
+    print("\nStep 7: Identifying organizations with highest reappointment rates by year...")
+    
+    # Find the organization with max reappointment rate for each year
+    yearly_max = rates_df.loc[rates_df.groupby('year')['reappointment_rate'].idxmax()]
+    yearly_max = yearly_max[['year', 'org', 'reappointment_rate', 'reappointment_rate_pct', 
+                           'total_appointments', 'total_reappointments']].copy()
+    
+    print("  Organizations with highest reappointment rates by year:")
+    for _, row in yearly_max.iterrows():
+        print(f"    {row['year']}: {row['org'][:50]}... ({row['reappointment_rate_pct']:.1f}%)")
+    
+    # Count how often each org has the highest rate
+    org_leadership_counts = yearly_max['org'].value_counts()
+    print(f"\n  Organizations leading most frequently:")
+    for org, count in org_leadership_counts.head(5).items():
+        print(f"    {org[:50]}...: {count} year(s)")
+    
+    # Save step 7 results
+    output_file = output_dir / "step7_yearly_max_rates.csv"
+    yearly_max.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    # Create visualization
+    plt.figure(figsize=(12, 8))
+    plt.plot(yearly_max['year'], yearly_max['reappointment_rate_pct'], 
+             marker='o', linewidth=2, markersize=8)
+    plt.title('Highest Reappointment Rate by Year\n(Maximum Rate Among All Organizations)', 
+              fontsize=14, fontweight='bold')
+    plt.xlabel('Year', fontsize=12)
+    plt.ylabel('Reappointment Rate (%)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    plt.xticks(yearly_max['year'])
+    plt.tight_layout()
+    
+    plot_file = output_dir / "step7_yearly_max_reappointment_rates.png"
+    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  ✓ Saved plot: {plot_file}")
+    
+    return yearly_max
+
+def calculate_annual_proportions(rates_df, output_dir):
+    """
+    Step 8: Compute government-wide reappointment proportion for each year
+    """
+    print("\nStep 8: Calculating annual government-wide reappointment proportions...")
+    
+    # Calculate annual totals
+    annual_totals = rates_df.groupby('year').agg({
+        'total_appointments': 'sum',
+        'total_reappointments': 'sum'
+    }).reset_index()
+    
+    # Calculate annual proportion
+    annual_totals['annual_reappointment_proportion'] = (
+        annual_totals['total_reappointments'] / annual_totals['total_appointments']
+    )
+    annual_totals['annual_reappointment_proportion_pct'] = (
+        annual_totals['annual_reappointment_proportion'] * 100
+    )
+    
+    print("  Annual reappointment proportions:")
+    for _, row in annual_totals.iterrows():
+        print(f"    {row['year']}: {row['annual_reappointment_proportion_pct']:.2f}% "
+              f"({row['total_reappointments']:.0f}/{row['total_appointments']:.0f})")
+    
+    # Save step 8 results
+    output_file = output_dir / "step8_annual_proportions.csv"
+    annual_totals.to_csv(output_file, index=False)
+    print(f"  ✓ Saved: {output_file}")
+    
+    # Create visualization
+    plt.figure(figsize=(12, 8))
+    plt.plot(annual_totals['year'], annual_totals['annual_reappointment_proportion_pct'], 
+             marker='o', linewidth=3, markersize=10, color='darkblue')
+    plt.title('Government-Wide Annual Reappointment Proportions\n(2013-2024)', 
+              fontsize=14, fontweight='bold')
+    plt.xlabel('Year', fontsize=12)
+    plt.ylabel('Reappointment Proportion (%)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    plt.xticks(annual_totals['year'])
+    
+    # Add trend line
+    z = np.polyfit(annual_totals['year'], annual_totals['annual_reappointment_proportion_pct'], 1)
+    p = np.poly1d(z)
+    plt.plot(annual_totals['year'], p(annual_totals['year']), 
+             "--", alpha=0.7, color='red', label=f'Trend: {z[0]:.3f}%/year')
+    plt.legend()
+    plt.tight_layout()
+    
+    plot_file = output_dir / "step8_annual_reappointment_proportions.png"
+    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  ✓ Saved plot: {plot_file}")
+    
+    return annual_totals
+
+def regression_analysis(annual_totals, output_dir):
+    """
+    Step 9: Linear regression analysis on annual reappointment proportions
+    """
+    print("\nStep 9: Performing linear regression analysis...")
+    
+    # Prepare data for regression
+    years = annual_totals['year'].values
+    proportions = annual_totals['annual_reappointment_proportion_pct'].values
+    
+    # Perform linear regression
+    slope, intercept, r_value, p_value, std_err = linregress(years, proportions)
+    
+    # Calculate additional statistics
+    n = len(years)
+    r_squared = r_value ** 2
+    
+    # Prepare results
+    results = {
+        'slope': slope,
+        'intercept': intercept,
+        'r_value': r_value,
+        'r_squared': r_squared,
+        'p_value': p_value,
+        'std_error': std_err,
+        'n_observations': n
+    }
+    
+    # Interpret results
+    trend_direction = "increasing" if slope > 0 else "decreasing"
+    significance = "significant" if p_value < 0.05 else "not significant"
+    
+    print(f"  Linear Regression Results:")
+    print(f"    Slope: {slope:.4f} percentage points per year")
+    print(f"    Intercept: {intercept:.4f}")
+    print(f"    R-squared: {r_squared:.4f}")
+    print(f"    P-value: {p_value:.4f}")
+    print(f"    Standard Error: {std_err:.4f}")
+    print(f"    N: {n}")
+    print(f"\n  Interpretation:")
+    print(f"    Trend: {trend_direction.title()} at {abs(slope):.4f} percentage points per year")
+    print(f"    Statistical significance: {significance} (α = 0.05)")
+    
+    if p_value < 0.05:
+        print(f"    The trend is statistically significant.")
+    else:
+        print(f"    The trend is not statistically significant.")
+    
+    # Save results to file
+    output_file = output_dir / "step9_regression_results.txt"
+    with open(output_file, 'w') as f:
+        f.write("Linear Regression Analysis: Annual Reappointment Proportions\n")
+        f.write("="*60 + "\n\n")
+        f.write(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("Regression Statistics:\n")
+        f.write(f"  Slope: {slope:.6f} percentage points per year\n")
+        f.write(f"  Intercept: {intercept:.6f}\n")
+        f.write(f"  R-value: {r_value:.6f}\n")
+        f.write(f"  R-squared: {r_squared:.6f}\n")
+        f.write(f"  P-value: {p_value:.6f}\n")
+        f.write(f"  Standard Error: {std_err:.6f}\n")
+        f.write(f"  N observations: {n}\n\n")
+        f.write("Interpretation:\n")
+        f.write(f"  Trend Direction: {trend_direction.title()}\n")
+        f.write(f"  Rate of Change: {abs(slope):.4f} percentage points per year\n")
+        f.write(f"  Statistical Significance: {significance} (α = 0.05)\n\n")
+        f.write("Raw Data:\n")
+        f.write("Year,Proportion_Pct\n")
+        for year, prop in zip(years, proportions):
+            f.write(f"{year},{prop:.4f}\n")
+    
+    print(f"  ✓ Saved: {output_file}")
+    
+    return results
+
+def main():
+    """
+    Main analysis function that orchestrates all steps
+    """
+    print("New Brunswick Government Reappointment Analysis")
+    print("="*60)
+    print(f"Analysis started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    try:
+        # Setup
+        output_dir = setup_directories()
+        print(f"Output directory: {output_dir}")
+        
+        # Step 1: Load and combine data
+        combined_df, years_processed = load_and_combine_data()
+        
+        # Save step 1 results
+        step1_file = output_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(step1_file, index=False)
+        print(f"  ✓ Saved: {step1_file}")
+        
+        # Step 2: Extract key columns
+        key_data = extract_key_columns(combined_df, output_dir)
+        
+        # Step 3: Mark reappointments
+        marked_data = mark_reappointments(key_data, output_dir)
+        
+        # Step 4: Count appointments by org-year
+        appointment_counts = count_appointments_by_org_year(marked_data, output_dir)
+        
+        # Step 5: Count reappointments by org-year
+        reappointment_counts = count_reappointments_by_org_year(marked_data, output_dir)
+        
+        # Step 6: Calculate reappointment rates
+        rates_df = calculate_reappointment_rates(appointment_counts, reappointment_counts, output_dir)
+        
+        # Step 7: Identify yearly maximum rates
+        yearly_max = identify_yearly_max_rates(rates_df, output_dir)
+        
+        # Step 8: Calculate annual proportions
+        annual_totals = calculate_annual_proportions(rates_df, output_dir)
+        
+        # Step 9: Regression analysis
+        regression_results = regression_analysis(annual_totals, output_dir)
+        
+        # Final Summary
+        print("\n" + "="*60)
+        print("ANALYSIS COMPLETE - RESEARCH QUESTION FINDINGS")
+        print("="*60)
+        
+        # Answer the research question
+        print("\nResearch Question: Which government branch in New Brunswick most frequently")
+        print("reappoints past appointees, and is this trend increasing or declining over")
+        print("the past 12 years?")
+        
+        print("\nKey Findings:")
+        
+        # Most frequent reappointing organization
+        org_leadership = yearly_max['org'].value_counts()
+        if len(org_leadership) > 0:
+            top_org = org_leadership.index[0]
+            top_count = org_leadership.iloc[0]
+            print(f"  1. Most frequently leading organization: {top_org[:60]}...")
+            print(f"     (Had highest reappointment rate in {top_count} out of {len(years_processed)} years)")
+        
+        # Overall trend
+        slope = regression_results['slope']
+        p_value = regression_results['p_value']
+        trend_word = "increasing" if slope > 0 else "decreasing"
+        significance = "significant" if p_value < 0.05 else "not significant"
+        
+        print(f"  2. Overall trend: {trend_word.title()} at {abs(slope):.4f} percentage points per year")
+        print(f"     Statistical significance: {significance} (p = {p_value:.4f})")
+        
+        # Average reappointment rate
+        avg_rate = annual_totals['annual_reappointment_proportion_pct'].mean()
+        print(f"  3. Average annual reappointment rate: {avg_rate:.2f}%")
+        
+        print(f"\nAll analysis files saved to: {output_dir}")
+        print(f"Analysis completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+    except Exception as e:
+        print(f"\nError during analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
+    return True
+
+if __name__ == "__main__":
+    success = main()
+    if success:
+        print("\n✓ Analysis completed successfully!")
+    else:
+        print("\n✗ Analysis failed. Check error messages above.")

@@ -67,7 +67,7 @@ def validate_data_quality(df):
     # Handle missing organizations
     if org_missing > 0:
         print(f"  → Filling missing organizations with 'Unknown Organization'")
-        df_clean['org'] = df_clean['org'].fillna('Unknown Organization')
+        df_clean.loc[:, 'org'] = df_clean['org'].fillna('Unknown Organization')
     
     # Handle missing years
     if year_missing > 0:
@@ -75,15 +75,29 @@ def validate_data_quality(df):
         df_clean = df_clean.dropna(subset=['year'])
     
     # Validate year values
-    valid_years = df_clean['year'].apply(lambda x: isinstance(x, (int, float)) and 2000 <= x <= 2030)
-    invalid_years = (~valid_years).sum()
-    
-    if invalid_years > 0:
-        print(f"  → Found {invalid_years} records with invalid years (outside 2000-2030)")
-        df_clean = df_clean[valid_years]
-    
-    # Convert year to integer
-    df_clean['year'] = df_clean['year'].astype(int)
+    try:
+        # Convert to numeric, handling any string years
+        df_clean.loc[:, 'year'] = pd.to_numeric(df_clean['year'], errors='coerce')
+        
+        # Check for invalid years after conversion
+        invalid_years = df_clean['year'].isna().sum()
+        if invalid_years > 0:
+            print(f"  → Found {invalid_years} records with invalid years")
+            df_clean = df_clean.dropna(subset=['year'])
+        
+        # Validate year range (reasonable bounds)
+        valid_years = df_clean['year'].apply(lambda x: isinstance(x, (int, float)) and 2000 <= x <= 2030)
+        invalid_years_range = (~valid_years).sum()
+        
+        if invalid_years_range > 0:
+            print(f"  → Found {invalid_years_range} records with years outside 2000-2030")
+            df_clean = df_clean[valid_years]
+        
+        # Convert year to integer
+        df_clean.loc[:, 'year'] = df_clean['year'].astype(int)
+        
+    except Exception as e:
+        raise Exception(f"Error processing years: {e}")
     
     final_count = len(df_clean)
     excluded_count = original_count - final_count
@@ -92,6 +106,9 @@ def validate_data_quality(df):
         print(f"  → Excluded {excluded_count:,} records from analysis")
     
     print(f"  → Clean dataset: {final_count:,} records")
+    
+    if final_count == 0:
+        raise ValueError("No valid records remaining after data cleaning")
     
     return df_clean
 
@@ -112,17 +129,37 @@ def create_appointment_counts(df):
     
     print(f"Generated counts for {len(counts)} organization-year combinations")
     
+    # Validate counts are reasonable
+    max_count = counts['appointments'].max()
+    mean_count = counts['appointments'].mean()
+    
+    print(f"Count validation:")
+    print(f"  Maximum appointments per org-year: {max_count}")
+    print(f"  Average appointments per org-year: {mean_count:.1f}")
+    
+    # Flag potentially problematic counts
+    high_counts = counts[counts['appointments'] > 100]
+    if len(high_counts) > 0:
+        print(f"  Warning: {len(high_counts)} org-year combinations have >100 appointments")
+        print("  Top high-count combinations:")
+        for _, row in high_counts.nlargest(3, 'appointments').iterrows():
+            print(f"    {row['org'][:50]} ({row['year']}): {row['appointments']} appointments")
+    
     # Create pivot table
-    pivot_table = counts.pivot(index='org', columns='year', values='appointments')
-    
-    # Fill missing values with 0 (no appointments in that year)
-    pivot_table = pivot_table.fillna(0).astype(int)
-    
-    # Sort by total appointments (descending)
-    pivot_table['Total'] = pivot_table.sum(axis=1)
-    pivot_table = pivot_table.sort_values('Total', ascending=False)
-    
-    print(f"Created pivot table: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]-1} years")
+    try:
+        pivot_table = counts.pivot(index='org', columns='year', values='appointments')
+        
+        # Fill missing values with 0 (no appointments in that year)
+        pivot_table = pivot_table.fillna(0).astype(int)
+        
+        # Sort by total appointments (descending)
+        pivot_table.loc[:, 'Total'] = pivot_table.sum(axis=1)
+        pivot_table = pivot_table.sort_values('Total', ascending=False)
+        
+        print(f"Created pivot table: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]-1} years")
+        
+    except Exception as e:
+        raise Exception(f"Error creating pivot table: {e}")
     
     return pivot_table
 
@@ -141,7 +178,7 @@ def analyze_appointment_patterns(pivot_table):
     total_appointments = pivot_table['Total'].sum()
     num_organizations = len(pivot_table)
     year_columns = [col for col in pivot_table.columns if col != 'Total']
-    year_range = f"{min(year_columns)}-{max(year_columns)}"
+    year_range = f"{min(year_columns)}-{max(year_columns)}" if year_columns else "No years"
     
     print(f"Summary statistics:")
     print(f"  Total appointments:     {total_appointments:,}")
@@ -154,28 +191,32 @@ def analyze_appointment_patterns(pivot_table):
     top_orgs = pivot_table.head(10)
     for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
         total = row['Total']
-        years_active = (row[year_columns] > 0).sum()
-        print(f"  {i:2d}. {org:<50} {total:4d} appointments ({years_active} years)")
+        years_active = (row[year_columns] > 0).sum() if year_columns else 0
+        print(f"  {i:2d}. {org[:50]:<50} {total:4d} appointments ({years_active} years)")
     
     # Yearly totals
-    print(f"\nAppointments by year:")
-    yearly_totals = pivot_table[year_columns].sum().sort_index()
-    for year, total in yearly_totals.items():
-        print(f"  {year}: {total:,} appointments")
+    if year_columns:
+        print(f"\nAppointments by year:")
+        yearly_totals = pivot_table[year_columns].sum().sort_index()
+        for year, total in yearly_totals.items():
+            print(f"  {year}: {total:,} appointments")
     
     # Organizations with highest single-year counts
-    print(f"\nHighest single-year appointment counts:")
-    max_values = []
-    for _, row in pivot_table.iterrows():
-        org = row.name
-        year_data = row[year_columns]
-        max_year = year_data.idxmax()
-        max_count = year_data.max()
-        max_values.append((org, max_year, max_count))
-    
-    max_values.sort(key=lambda x: x[2], reverse=True)
-    for i, (org, year, count) in enumerate(max_values[:5], 1):
-        print(f"  {i}. {org} in {year}: {count} appointments")
+    if year_columns:
+        print(f"\nHighest single-year appointment counts:")
+        max_values = []
+        for _, row in pivot_table.iterrows():
+            org = row.name
+            year_data = row[year_columns]
+            if len(year_data) > 0 and year_data.max() > 0:
+                max_year = year_data.idxmax()
+                max_count = year_data.max()
+                max_values.append((org, max_year, max_count))
+        
+        if max_values:
+            max_values.sort(key=lambda x: x[2], reverse=True)
+            for i, (org, year, count) in enumerate(max_values[:5], 1):
+                print(f"  {i}. {org[:45]} in {year}: {count} appointments")
     
     # Data quality insights
     print(f"\nData quality insights:")
@@ -186,8 +227,9 @@ def analyze_appointment_patterns(pivot_table):
     print(f"  Organizations with 1 appointment:  {single_appointment_orgs}")
     
     # Year coverage
-    years_with_data = (pivot_table[year_columns].sum() > 0).sum()
-    print(f"  Years with appointment data:       {years_with_data}/{len(year_columns)}")
+    if year_columns:
+        years_with_data = (pivot_table[year_columns].sum() > 0).sum()
+        print(f"  Years with appointment data:       {years_with_data}/{len(year_columns)}")
 
 def save_counts_table(pivot_table, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
     """
@@ -204,11 +246,15 @@ def save_counts_table(pivot_table, output_dir="scripts/claudesonnet4/version1/ex
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Define output file path
-    output_file = os.path.join(output_dir, "step4_employee_counts.csv")
+    output_file = os.path.join(output_dir, "step4_appointment_counts.csv")
     
-    # Save to CSV with organization names as index
-    pivot_table.to_csv(output_file, index=True)
-    print(f"\n✓ Appointment counts table saved to: {output_file}")
+    try:
+        # Save to CSV with organization names as index
+        pivot_table.to_csv(output_file, index=True)
+        print(f"\n✓ Appointment counts table saved to: {output_file}")
+        
+    except Exception as e:
+        raise Exception(f"Error saving counts table: {e}")
     
     return output_file
 
@@ -222,6 +268,10 @@ def display_summary_table(pivot_table, max_rows=20):
     """
     print(f"\nSummary table (showing top {max_rows} organizations):")
     print("-" * 80)
+    
+    if len(pivot_table) == 0:
+        print("No data to display")
+        return
     
     # Select columns to display (limit if too many years)
     year_columns = [col for col in pivot_table.columns if col != 'Total']
@@ -240,7 +290,14 @@ def display_summary_table(pivot_table, max_rows=20):
     pd.set_option('display.width', None)
     pd.set_option('display.max_colwidth', 50)
     
-    print(display_table.to_string())
+    try:
+        print(display_table.to_string())
+    except Exception as e:
+        print(f"Error displaying table: {e}")
+        # Fallback to basic display
+        print(f"Top {min(max_rows, len(pivot_table))} organizations by total appointments:")
+        for i, (org, row) in enumerate(pivot_table.head(max_rows).iterrows(), 1):
+            print(f"  {i:2d}. {org[:60]} - Total: {row['Total']}")
     
     if len(pivot_table) > max_rows:
         print(f"\n... and {len(pivot_table) - max_rows} more organizations")
@@ -248,7 +305,7 @@ def display_summary_table(pivot_table, max_rows=20):
 def main():
     """Main execution function."""
     try:
-        print("New Brunswick Appointments Data - Employee Counts by Organization")
+        print("New Brunswick Appointments Data - Appointment Counts by Organization")
         print("="*70)
         
         # Define input file path
@@ -273,10 +330,12 @@ def main():
         output_file = save_counts_table(pivot_table)
         
         print(f"\n✓ Process completed successfully!")
-        print(f"Employee counts table available at: {output_file}")
+        print(f"Appointment counts table available at: {output_file}")
         
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

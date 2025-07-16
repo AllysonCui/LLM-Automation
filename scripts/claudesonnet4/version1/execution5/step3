@@ -3,8 +3,8 @@
 Reappointment Marker for New Brunswick Government Appointments Data
 
 This script identifies reappointments by analyzing unique combinations of name, 
-position, and organization, then marks all occurrences except the first 
-chronologically as reappointments.
+position, and organization, then marks subsequent occurrences as reappointments
+based on chronological order.
 
 Author: Claude Sonnet 4
 Version: 1.0
@@ -17,10 +17,12 @@ import os
 from pathlib import Path
 import sys
 import re
+from datetime import datetime
 
 def normalize_name(name):
     """
-    Normalize names to handle variations and improve matching.
+    Normalize name for better matching by removing extra spaces, 
+    standardizing case, and handling common variations.
     
     Args:
         name: Raw name string
@@ -28,55 +30,73 @@ def normalize_name(name):
     Returns:
         Normalized name string
     """
-    if pd.isna(name) or name == '':
-        return ''
+    if pd.isna(name):
+        return name
     
     # Convert to string and strip whitespace
     name = str(name).strip()
     
-    # Convert to lowercase for comparison
-    name = name.lower()
-    
-    # Remove extra whitespace
+    # Remove extra spaces between words
     name = re.sub(r'\s+', ' ', name)
     
-    # Remove common punctuation that might vary
-    name = re.sub(r'[.,;]', '', name)
+    # Standardize case (title case)
+    name = name.title()
     
-    # Handle common title variations
-    name = re.sub(r'\b(dr|mr|mrs|ms|prof|professor)\b\.?', '', name)
-    
-    # Remove extra spaces after cleanup
-    name = name.strip()
+    # Handle common abbreviations and variations
+    name = re.sub(r'\bDr\.?\b', 'Dr.', name)
+    name = re.sub(r'\bMr\.?\b', 'Mr.', name)
+    name = re.sub(r'\bMs\.?\b', 'Ms.', name)
+    name = re.sub(r'\bMrs\.?\b', 'Mrs.', name)
     
     return name
 
-def normalize_text(text):
+def normalize_position(position):
     """
-    Normalize text fields (position, org) for better matching.
+    Normalize position titles for better matching.
     
     Args:
-        text: Raw text string
+        position: Raw position string
     
     Returns:
-        Normalized text string
+        Normalized position string
     """
-    if pd.isna(text) or text == '':
-        return ''
+    if pd.isna(position):
+        return position
     
     # Convert to string and strip whitespace
-    text = str(text).strip()
+    position = str(position).strip()
     
-    # Convert to lowercase
-    text = text.lower()
+    # Remove extra spaces
+    position = re.sub(r'\s+', ' ', position)
     
-    # Remove extra whitespace
-    text = re.sub(r'\s+', ' ', text)
+    # Standardize case
+    position = position.title()
     
-    # Remove common punctuation
-    text = re.sub(r'[.,;]', '', text)
+    return position
+
+def normalize_org(org):
+    """
+    Normalize organization names for better matching.
     
-    return text
+    Args:
+        org: Raw organization string
+    
+    Returns:
+        Normalized organization string
+    """
+    if pd.isna(org):
+        return org
+    
+    # Convert to string and strip whitespace
+    org = str(org).strip()
+    
+    # Remove extra spaces
+    org = re.sub(r'\s+', ' ', org)
+    
+    # Standardize case
+    org = org.title()
+    
+    return org
 
 def main():
     """Main function to identify and mark reappointments."""
@@ -94,136 +114,139 @@ def main():
         sys.exit(1)
     
     try:
-        # Load the dataset
+        # Load the filtered dataset
         print("Loading filtered appointments dataset...")
         df = pd.read_csv(input_file)
         print(f"✓ Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
         
-        # Check for required columns
-        required_columns = ['name', 'position', 'org', 'reappointed', 'year']
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        # Validate required columns
+        required_cols = ['name', 'position', 'org', 'reappointed', 'year']
+        missing_cols = [col for col in required_cols if col not in df.columns]
         
-        if missing_columns:
-            print(f"ERROR: Missing required columns: {missing_columns}")
+        if missing_cols:
+            print(f"ERROR: Missing required columns: {missing_cols}")
             sys.exit(1)
         
         # Create a copy for processing
         df_processed = df.copy()
         
-        # Store original reappointment status for comparison
-        original_reappointed = df_processed['reappointed'].copy()
+        # Normalize key columns for better matching
+        print("Normalizing names, positions, and organizations...")
+        df_processed.loc[:, 'name_normalized'] = df_processed['name'].apply(normalize_name)
+        df_processed.loc[:, 'position_normalized'] = df_processed['position'].apply(normalize_position)
+        df_processed.loc[:, 'org_normalized'] = df_processed['org'].apply(normalize_org)
         
-        print("\nNormalizing text fields for better matching...")
-        print("-" * 50)
+        # Convert year to numeric for proper sorting
+        df_processed.loc[:, 'year'] = pd.to_numeric(df_processed['year'], errors='coerce')
         
-        # Create normalized columns for matching
-        df_processed['name_norm'] = df_processed['name'].apply(normalize_name)
-        df_processed['position_norm'] = df_processed['position'].apply(normalize_text)
-        df_processed['org_norm'] = df_processed['org'].apply(normalize_text)
-        
-        # Handle missing years - assign a default value for sorting
-        df_processed['year_clean'] = df_processed['year'].fillna(9999)  # Put missing years last
-        
-        print("✓ Text normalization completed")
-        
-        # Sort by normalized fields and year to ensure chronological order
-        df_processed = df_processed.sort_values([
-            'name_norm', 'position_norm', 'org_norm', 'year_clean'
-        ]).reset_index(drop=True)
-        
-        print("\nIdentifying reappointments...")
-        print("-" * 35)
-        
-        # Group by normalized name, position, and org combinations
-        grouped = df_processed.groupby(['name_norm', 'position_norm', 'org_norm'])
+        # Sort by normalized fields and year for consistent processing
+        df_processed = df_processed.sort_values(
+            ['name_normalized', 'position_normalized', 'org_normalized', 'year'],
+            kind='stable',
+            na_position='last'
+        ).reset_index(drop=True)
         
         # Track statistics
-        total_groups = len(grouped)
-        groups_with_reappointments = 0
-        total_reappointments_identified = 0
+        original_reappointed_count = df_processed['reappointed'].sum() if df_processed['reappointed'].dtype == 'bool' else 0
+        if df_processed['reappointed'].dtype == 'object':
+            original_reappointed_count = (df_processed['reappointed'] == True).sum()
+        
+        print(f"Original reappointments marked: {original_reappointed_count}")
+        
+        # Group by normalized name, position, and organization
+        print("Identifying reappointments...")
+        
+        # Create grouping key
+        df_processed.loc[:, 'group_key'] = (
+            df_processed['name_normalized'].astype(str) + '|' +
+            df_processed['position_normalized'].astype(str) + '|' +
+            df_processed['org_normalized'].astype(str)
+        )
         
         # Process each group
-        for (name_norm, position_norm, org_norm), group in grouped:
-            if len(group) > 1:  # Only process groups with multiple entries
-                groups_with_reappointments += 1
-                
-                # Skip the first entry (chronologically), mark the rest as reappointments
-                indices_to_mark = group.index[1:]  # All except first
-                df_processed.loc[indices_to_mark, 'reappointed'] = True
-                
-                total_reappointments_identified += len(indices_to_mark)
+        reappointments_marked = 0
+        groups_processed = 0
         
-        # Count how many new reappointments we identified
-        new_reappointments = 0
-        if 'reappointed' in df.columns:
-            # Compare original vs new reappointment status
-            original_true = original_reappointed.fillna(False).astype(bool)
-            new_true = df_processed['reappointed'].fillna(False).astype(bool)
-            new_reappointments = (new_true & ~original_true).sum()
+        for group_key, group_df in df_processed.groupby('group_key'):
+            groups_processed += 1
+            
+            # Skip if group has only one appointment
+            if len(group_df) <= 1:
+                continue
+            
+            # Skip if any key fields are missing
+            if ('nan' in group_key.lower() or 
+                'none' in group_key.lower() or 
+                group_key.count('|') != 2):
+                continue
+            
+            # Get indices for this group
+            group_indices = group_df.index.tolist()
+            
+            # Mark all except the first (chronologically) as reappointments
+            if len(group_indices) > 1:
+                # First appointment stays as-is, rest are marked as reappointments
+                for idx in group_indices[1:]:
+                    df_processed.loc[idx, 'reappointed'] = True
+                    reappointments_marked += 1
+        
+        print(f"✓ Processed {groups_processed} unique person-position-org combinations")
+        print(f"✓ Marked {reappointments_marked} additional reappointments")
         
         # Remove temporary columns
-        df_processed = df_processed.drop(['name_norm', 'position_norm', 'org_norm', 'year_clean'], axis=1)
+        df_final = df_processed.drop(columns=[
+            'name_normalized', 'position_normalized', 'org_normalized', 'group_key'
+        ])
+        
+        # Sort back to original order (by year and name)
+        df_final = df_final.sort_values(['year', 'name'], kind='stable', na_position='last')
+        df_final = df_final.reset_index(drop=True)
         
         # Save updated dataset
-        df_processed.to_csv(output_file, index=False)
+        df_final.to_csv(output_file, index=False)
         print(f"✓ Updated dataset saved to: {output_file}")
+        
+        # Calculate final statistics
+        final_reappointed_count = df_final['reappointed'].sum() if df_final['reappointed'].dtype == 'bool' else 0
+        if df_final['reappointed'].dtype == 'object':
+            final_reappointed_count = (df_final['reappointed'] == True).sum()
         
         print("-" * 50)
         print("REAPPOINTMENT IDENTIFICATION SUMMARY:")
-        print(f"Total unique name-position-org combinations: {total_groups:,}")
-        print(f"Combinations with multiple appointments: {groups_with_reappointments:,}")
-        print(f"Total reappointments identified: {total_reappointments_identified:,}")
-        print(f"New reappointments marked: {new_reappointments:,}")
+        print(f"Total appointments: {len(df_final):,}")
+        print(f"Original reappointments: {original_reappointed_count:,}")
+        print(f"Additional reappointments identified: {reappointments_marked:,}")
+        print(f"Final reappointments: {final_reappointed_count:,}")
+        print(f"Improvement: +{reappointments_marked} ({(reappointments_marked/len(df_final)*100):.1f}% of total)")
         
         # Show reappointment status breakdown
-        print(f"\nReappointment Status Breakdown:")
+        print("\nReappointment Status Breakdown:")
         print("-" * 32)
-        reappoint_counts = df_processed['reappointed'].value_counts(dropna=False)
+        reappoint_counts = df_final['reappointed'].value_counts(dropna=False)
         for status, count in reappoint_counts.items():
-            pct = (count / len(df_processed)) * 100
-            print(f"{str(status):8}: {count:5} ({pct:5.1f}%)")
+            pct = (count / len(df_final)) * 100
+            print(f"{str(status):8}: {count:5,} ({pct:5.1f}%)")
         
-        # Show some examples of identified reappointments
-        print(f"\nSample Reappointments Identified:")
-        print("-" * 34)
+        # Show top repeat appointees
+        print("\nTop 10 People with Most Reappointments:")
+        print("-" * 38)
         
-        # Get examples of people with multiple appointments
-        sample_reappointments = []
-        for (name_norm, position_norm, org_norm), group in grouped:
-            if len(group) > 1:
-                sample_info = {
-                    'name': group.iloc[0]['name'],
-                    'position': group.iloc[0]['position'],
-                    'org': group.iloc[0]['org'],
-                    'appointments': len(group),
-                    'years': sorted(group['year'].dropna().astype(int).tolist())
-                }
-                sample_reappointments.append(sample_info)
+        # Count reappointments by person
+        reappointed_df = df_final[df_final['reappointed'] == True]
+        if not reappointed_df.empty:
+            top_reappointed = reappointed_df['name'].value_counts().head(10)
+            for name, count in top_reappointed.items():
+                name_display = str(name)[:30] + "..." if len(str(name)) > 30 else str(name)
+                print(f"{name_display:33}: {count:2} reappointments")
+        else:
+            print("No reappointments found")
         
-        # Show top 10 examples
-        sample_reappointments.sort(key=lambda x: x['appointments'], reverse=True)
-        for i, example in enumerate(sample_reappointments[:10]):
-            name = example['name'][:25] + "..." if len(example['name']) > 25 else example['name']
-            position = example['position'][:20] + "..." if len(example['position']) > 20 else example['position']
-            print(f"{i+1:2}. {name:28} | {position:23} | {example['appointments']} appts | Years: {example['years']}")
-        
-        # Edge cases summary
-        print(f"\nEdge Cases Handled:")
-        print("-" * 19)
-        missing_names = df_processed['name'].isna().sum()
-        missing_positions = df_processed['position'].isna().sum()
-        missing_orgs = df_processed['org'].isna().sum()
-        missing_years = df_processed['year'].isna().sum()
-        
-        print(f"Missing names: {missing_names}")
-        print(f"Missing positions: {missing_positions}")
-        print(f"Missing organizations: {missing_orgs}")
-        print(f"Missing years: {missing_years}")
-        
-        print("\nReappointment identification completed successfully!")
+        print("\nReappointment marking completed successfully!")
         
     except Exception as e:
         print(f"ERROR during reappointment identification: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

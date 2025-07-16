@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script identifies and marks "reappointed" as True for repeated 
+"name"-"position"-"org" combinations, except for the first appearance.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def mark_repeated_appointments():
+    """
+    Marks repeated appointments based on name-position-org combinations.
+    The first occurrence is marked as False (or kept as is), subsequent ones as True.
+    """
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution1/analysis_data")
+    input_file = input_path / "step2_key_columns_data.csv"
+    output_file = input_path / "step3_repeats_marked.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 3: MARKING REPEATED APPOINTMENTS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run step2_extract_key_columns.py first!")
+        sys.exit(1)
+    
+    # Read the dataset
+    print(f"📄 Reading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Dataset loaded successfully ({len(df)} rows, {len(df.columns)} columns)")
+    except Exception as e:
+        print(f"❌ Error reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Verify required columns exist
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"❌ ERROR: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    # Display initial reappointment statistics
+    print(f"\n📊 Initial 'reappointed' column statistics:")
+    if 'reappointed' in df.columns:
+        print(f"  - Column exists with values:")
+        value_counts = df['reappointed'].value_counts()
+        for value, count in value_counts.items():
+            print(f"    {value}: {count}")
+        print(f"  - Null values: {df['reappointed'].isnull().sum()}")
+    else:
+        print(f"  - Column does not exist, will be created")
+    
+    # Create a backup of original reappointed column if it exists
+    if 'reappointed' in df.columns:
+        df['reappointed_original'] = df['reappointed'].copy()
+        print(f"\n💾 Original 'reappointed' values backed up to 'reappointed_original'")
+    
+    # Sort by year to ensure chronological order
+    print(f"\n🔄 Sorting data by year to ensure chronological order...")
+    df = df.sort_values('year').reset_index(drop=True)
+    
+    # Handle missing values in key columns
+    print(f"\n🧹 Handling missing values in key columns:")
+    for col in ['name', 'position', 'org']:
+        null_count = df[col].isnull().sum()
+        if null_count > 0:
+            print(f"  - {col}: {null_count} null values found")
+            # Fill nulls with a placeholder to avoid matching issues
+            df[col] = df[col].fillna(f'_MISSING_{col.upper()}_')
+    
+    # Create combination key
+    print(f"\n🔑 Creating combination key from name-position-org...")
+    df['appointment_key'] = (
+        df['name'].astype(str).str.lower().str.strip() + '|' +
+        df['position'].astype(str).str.lower().str.strip() + '|' +
+        df['org'].astype(str).str.lower().str.strip()
+    )
+    
+    # Initialize new reappointed column
+    df['reappointed'] = False
+    
+    # Method 1: Using duplicated() - marks all but first occurrence
+    print(f"\n🎯 Marking repeated appointments...")
+    df['reappointed'] = df.duplicated(subset=['appointment_key'], keep='first')
+    
+    # Additional analysis: count occurrences of each combination
+    print(f"\n📈 Analyzing appointment patterns:")
+    
+    # Count total occurrences of each combination
+    appointment_counts = df.groupby('appointment_key').size().reset_index(name='total_occurrences')
+    
+    # Merge back to main dataframe
+    df = df.merge(appointment_counts, on='appointment_key', how='left')
+    
+    # Create occurrence number for each appointment
+    df['occurrence_number'] = df.groupby('appointment_key').cumcount() + 1
+    
+    # Statistics on repeated appointments
+    repeat_stats = appointment_counts['total_occurrences'].value_counts().sort_index()
+    print(f"\n📊 Distribution of appointment occurrences:")
+    for occurrences, count in repeat_stats.items():
+        if occurrences == 1:
+            print(f"  - Single appointments: {count}")
+        else:
+            print(f"  - Appeared {occurrences} times: {count} unique combinations")
+    
+    # Find the most frequently reappointed combinations
+    most_frequent = appointment_counts[appointment_counts['total_occurrences'] > 1].sort_values(
+        'total_occurrences', ascending=False
+    ).head(10)
+    
+    if len(most_frequent) > 0:
+        print(f"\n🏆 Top 10 most frequently reappointed combinations:")
+        for idx, row in most_frequent.iterrows():
+            key_parts = row['appointment_key'].split('|')
+            # Clean up the display of missing values
+            name = key_parts[0] if not key_parts[0].startswith('_missing_') else '[Missing Name]'
+            position = key_parts[1] if not key_parts[1].startswith('_missing_') else '[Missing Position]'
+            org = key_parts[2] if not key_parts[2].startswith('_missing_') else '[Missing Org]'
+            
+            print(f"  {row['total_occurrences']} times: {name} - {position} - {org}")
+    
+    # Analyze reappointments by year
+    print(f"\n📅 Reappointments by year:")
+    yearly_stats = df.groupby('year').agg({
+        'reappointed': ['sum', 'count', 'mean']
+    }).round(3)
+    
+    yearly_stats.columns = ['reappointed_count', 'total_appointments', 'reappointment_rate']
+    print(yearly_stats.to_string())
+    
+    # Compare with original reappointed column if it existed
+    if 'reappointed_original' in df.columns:
+        print(f"\n🔍 Comparison with original 'reappointed' values:")
+        
+        # Count matches and mismatches
+        both_not_null = df['reappointed_original'].notna()
+        if both_not_null.sum() > 0:
+            matches = (df.loc[both_not_null, 'reappointed'] == 
+                      df.loc[both_not_null, 'reappointed_original']).sum()
+            total_comparable = both_not_null.sum()
+            match_rate = (matches / total_comparable) * 100
+            
+            print(f"  - Records with original values: {total_comparable}")
+            print(f"  - Matching values: {matches} ({match_rate:.1f}%)")
+            print(f"  - Different values: {total_comparable - matches} ({100-match_rate:.1f}%)")
+            
+            # Show some examples of differences
+            differences = df[both_not_null & 
+                           (df['reappointed'] != df['reappointed_original'])].head(5)
+            if len(differences) > 0:
+                print(f"\n  Examples of differences (showing first 5):")
+                cols_to_show = ['name', 'position', 'org', 'year', 
+                               'reappointed_original', 'reappointed', 'occurrence_number']
+                print(differences[cols_to_show].to_string(index=False))
+    
+    # Remove helper columns before saving
+    columns_to_drop = ['appointment_key', 'total_occurrences', 'occurrence_number']
+    if 'reappointed_original' in df.columns:
+        columns_to_drop.append('reappointed_original')
+    
+    df_final = df.drop(columns=columns_to_drop)
+    
+    # Restore original missing values
+    for col in ['name', 'position', 'org']:
+        df_final.loc[df_final[col].str.startswith('_MISSING_'), col] = np.nan
+    
+    # Final statistics
+    print(f"\n📊 Final reappointment statistics:")
+    reapp_counts = df_final['reappointed'].value_counts()
+    total = len(df_final)
+    
+    print(f"  - Total appointments: {total}")
+    print(f"  - First-time appointments: {reapp_counts[False]} ({reapp_counts[False]/total*100:.1f}%)")
+    print(f"  - Reappointments: {reapp_counts[True]} ({reapp_counts[True]/total*100:.1f}%)")
+    
+    # Save the dataset
+    print(f"\n💾 Saving dataset with marked repeats to: {output_file}")
+    df_final.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"✅ File saved successfully!")
+    
+    # Sample of marked data
+    print(f"\n👀 Sample of marked appointments (showing some repeats):")
+    sample_repeats = df_final[df_final['reappointed'] == True].head(5)
+    if len(sample_repeats) > 0:
+        print(sample_repeats.to_string(index=False))
+    else:
+        print("  No repeated appointments found in the dataset.")
+    
+    # Final summary
+    print(f"\n" + "="*60)
+    print(f"STEP 3 COMPLETED SUCCESSFULLY")
+    print(f"="*60)
+    print(f"Repeated appointments have been identified and marked.\n")
+    
+    return df_final
+
+if __name__ == "__main__":
+    try:
+        # Run the marking process
+        marked_data = mark_repeated_appointments()
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

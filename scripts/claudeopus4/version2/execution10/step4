@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count total employees by organization and year
+This script counts the total number of employees for each "org" in each year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to count employees by organization and year."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution10/analysis_data")
+    output_dir = input_dir  # Same directory for output
+    
+    # Input and output files
+    input_file = input_dir / "step3_repeats_marked.csv"
+    output_file = output_dir / "step4_employee_counts.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 4: COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run Step 3 first to mark repeated appointments.")
+        sys.exit(1)
+    
+    try:
+        # Load the data
+        print(f"Loading data from: {input_file}")
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows and {len(df.columns)} columns")
+        
+        # Verify required columns exist
+        required_columns = ['org', 'year']
+        missing_required = [col for col in required_columns if col not in df.columns]
+        
+        if missing_required:
+            print(f"\n❌ ERROR: Required columns missing: {missing_required}")
+            print(f"Available columns: {list(df.columns)}")
+            sys.exit(1)
+        
+        # Data quality check
+        print("\nData quality analysis:")
+        print(f"  - Missing org values: {df['org'].isna().sum()}")
+        print(f"  - Missing year values: {df['year'].isna().sum()}")
+        
+        # Handle missing values
+        if df['org'].isna().sum() > 0:
+            print("  - Filling missing org values with 'Unknown Organization'")
+            df['org'] = df['org'].fillna('Unknown Organization')
+        
+        if df['year'].isna().sum() > 0:
+            print("  - Dropping rows with missing year values")
+            df = df.dropna(subset=['year'])
+            print(f"  - Rows after dropping missing years: {len(df)}")
+        
+        # Convert year to integer for consistency
+        df['year'] = df['year'].astype(int)
+        
+        # Count employees by organization and year
+        print("\nCounting employees by organization and year...")
+        employee_counts = df.groupby(['org', 'year']).size().reset_index(name='employee_count')
+        
+        print(f"✓ Generated counts for {len(employee_counts)} org-year combinations")
+        
+        # Calculate summary statistics
+        print("\nSummary statistics:")
+        print(f"  - Total unique organizations: {employee_counts['org'].nunique()}")
+        print(f"  - Year range: {employee_counts['year'].min()} - {employee_counts['year'].max()}")
+        print(f"  - Total org-year combinations: {len(employee_counts)}")
+        
+        # Find organizations present in all years
+        years_in_data = sorted(employee_counts['year'].unique())
+        total_years = len(years_in_data)
+        org_year_counts = employee_counts.groupby('org')['year'].count()
+        orgs_all_years = org_year_counts[org_year_counts == total_years]
+        
+        print(f"\nOrganizations present in all {total_years} years: {len(orgs_all_years)}")
+        if len(orgs_all_years) > 0:
+            print("  Examples:")
+            for org in list(orgs_all_years.index)[:5]:
+                print(f"    - {org}")
+        
+        # Analyze employee count distribution
+        print("\nAppointment count distribution:")
+        count_stats = employee_counts['employee_count'].describe()
+        print(f"  - Mean: {count_stats['mean']:.1f}")
+        print(f"  - Median: {count_stats['50%']:.1f}")
+        print(f"  - Min: {count_stats['min']:.0f}")
+        print(f"  - Max: {count_stats['max']:.0f}")
+        print(f"  - Std Dev: {count_stats['std']:.1f}")
+        
+        # Top organizations by total employees across all years
+        print("\nTop 10 organizations by total employees (all years):")
+        org_totals = employee_counts.groupby('org')['employee_count'].sum().sort_values(ascending=False)
+        for org, total in org_totals.head(10).items():
+            print(f"  - {org}: {total} total appointments")
+        
+        # Year-wise analysis
+        print("\nYear-wise analysis:")
+        yearly_stats = employee_counts.groupby('year').agg({
+            'employee_count': ['sum', 'mean', 'count'],
+            'org': 'nunique'
+        }).round(1)
+        yearly_stats.columns = ['total_employees', 'avg_per_org', 'org_count', 'unique_orgs']
+        print(yearly_stats)
+        
+        # Organizations with largest year-over-year changes
+        print("\nAnalyzing year-over-year changes...")
+        
+        # Pivot data for easier comparison
+        pivot_data = employee_counts.pivot(index='org', columns='year', values='employee_count').fillna(0)
+        
+        # Calculate year-over-year changes
+        yoy_changes = {}
+        years_sorted = sorted(pivot_data.columns)
+        
+        for i in range(1, len(years_sorted)):
+            prev_year = years_sorted[i-1]
+            curr_year = years_sorted[i]
+            
+            change = pivot_data[curr_year] - pivot_data[prev_year]
+            yoy_changes[f'{prev_year}-{curr_year}'] = change
+        
+        # Find organizations with largest absolute changes
+        if yoy_changes:
+            print("\nLargest year-over-year changes (absolute):")
+            for period, changes in list(yoy_changes.items())[:3]:  # Show first 3 periods
+                print(f"\n  {period}:")
+                top_increases = changes.nlargest(3)
+                top_decreases = changes.nsmallest(3)
+                
+                print("    Largest increases:")
+                for org, change in top_increases.items():
+                    if change > 0:
+                        print(f"      - {org}: +{change:.0f}")
+                
+                print("    Largest decreases:")
+                for org, change in top_decreases.items():
+                    if change < 0:
+                        print(f"      - {org}: {change:.0f}")
+        
+        # Organizations with most consistent presence
+        print("\nOrganizations with most consistent presence:")
+        org_year_spread = employee_counts.groupby('org').agg({
+            'year': ['count', 'min', 'max'],
+            'employee_count': 'mean'
+        })
+        org_year_spread.columns = ['years_present', 'first_year', 'last_year', 'avg_employees']
+        org_year_spread['year_span'] = org_year_spread['last_year'] - org_year_spread['first_year'] + 1
+        org_year_spread['consistency_ratio'] = org_year_spread['years_present'] / org_year_spread['year_span']
+        
+        # Filter for organizations present in multiple years with high consistency
+        consistent_orgs = org_year_spread[
+            (org_year_spread['years_present'] >= 5) & 
+            (org_year_spread['consistency_ratio'] >= 0.8)
+        ].sort_values('avg_employees', ascending=False)
+        
+        print(f"  (Organizations present in 5+ years with 80%+ consistency)")
+        for org in consistent_orgs.head(10).index:
+            stats = consistent_orgs.loc[org]
+            print(f"  - {org}: {stats['years_present']} years, "
+                  f"avg {stats['avg_employees']:.1f} employees/year")
+        
+        # Add additional calculated columns for analysis
+        print("\nAdding analytical columns...")
+        
+        # Add rank within year
+        employee_counts['rank_in_year'] = employee_counts.groupby('year')['employee_count'].rank(
+            ascending=False, method='min'
+        )
+        
+        # Add percentage of total employees in that year
+        yearly_totals = employee_counts.groupby('year')['employee_count'].transform('sum')
+        employee_counts['pct_of_year_total'] = (
+            employee_counts['employee_count'] / yearly_totals * 100
+        ).round(2)
+        
+        # Sort the output by org and year for readability
+        employee_counts = employee_counts.sort_values(['org', 'year'])
+        
+        # Save the results
+        print(f"\nSaving employee counts to: {output_file}")
+        employee_counts.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved {len(employee_counts)} org-year combinations")
+        
+        # Create a summary pivot table for easy viewing
+        summary_pivot_file = output_dir / "step4_employee_counts_pivot.csv"
+        print(f"\nCreating summary pivot table: {summary_pivot_file}")
+        
+        # Create pivot with organizations as rows and years as columns
+        pivot_summary = employee_counts.pivot(
+            index='org', 
+            columns='year', 
+            values='employee_count'
+        ).fillna(0).astype(int)
+        
+        # Add row totals
+        pivot_summary['Total'] = pivot_summary.sum(axis=1)
+        pivot_summary = pivot_summary.sort_values('Total', ascending=False)
+        
+        # Save pivot table
+        pivot_summary.to_csv(summary_pivot_file, encoding='utf-8')
+        print(f"✓ Pivot table saved (top 20 organizations shown below):")
+        print(pivot_summary.head(20))
+        
+        # Final summary
+        print("\n" + "="*60)
+        print("SUMMARY")
+        print("="*60)
+        print(f"Input file: {input_file}")
+        print(f"Output file: {output_file}")
+        print(f"Pivot table: {summary_pivot_file}")
+        print(f"Total appointments processed: {len(df)}")
+        print(f"Unique organizations: {employee_counts['org'].nunique()}")
+        print(f"Unique org-year combinations: {len(employee_counts)}")
+        print(f"Year range: {employee_counts['year'].min()} - {employee_counts['year'].max()}")
+        print("\n✓ Step 4 completed successfully!")
+        
+        return employee_counts
+        
+    except Exception as e:
+        print(f"\n❌ Fatal error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Run the main function
+    employee_count_data = main()

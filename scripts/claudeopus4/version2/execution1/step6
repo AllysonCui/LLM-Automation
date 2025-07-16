@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""
+Step 6: Calculate reappointment rates
+This script calculates the reappointment rate as reappointments divided by 
+total employees for each org-year pair, with detailed analysis and validation.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def calculate_reappointment_rates():
+    """
+    Calculates reappointment rates for each organization-year pair with comprehensive analysis.
+    """
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution1/analysis_data")
+    reappointment_file = input_path / "step5_reappointment_counts.csv"
+    output_file = input_path / "step6_reappointment_rates.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 6: CALCULATING REAPPOINTMENT RATES")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not reappointment_file.exists():
+        print(f"❌ ERROR: Input file not found: {reappointment_file}")
+        print("Please run step5_count_reappointments.py first!")
+        sys.exit(1)
+    
+    # Read the dataset
+    print(f"📄 Reading reappointment data from: {reappointment_file}")
+    try:
+        df = pd.read_csv(reappointment_file, encoding='utf-8')
+        print(f"✓ Dataset loaded successfully ({len(df)} rows, {len(df.columns)} columns)")
+    except Exception as e:
+        print(f"❌ Error reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Verify required columns exist
+    required_cols = ['year', 'org', 'total_employees', 'reappointments']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"❌ ERROR: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    # Check if reappointment_rate already exists from step 5
+    if 'reappointment_rate' in df.columns:
+        print(f"\n📊 Reappointment rate already calculated in previous step")
+        print(f"   Verifying and enhancing the calculations...")
+    else:
+        print(f"\n📊 Calculating reappointment rates...")
+        df['reappointment_rate'] = (df['reappointments'] / df['total_employees'] * 100).round(2)
+    
+    # Add validation flags
+    print(f"\n🔍 Adding data validation flags...")
+    
+    # Flag for potential data quality issues
+    df['rate_validation'] = 'Valid'
+    
+    # Check for rates > 100% (should not be possible)
+    invalid_rates = df[df['reappointment_rate'] > 100]
+    if len(invalid_rates) > 0:
+        print(f"\n⚠️  Warning: Found {len(invalid_rates)} records with rate > 100%")
+        df.loc[df['reappointment_rate'] > 100, 'rate_validation'] = 'Rate > 100%'
+        for _, row in invalid_rates.iterrows():
+            print(f"   - {row['org']} ({int(row['year'])}): {row['reappointments']}/{row['total_employees']} = {row['reappointment_rate']}%")
+    
+    # Check for organizations with only 1 employee and 100% rate
+    single_employee = df[(df['total_employees'] == 1) & (df['reappointment_rate'] == 100)]
+    if len(single_employee) > 0:
+        print(f"\n⚠️  Found {len(single_employee)} org-years with single employee and 100% rate")
+        df.loc[(df['total_employees'] == 1) & (df['reappointment_rate'] == 100), 'rate_validation'] = 'Single Appointment'
+    
+    # Calculate additional metrics
+    print(f"\n📈 Calculating additional metrics...")
+    
+    # Categorize by employee count
+    df['size_category'] = pd.cut(df['total_employees'], 
+                                 bins=[0, 5, 10, 25, 50, 100, float('inf')],
+                                 labels=['1-5', '6-10', '11-25', '26-50', '51-100', '100+'])
+    
+    # Calculate organization-level statistics
+    print(f"\n📊 Calculating organization-level statistics...")
+    org_stats = df.groupby('org').agg({
+        'reappointments': 'sum',
+        'total_employees': 'sum',
+        'year': ['min', 'max', 'count']
+    }).round(2)
+    
+    org_stats.columns = ['total_reappointments', 'total_employees', 'first_year', 'last_year', 'years_active']
+    org_stats['overall_rate'] = (org_stats['total_reappointments'] / org_stats['total_employees'] * 100).round(2)
+    org_stats['avg_employees_per_year'] = (org_stats['total_employees'] / org_stats['years_active']).round(2)
+    
+    # Calculate rate statistics by organization size
+    print(f"\n📊 Reappointment rates by organization size:")
+    size_stats = df.groupby('size_category').agg({
+        'reappointment_rate': ['mean', 'median', 'std', 'count']
+    }).round(2)
+    
+    print(f"\n{'Size Category':<15} {'Mean Rate':<12} {'Median Rate':<12} {'Std Dev':<12} {'Count':<10}")
+    print("-" * 65)
+    for category in size_stats.index:
+        row = size_stats.loc[category]
+        print(f"{category:<15} {row[('reappointment_rate', 'mean')]:>10.2f}% "
+              f"{row[('reappointment_rate', 'median')]:>10.2f}% "
+              f"{row[('reappointment_rate', 'std')]:>10.2f}% "
+              f"{row[('reappointment_rate', 'count')]:>10.0f}")
+    
+    # Identify government branches (organizations)
+    print(f"\n🏛️ Identifying potential government branches...")
+    
+    # Common keywords for government branches
+    branch_keywords = {
+        'Executive': ['minister', 'premier', 'executive', 'cabinet', 'governor'],
+        'Legislative': ['legislative', 'assembly', 'legislature', 'committee'],
+        'Judicial': ['court', 'judge', 'judicial', 'justice', 'tribunal'],
+        'Administrative': ['board', 'commission', 'agency', 'authority', 'corporation'],
+        'Health': ['health', 'hospital', 'medical', 'nursing'],
+        'Education': ['education', 'university', 'college', 'school'],
+        'Municipal': ['municipal', 'city', 'town', 'village']
+    }
+    
+    # Classify organizations into branches
+    df['branch_category'] = 'Other'
+    for branch, keywords in branch_keywords.items():
+        for keyword in keywords:
+            mask = df['org'].str.lower().str.contains(keyword, na=False)
+            df.loc[mask & (df['branch_category'] == 'Other'), 'branch_category'] = branch
+    
+    # Branch-level statistics
+    print(f"\n📊 Reappointment rates by government branch:")
+    branch_stats = df.groupby('branch_category').agg({
+        'reappointments': 'sum',
+        'total_employees': 'sum',
+        'org': 'nunique'
+    })
+    branch_stats['branch_rate'] = (branch_stats['reappointments'] / branch_stats['total_employees'] * 100).round(2)
+    branch_stats = branch_stats.sort_values('branch_rate', ascending=False)
+    
+    print(f"\n{'Branch':<20} {'Organizations':<15} {'Appointments':<12} {'Reappointments':<15} {'Rate':<10}")
+    print("-" * 85)
+    for branch, row in branch_stats.iterrows():
+        print(f"{branch:<20} {row['org']:>13.0f} {row['total_employees']:>11.0f} "
+              f"{row['reappointments']:>14.0f} {row['branch_rate']:>8.2f}%")
+    
+    # Time series analysis by branch
+    print(f"\n📈 Branch reappointment trends over time:")
+    branch_yearly = df.groupby(['year', 'branch_category']).agg({
+        'reappointments': 'sum',
+        'total_employees': 'sum'
+    })
+    branch_yearly['yearly_rate'] = (branch_yearly['reappointments'] / branch_yearly['total_employees'] * 100).round(2)
+    
+    # Show trends for top 3 branches
+    top_branches = branch_stats.head(3).index
+    for branch in top_branches:
+        print(f"\n  {branch}:")
+        branch_data = branch_yearly.xs(branch, level='branch_category')
+        for year, row in branch_data.iterrows():
+            print(f"    {int(year)}: {row['yearly_rate']:.2f}%")
+    
+    # Statistical analysis
+    print(f"\n📊 Statistical summary of reappointment rates:")
+    rate_summary = df['reappointment_rate'].describe()
+    print(f"  - Count: {rate_summary['count']:.0f} org-year pairs")
+    print(f"  - Mean: {rate_summary['mean']:.2f}%")
+    print(f"  - Std Dev: {rate_summary['std']:.2f}%")
+    print(f"  - Min: {rate_summary['min']:.2f}%")
+    print(f"  - 25th percentile: {rate_summary['25%']:.2f}%")
+    print(f"  - Median: {rate_summary['50%']:.2f}%")
+    print(f"  - 75th percentile: {rate_summary['75%']:.2f}%")
+    print(f"  - Max: {rate_summary['max']:.2f}%")
+    
+    # Organizations with extreme rates
+    print(f"\n🎯 Organizations with extreme reappointment rates:")
+    
+    # Highest rates (minimum 10 employees total)
+    high_rate_orgs = org_stats[org_stats['total_employees'] >= 10].nlargest(5, 'overall_rate')
+    print(f"\n  Highest rates (min 10 employees):")
+    for org, row in high_rate_orgs.iterrows():
+        print(f"    - {org}: {row['overall_rate']:.2f}% "
+              f"({int(row['total_reappointments'])}/{int(row['total_employees'])})")
+    
+    # Lowest rates (minimum 10 employees total)
+    low_rate_orgs = org_stats[org_stats['total_employees'] >= 10].nsmallest(5, 'overall_rate')
+    print(f"\n  Lowest rates (min 10 employees):")
+    for org, row in low_rate_orgs.iterrows():
+        print(f"    - {org}: {row['overall_rate']:.2f}% "
+              f"({int(row['total_reappointments'])}/{int(row['total_employees'])})")
+    
+    # Prepare final output
+    output_columns = ['year', 'org', 'total_employees', 'reappointments', 
+                     'reappointment_rate', 'size_category', 'branch_category', 'rate_validation']
+    final_output = df[output_columns].copy()
+    
+    # Sort by year and reappointment rate
+    final_output = final_output.sort_values(['year', 'reappointment_rate'], ascending=[True, False])
+    
+    # Save the enhanced dataset
+    print(f"\n💾 Saving enhanced reappointment rates to: {output_file}")
+    final_output.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"✅ File saved successfully!")
+    
+    # Save organization statistics
+    org_stats_file = input_path / "step6_organization_statistics.csv"
+    print(f"\n💾 Saving organization statistics to: {org_stats_file}")
+    org_stats.to_csv(org_stats_file, encoding='utf-8')
+    print(f"✅ Organization statistics saved!")
+    
+    # Save branch statistics
+    branch_stats_file = input_path / "step6_branch_statistics.csv"
+    print(f"\n💾 Saving branch statistics to: {branch_stats_file}")
+    branch_stats.to_csv(branch_stats_file, encoding='utf-8')
+    print(f"✅ Branch statistics saved!")
+    
+    # Final summary
+    print(f"\n" + "="*60)
+    print(f"STEP 6 COMPLETED SUCCESSFULLY")
+    print(f"="*60)
+    print(f"Reappointment rates calculated and analyzed.")
+    print(f"Main output: {output_file}")
+    print(f"Organization statistics: {org_stats_file}")
+    print(f"Branch statistics: {branch_stats_file}")
+    print(f"\nKey finding: The '{branch_stats.index[0]}' branch has the highest "
+          f"reappointment rate at {branch_stats.iloc[0]['branch_rate']:.2f}%\n")
+    
+    return final_output, org_stats, branch_stats
+
+if __name__ == "__main__":
+    try:
+        # Run the rate calculation process
+        rates_data, org_data, branch_data = calculate_reappointment_rates()
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

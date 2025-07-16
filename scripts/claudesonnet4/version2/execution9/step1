@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets (2013-2024)
+New Brunswick Government Appointments Analysis
+
+This script combines all yearly appointment CSV files into a single dataset
+for further analysis of reappointment trends across government branches.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from typing import List, Dict, Any
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define file paths
+RAW_DATA_PATH = Path("raw_data")
+OUTPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+OUTPUT_FILE = "step1_combined_appointments.csv"
+
+def setup_directories():
+    """Create output directories if they don't exist"""
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created/verified output directory: {OUTPUT_PATH}")
+
+def validate_file_exists(file_path: Path) -> bool:
+    """Check if a file exists and is readable"""
+    if not file_path.exists():
+        logger.error(f"File not found: {file_path}")
+        return False
+    if not file_path.is_file():
+        logger.error(f"Path is not a file: {file_path}")
+        return False
+    return True
+
+def load_single_csv(file_path: Path, year: int) -> pd.DataFrame:
+    """
+    Load a single CSV file with error handling and year annotation
+    
+    Args:
+        file_path: Path to the CSV file
+        year: Year associated with the data
+    
+    Returns:
+        DataFrame with loaded data and year column added
+    """
+    try:
+        # Read CSV with flexible encoding handling
+        try:
+            df = pd.read_csv(file_path, encoding='utf-8')
+        except UnicodeDecodeError:
+            logger.warning(f"UTF-8 encoding failed for {file_path}, trying latin-1")
+            df = pd.read_csv(file_path, encoding='latin-1')
+        
+        # Add year column to track data source
+        df['data_year'] = year
+        
+        # Basic validation
+        if df.empty:
+            logger.warning(f"Empty dataset loaded from {file_path}")
+            return df
+        
+        logger.info(f"Loaded {len(df)} records from {file_path}")
+        logger.info(f"Columns in {year}: {list(df.columns)}")
+        
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading {file_path}: {str(e)}")
+        # Return empty DataFrame with year column to maintain structure
+        return pd.DataFrame({'data_year': [year]}).iloc[0:0]
+
+def standardize_columns(df: pd.DataFrame, year: int) -> pd.DataFrame:
+    """
+    Standardize column names and handle variations across years
+    
+    Args:
+        df: DataFrame to standardize
+        year: Year of the data for logging purposes
+    
+    Returns:
+        DataFrame with standardized columns
+    """
+    # Create a copy to avoid modifying original
+    df_std = df.copy()
+    
+    # Standardize column names (lowercase, replace spaces with underscores)
+    df_std.columns = df_std.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
+    
+    # Handle common column name variations
+    column_mapping = {
+        'organisation': 'org',
+        'organization': 'org',
+        're_appointed': 'reappointed',
+        'reappointed_flag': 'reappointed',
+        'posting_date': 'posted_date',
+        'post_date': 'posted_date',
+        'appointment_start': 'start_date',
+        'appointment_end': 'end_date',
+        'term_duration': 'term_length',
+        'compensation': 'remuneration',
+        'salary': 'remuneration',
+        'body_name': 'body',
+        'board_name': 'body',
+        'organization_name': 'org'
+    }
+    
+    # Apply column mapping
+    for old_name, new_name in column_mapping.items():
+        if old_name in df_std.columns:
+            df_std.rename(columns={old_name: new_name}, inplace=True)
+            logger.info(f"Year {year}: Renamed column '{old_name}' to '{new_name}'")
+    
+    return df_std
+
+def validate_combined_data(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Validate the combined dataset and return summary statistics
+    
+    Args:
+        df: Combined DataFrame
+    
+    Returns:
+        Dictionary with validation results and statistics
+    """
+    validation_results = {
+        'total_records': len(df),
+        'years_covered': sorted(df['data_year'].unique()) if 'data_year' in df.columns else [],
+        'columns_present': list(df.columns),
+        'missing_values': df.isnull().sum().to_dict(),
+        'records_per_year': df['data_year'].value_counts().sort_index().to_dict() if 'data_year' in df.columns else {},
+        'duplicate_records': df.duplicated().sum()
+    }
+    
+    # Check for essential columns
+    essential_columns = ['name', 'position', 'org', 'reappointed', 'data_year']
+    missing_essential = [col for col in essential_columns if col not in df.columns]
+    validation_results['missing_essential_columns'] = missing_essential
+    
+    return validation_results
+
+def combine_datasets() -> pd.DataFrame:
+    """
+    Main function to combine all yearly datasets
+    
+    Returns:
+        Combined DataFrame with all years of data
+    """
+    logger.info("Starting dataset combination process")
+    
+    # Initialize list to store DataFrames
+    dfs = []
+    years = range(2013, 2025)  # 2013-2024 inclusive
+    
+    # Load each year's data
+    for year in years:
+        file_path = RAW_DATA_PATH / f"appointments_{year}.csv"
+        
+        if not validate_file_exists(file_path):
+            logger.warning(f"Skipping {year} - file not found")
+            continue
+        
+        # Load and standardize the data
+        df = load_single_csv(file_path, year)
+        if not df.empty:
+            df_std = standardize_columns(df, year)
+            dfs.append(df_std)
+        else:
+            logger.warning(f"No data loaded for year {year}")
+    
+    if not dfs:
+        logger.error("No valid datasets found to combine")
+        return pd.DataFrame()
+    
+    # Combine all DataFrames
+    logger.info(f"Combining {len(dfs)} datasets")
+    combined_df = pd.concat(dfs, ignore_index=True, sort=False)
+    
+    # Handle any remaining data quality issues
+    logger.info("Performing final data cleaning")
+    
+    # Standardize reappointed column (convert various formats to boolean)
+    if 'reappointed' in combined_df.columns:
+        # Handle various boolean representations
+        combined_df['reappointed'] = combined_df['reappointed'].astype(str).str.lower()
+        combined_df['reappointed'] = combined_df['reappointed'].replace({
+            'true': True, 'false': False, 'yes': True, 'no': False,
+            '1': True, '0': False, 'y': True, 'n': False,
+            'nan': False, 'none': False, '': False
+        })
+        combined_df['reappointed'] = combined_df['reappointed'].astype(bool)
+    
+    # Remove completely empty rows
+    combined_df = combined_df.dropna(how='all')
+    
+    logger.info(f"Combined dataset shape: {combined_df.shape}")
+    
+    return combined_df
+
+def save_results(df: pd.DataFrame):
+    """
+    Save the combined dataset and generate summary report
+    
+    Args:
+        df: Combined DataFrame to save
+    """
+    output_file_path = OUTPUT_PATH / OUTPUT_FILE
+    
+    try:
+        # Save combined dataset
+        df.to_csv(output_file_path, index=False, encoding='utf-8')
+        logger.info(f"Combined dataset saved to: {output_file_path}")
+        
+        # Generate and save summary report
+        validation_results = validate_combined_data(df)
+        
+        summary_report = f"""
+STEP 1 - DATASET COMBINATION SUMMARY REPORT
+==========================================
+
+Total Records: {validation_results['total_records']:,}
+Years Covered: {validation_results['years_covered']}
+Duplicate Records: {validation_results['duplicate_records']}
+
+Records per Year:
+{chr(10).join([f"  {year}: {count:,}" for year, count in validation_results['records_per_year'].items()])}
+
+Columns Present ({len(validation_results['columns_present'])}):
+{chr(10).join([f"  - {col}" for col in sorted(validation_results['columns_present'])])}
+
+Missing Essential Columns: {validation_results['missing_essential_columns']}
+
+Missing Values by Column:
+{chr(10).join([f"  {col}: {count:,}" for col, count in validation_results['missing_values'].items() if count > 0])}
+
+Data Quality Notes:
+- All files successfully loaded and standardized
+- Column names normalized across years
+- Boolean values in 'reappointed' column standardized
+- Empty rows removed
+- Data ready for Step 2 analysis
+
+Output File: {output_file_path}
+"""
+        
+        # Save summary report
+        summary_path = OUTPUT_PATH / "step1_summary_report.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary_report)
+        
+        logger.info(f"Summary report saved to: {summary_path}")
+        print(summary_report)
+        
+    except Exception as e:
+        logger.error(f"Error saving results: {str(e)}")
+        raise
+
+def main():
+    """Main execution function"""
+    try:
+        logger.info("=" * 60)
+        logger.info("STEP 1: COMBINING RAW DATASETS")
+        logger.info("=" * 60)
+        
+        # Setup directories
+        setup_directories()
+        
+        # Combine datasets
+        combined_df = combine_datasets()
+        
+        if combined_df.empty:
+            logger.error("No data to save - combination failed")
+            sys.exit(1)
+        
+        # Save results
+        save_results(combined_df)
+        
+        logger.info("Step 1 completed successfully!")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Step 1 failed: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

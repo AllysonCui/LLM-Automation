@@ -1,0 +1,444 @@
+"""
+New Brunswick Government Reappointment Analysis
+Research Question: Which government branch in New Brunswick most frequently reappoints 
+past appointees, and is this trend increasing or declining over the past 12 years?
+
+Author: Claude Sonnet 4
+Version: 3
+Execution: 9
+"""
+
+import pandas as pd
+import numpy as np
+from scipy.stats import linregress
+from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set up paths
+BASE_DIR = Path("scripts/claudesonnet4/version3/execution9")
+RAW_DATA_DIR = Path("raw_data")
+ANALYSIS_DATA_DIR = BASE_DIR / "analysis_data"
+
+# Create output directory if it doesn't exist
+ANALYSIS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+print("="*60)
+print("NEW BRUNSWICK GOVERNMENT REAPPOINTMENT ANALYSIS")
+print("="*60)
+print(f"Analysis directory: {ANALYSIS_DATA_DIR}")
+print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+def validate_file_exists(file_path):
+    """Check if file exists and is readable"""
+    if not file_path.exists():
+        raise FileNotFoundError(f"Required file not found: {file_path}")
+    return True
+
+def extract_year_from_filename(filename):
+    """Extract year from filename like 'appointments_2024.csv'"""
+    return int(filename.stem.split('_')[1])
+
+def safe_to_numeric(series, errors='coerce'):
+    """Safely convert series to numeric with error handling"""
+    return pd.to_numeric(series, errors=errors)
+
+def clean_reappointed_column(df):
+    """Clean and standardize the reappointed column"""
+    if 'reappointed' not in df.columns:
+        print("Warning: 'reappointed' column not found, creating default False values")
+        df['reappointed'] = False
+        return df
+    
+    # Handle various boolean representations
+    df['reappointed'] = df['reappointed'].fillna(False)
+    
+    # Convert string representations to boolean
+    if df['reappointed'].dtype == 'object':
+        df['reappointed'] = df['reappointed'].astype(str).str.lower()
+        df['reappointed'] = df['reappointed'].map({
+            'true': True, '1': True, 'yes': True, 'y': True,
+            'false': False, '0': False, 'no': False, 'n': False,
+            'nan': False
+        }).fillna(False)
+    
+    return df
+
+# STEP 1: Combine the 12 raw datasets
+print("\nSTEP 1: Combining raw datasets...")
+print("-" * 40)
+
+combined_data = []
+years_processed = []
+
+for year in range(2013, 2025):  # 2013-2024 inclusive
+    file_path = RAW_DATA_DIR / f"appointments_{year}.csv"
+    
+    try:
+        validate_file_exists(file_path)
+        
+        # Read CSV with error handling
+        df = pd.read_csv(file_path, encoding='utf-8', low_memory=False)
+        
+        # Add year column
+        df['year'] = year
+        
+        # Clean reappointed column
+        df = clean_reappointed_column(df)
+        
+        combined_data.append(df)
+        years_processed.append(year)
+        
+        print(f"  ✓ Loaded {year}: {len(df)} records")
+        
+    except FileNotFoundError:
+        print(f"  ✗ Missing file for {year}: {file_path}")
+    except Exception as e:
+        print(f"  ✗ Error loading {year}: {str(e)}")
+
+if not combined_data:
+    raise ValueError("No data files could be loaded. Please check file paths and permissions.")
+
+# Combine all dataframes
+combined_df = pd.concat(combined_data, ignore_index=True)
+print(f"\nCombined dataset shape: {combined_df.shape}")
+print(f"Years processed: {sorted(years_processed)}")
+
+# Save combined data
+output_path = ANALYSIS_DATA_DIR / "step1_combined_appointments.csv"
+combined_df.to_csv(output_path, index=False)
+print(f"✓ Saved combined data to: {output_path}")
+
+# STEP 2: Extract and retain key columns
+print("\nSTEP 2: Extracting key columns...")
+print("-" * 40)
+
+required_columns = ['name', 'position', 'org', 'reappointed', 'year']
+available_columns = combined_df.columns.tolist()
+
+print(f"Available columns: {available_columns}")
+print(f"Required columns: {required_columns}")
+
+# Check for missing columns
+missing_columns = [col for col in required_columns if col not in available_columns]
+if missing_columns:
+    print(f"Warning: Missing columns: {missing_columns}")
+
+# Extract available key columns
+key_columns = [col for col in required_columns if col in available_columns]
+key_data = combined_df[key_columns].copy()
+
+# Handle missing values
+print("\nCleaning data...")
+print(f"Initial shape: {key_data.shape}")
+
+# Fill missing values appropriately
+key_data['name'] = key_data['name'].fillna('Unknown')
+key_data['position'] = key_data['position'].fillna('Unknown')
+key_data['org'] = key_data['org'].fillna('Unknown')
+
+# Remove rows with all key identifying info missing
+key_data = key_data.dropna(subset=['name', 'position', 'org'], how='all')
+
+print(f"After cleaning: {key_data.shape}")
+print(f"Unique organizations: {key_data['org'].nunique()}")
+print(f"Year range: {key_data['year'].min()} - {key_data['year'].max()}")
+
+# Save key columns data
+output_path = ANALYSIS_DATA_DIR / "step2_key_columns_data.csv"
+key_data.to_csv(output_path, index=False)
+print(f"✓ Saved key columns data to: {output_path}")
+
+# STEP 3: Mark reappointed for repeated combinations
+print("\nSTEP 3: Marking reappointments...")
+print("-" * 40)
+
+# Sort by year to ensure chronological order
+key_data = key_data.sort_values(['name', 'position', 'org', 'year']).reset_index(drop=True)
+
+# Create a combination identifier
+key_data['combination_id'] = (key_data['name'].astype(str) + '_' + 
+                             key_data['position'].astype(str) + '_' + 
+                             key_data['org'].astype(str))
+
+# Mark reappointments (duplicates after first occurrence)
+key_data['reappointed_calculated'] = key_data.duplicated(subset=['combination_id'], keep='first')
+
+# Use calculated reappointments as the primary indicator
+key_data['reappointed_final'] = key_data['reappointed_calculated']
+
+print(f"Total appointments: {len(key_data)}")
+print(f"Reappointments (calculated): {key_data['reappointed_calculated'].sum()}")
+print(f"Original reappointed flags: {key_data['reappointed'].sum()}")
+
+# Analysis of reappointment patterns
+reappointment_summary = key_data.groupby('year')['reappointed_final'].agg(['count', 'sum']).reset_index()
+reappointment_summary.columns = ['year', 'total_appointments', 'reappointments']
+reappointment_summary['reappointment_rate'] = reappointment_summary['reappointments'] / reappointment_summary['total_appointments']
+
+print("\nYearly reappointment summary:")
+print(reappointment_summary)
+
+# Save marked data
+output_path = ANALYSIS_DATA_DIR / "step3_repeats_marked.csv"
+key_data.to_csv(output_path, index=False)
+print(f"✓ Saved marked data to: {output_path}")
+
+# STEP 4: Count total appointments for each org in each year
+print("\nSTEP 4: Counting appointments by organization and year...")
+print("-" * 40)
+
+appointment_counts = key_data.groupby(['org', 'year']).size().reset_index(name='total_appointments')
+
+print(f"Organization-year combinations: {len(appointment_counts)}")
+print(f"Average appointments per org-year: {appointment_counts['total_appointments'].mean():.2f}")
+
+# Top organizations by total appointments
+top_orgs = key_data.groupby('org').size().sort_values(ascending=False).head(10)
+print("\nTop 10 organizations by total appointments:")
+for org, count in top_orgs.items():
+    print(f"  {org}: {count}")
+
+# Save appointment counts
+output_path = ANALYSIS_DATA_DIR / "step4_appointment_counts.csv"
+appointment_counts.to_csv(output_path, index=False)
+print(f"✓ Saved appointment counts to: {output_path}")
+
+# STEP 5: Count reappointments for each org-year
+print("\nSTEP 5: Counting reappointments by organization and year...")
+print("-" * 40)
+
+reappointment_counts = (key_data[key_data['reappointed_final'] == True]
+                       .groupby(['org', 'year'])
+                       .size()
+                       .reset_index(name='reappointments'))
+
+print(f"Org-year combinations with reappointments: {len(reappointment_counts)}")
+
+# Save reappointment counts
+output_path = ANALYSIS_DATA_DIR / "step5_reappointment_counts.csv"
+reappointment_counts.to_csv(output_path, index=False)
+print(f"✓ Saved reappointment counts to: {output_path}")
+
+# STEP 6: Calculate reappointment rates
+print("\nSTEP 6: Calculating reappointment rates...")
+print("-" * 40)
+
+# Merge appointment counts with reappointment counts
+reappointment_rates = appointment_counts.merge(reappointment_counts, on=['org', 'year'], how='left')
+reappointment_rates['reappointments'] = reappointment_rates['reappointments'].fillna(0)
+reappointment_rates['reappointment_rate'] = reappointment_rates['reappointments'] / reappointment_rates['total_appointments']
+
+print(f"Reappointment rate statistics:")
+print(f"  Mean: {reappointment_rates['reappointment_rate'].mean():.4f}")
+print(f"  Median: {reappointment_rates['reappointment_rate'].median():.4f}")
+print(f"  Max: {reappointment_rates['reappointment_rate'].max():.4f}")
+print(f"  Min: {reappointment_rates['reappointment_rate'].min():.4f}")
+
+# Save reappointment rates
+output_path = ANALYSIS_DATA_DIR / "step6_reappointment_rates.csv"
+reappointment_rates.to_csv(output_path, index=False)
+print(f"✓ Saved reappointment rates to: {output_path}")
+
+# STEP 7: Identify organization with highest reappointment rate each year
+print("\nSTEP 7: Finding highest reappointment rates by year...")
+print("-" * 40)
+
+# Filter out organizations with very few appointments to avoid skewed rates
+min_appointments = 5  # Minimum threshold for meaningful rates
+filtered_rates = reappointment_rates[reappointment_rates['total_appointments'] >= min_appointments]
+
+yearly_max_rates = filtered_rates.loc[filtered_rates.groupby('year')['reappointment_rate'].idxmax()]
+yearly_max_rates = yearly_max_rates[['year', 'org', 'reappointment_rate', 'total_appointments', 'reappointments']].copy()
+
+print(f"Organizations with highest reappointment rates by year:")
+print(yearly_max_rates.to_string(index=False))
+
+# Save yearly max rates
+output_path = ANALYSIS_DATA_DIR / "step7_yearly_max_rates.csv"
+yearly_max_rates.to_csv(output_path, index=False)
+print(f"✓ Saved yearly max rates to: {output_path}")
+
+# Create visualization
+plt.figure(figsize=(14, 8))
+plt.subplot(2, 1, 1)
+plt.plot(yearly_max_rates['year'], yearly_max_rates['reappointment_rate'], 'bo-', linewidth=2, markersize=8)
+plt.title('Highest Reappointment Rate by Year (Organizations with ≥5 appointments)', fontsize=14)
+plt.xlabel('Year')
+plt.ylabel('Reappointment Rate')
+plt.grid(True, alpha=0.3)
+plt.ylim(0, max(yearly_max_rates['reappointment_rate']) * 1.1)
+
+# Add organization labels
+for i, row in yearly_max_rates.iterrows():
+    plt.annotate(row['org'][:15] + ('...' if len(row['org']) > 15 else ''), 
+                (row['year'], row['reappointment_rate']), 
+                xytext=(5, 5), textcoords='offset points', fontsize=8, rotation=45)
+
+plt.subplot(2, 1, 2)
+org_colors = plt.cm.Set3(np.linspace(0, 1, len(yearly_max_rates['org'].unique())))
+org_color_map = dict(zip(yearly_max_rates['org'].unique(), org_colors))
+
+for org in yearly_max_rates['org'].unique():
+    org_data = yearly_max_rates[yearly_max_rates['org'] == org]
+    plt.plot(org_data['year'], org_data['reappointment_rate'], 'o-', 
+             label=org[:20] + ('...' if len(org) > 20 else ''), 
+             color=org_color_map[org], linewidth=2)
+
+plt.title('Reappointment Rate Trends by Top Organizations', fontsize=14)
+plt.xlabel('Year')
+plt.ylabel('Reappointment Rate')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+output_path = ANALYSIS_DATA_DIR / "step7_yearly_max_reappointment_rates.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.close()
+print(f"✓ Saved visualization to: {output_path}")
+
+# STEP 8: Compute government-wide reappointment proportions
+print("\nSTEP 8: Computing government-wide reappointment proportions...")
+print("-" * 40)
+
+annual_proportions = key_data.groupby('year').agg({
+    'reappointed_final': ['sum', 'count']
+}).reset_index()
+
+annual_proportions.columns = ['year', 'total_reappointments', 'total_appointments']
+annual_proportions['reappointment_proportion'] = (annual_proportions['total_reappointments'] / 
+                                                 annual_proportions['total_appointments'])
+
+print("Government-wide reappointment proportions:")
+print(annual_proportions.to_string(index=False))
+
+# Save annual proportions
+output_path = ANALYSIS_DATA_DIR / "step8_annual_proportions.csv"
+annual_proportions.to_csv(output_path, index=False)
+print(f"✓ Saved annual proportions to: {output_path}")
+
+# Create proportion visualization
+plt.figure(figsize=(12, 8))
+plt.subplot(2, 1, 1)
+plt.plot(annual_proportions['year'], annual_proportions['reappointment_proportion'], 'ro-', 
+         linewidth=3, markersize=10, label='Government-wide Rate')
+plt.title('Government-wide Reappointment Proportion Over Time', fontsize=16)
+plt.xlabel('Year')
+plt.ylabel('Reappointment Proportion')
+plt.grid(True, alpha=0.3)
+plt.legend()
+
+# Add trend line
+z = np.polyfit(annual_proportions['year'], annual_proportions['reappointment_proportion'], 1)
+p = np.poly1d(z)
+plt.plot(annual_proportions['year'], p(annual_proportions['year']), 'r--', alpha=0.8, label='Trend')
+
+plt.subplot(2, 1, 2)
+plt.bar(annual_proportions['year'], annual_proportions['total_appointments'], 
+        alpha=0.7, color='skyblue', label='Total Appointments')
+plt.bar(annual_proportions['year'], annual_proportions['total_reappointments'], 
+        alpha=0.8, color='orange', label='Reappointments')
+plt.title('Annual Appointments vs Reappointments', fontsize=16)
+plt.xlabel('Year')
+plt.ylabel('Count')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+output_path = ANALYSIS_DATA_DIR / "step8_annual_reappointment_proportions.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.close()
+print(f"✓ Saved visualization to: {output_path}")
+
+# STEP 9: Linear regression analysis
+print("\nSTEP 9: Running linear regression analysis...")
+print("-" * 40)
+
+# Prepare data for regression
+x = annual_proportions['year'].values
+y = annual_proportions['reappointment_proportion'].values
+
+# Perform linear regression
+slope, intercept, r_value, p_value, std_err = linregress(x, y)
+
+# Calculate additional statistics
+n = len(x)
+r_squared = r_value ** 2
+trend_direction = "increasing" if slope > 0 else "decreasing"
+significance_level = "significant" if p_value < 0.05 else "not significant"
+
+# Prepare results
+results = f"""
+LINEAR REGRESSION ANALYSIS RESULTS
+=====================================
+
+Research Question: Is the government-wide reappointment trend increasing or declining?
+
+Regression Statistics:
+- Slope: {slope:.6f}
+- Intercept: {intercept:.6f}
+- R-squared: {r_squared:.6f}
+- Correlation coefficient: {r_value:.6f}
+- P-value: {p_value:.6f}
+- Standard error: {std_err:.6f}
+- Sample size: {n}
+
+Interpretation:
+- Trend direction: {trend_direction.upper()}
+- Statistical significance: {significance_level.upper()} (α = 0.05)
+- Annual change rate: {slope:.6f} ({slope*100:.4f}% per year)
+
+Key Findings:
+1. The government-wide reappointment proportion shows a {trend_direction} trend over the 12-year period.
+2. The trend is statistically {significance_level} at the 0.05 level.
+3. The R-squared value of {r_squared:.6f} indicates that {r_squared*100:.2f}% of the variation in reappointment rates is explained by the year.
+
+Data Summary:
+- Years analyzed: {x.min()}-{x.max()}
+- Average reappointment rate: {y.mean():.4f} ({y.mean()*100:.2f}%)
+- Minimum reappointment rate: {y.min():.4f} ({y.min()*100:.2f}%) in {x[np.argmin(y)]}
+- Maximum reappointment rate: {y.max():.4f} ({y.max()*100:.2f}%) in {x[np.argmax(y)]}
+
+Organizations with Highest Reappointment Rates:
+"""
+
+# Add top organizations analysis
+top_orgs_analysis = reappointment_rates.groupby('org').agg({
+    'reappointment_rate': 'mean',
+    'total_appointments': 'sum',
+    'reappointments': 'sum'
+}).reset_index()
+
+top_orgs_analysis = top_orgs_analysis[top_orgs_analysis['total_appointments'] >= 10]  # Minimum threshold
+top_orgs_analysis = top_orgs_analysis.sort_values('reappointment_rate', ascending=False).head(10)
+
+for i, row in top_orgs_analysis.iterrows():
+    results += f"\n{i+1}. {row['org']}: {row['reappointment_rate']:.4f} ({row['reappointment_rate']*100:.2f}%)"
+
+results += f"\n\nAnalysis completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+print(results)
+
+# Save regression results
+output_path = ANALYSIS_DATA_DIR / "step9_regression_results.txt"
+with open(output_path, 'w') as f:
+    f.write(results)
+print(f"✓ Saved regression results to: {output_path}")
+
+print("\n" + "="*60)
+print("ANALYSIS COMPLETE")
+print("="*60)
+print(f"All outputs saved to: {ANALYSIS_DATA_DIR}")
+print(f"Total execution time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# Summary of key findings
+print("\nKEY FINDINGS SUMMARY:")
+print("-" * 20)
+print(f"1. Government-wide reappointment trend: {trend_direction.upper()}")
+print(f"2. Statistical significance: {significance_level.upper()}")
+print(f"3. Average reappointment rate: {y.mean()*100:.2f}%")
+print(f"4. Top reappointing organization: {top_orgs_analysis.iloc[0]['org']}")
+print(f"5. Years with data: {sorted(years_processed)}")

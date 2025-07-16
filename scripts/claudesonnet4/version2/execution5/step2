@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+New Brunswick Government Appointments Analysis
+
+This script extracts the key columns needed for reappointment analysis:
+- reappointed
+- name
+- position
+- org
+- year
+
+Input: step1_combined_appointments.csv
+Output: step2_key_columns_data.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import re
+
+def validate_input_file(input_path):
+    """Validate that the input file exists and is readable"""
+    if not input_path.exists():
+        print(f"✗ Input file not found: {input_path}")
+        return False
+    if not input_path.is_file():
+        print(f"✗ Input path is not a file: {input_path}")
+        return False
+    print(f"✓ Input file found: {input_path}")
+    return True
+
+def load_combined_data(input_path):
+    """Load the combined dataset with error handling"""
+    try:
+        df = pd.read_csv(input_path, encoding='utf-8')
+        print(f"✓ Successfully loaded combined dataset")
+        print(f"  - Shape: {df.shape}")
+        print(f"  - Columns: {list(df.columns)}")
+        return df
+    except Exception as e:
+        print(f"✗ Error loading combined dataset: {e}")
+        sys.exit(1)
+
+def identify_key_columns(df):
+    """Identify and map the key columns in the dataset"""
+    print(f"\nIDENTIFYING KEY COLUMNS:")
+    
+    # Target columns we need
+    target_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    column_mapping = {}
+    
+    # Available columns (case-insensitive)
+    available_cols = {col.lower(): col for col in df.columns}
+    
+    # Map each target column
+    for target in target_columns:
+        mapped_col = None
+        
+        if target == 'reappointed':
+            # Look for reappointed column variations
+            candidates = ['reappointed', 'reappointed?', 're-appointed', 're_appointed']
+            for candidate in candidates:
+                if candidate.lower() in available_cols:
+                    mapped_col = available_cols[candidate.lower()]
+                    break
+        
+        elif target == 'name':
+            # Look for name column variations
+            candidates = ['name', 'appointee', 'person', 'individual']
+            for candidate in candidates:
+                if candidate.lower() in available_cols:
+                    mapped_col = available_cols[candidate.lower()]
+                    break
+        
+        elif target == 'position':
+            # Look for position column variations
+            candidates = ['position', 'title', 'role', 'appointment']
+            for candidate in candidates:
+                if candidate.lower() in available_cols:
+                    mapped_col = available_cols[candidate.lower()]
+                    break
+        
+        elif target == 'org':
+            # Look for organization column variations
+            candidates = ['org', 'organization', 'organisation', 'body', 'department', 'agency']
+            for candidate in candidates:
+                if candidate.lower() in available_cols:
+                    mapped_col = available_cols[candidate.lower()]
+                    break
+        
+        elif target == 'year':
+            # Look for year column or derive from source_year
+            candidates = ['year', 'appointment_year', 'source_year']
+            for candidate in candidates:
+                if candidate.lower() in available_cols:
+                    mapped_col = available_cols[candidate.lower()]
+                    break
+        
+        if mapped_col:
+            column_mapping[target] = mapped_col
+            print(f"✓ {target} -> {mapped_col}")
+        else:
+            print(f"✗ {target} -> NOT FOUND")
+    
+    return column_mapping
+
+def extract_year_from_dates(df):
+    """Extract year from date columns if year column doesn't exist"""
+    print(f"\nEXTRACTING YEAR FROM DATES:")
+    
+    # Look for date columns that might contain year information
+    date_columns = []
+    for col in df.columns:
+        if any(date_word in col.lower() for date_word in ['date', 'start', 'posted', 'appointed']):
+            date_columns.append(col)
+    
+    if not date_columns:
+        print(f"✗ No date columns found for year extraction")
+        return None
+    
+    print(f"Found date columns: {date_columns}")
+    
+    # Try to extract year from the first suitable date column
+    for col in date_columns:
+        try:
+            # Convert to datetime and extract year
+            dates = pd.to_datetime(df[col], errors='coerce')
+            years = dates.dt.year
+            
+            # Check if we got valid years
+            valid_years = years.dropna()
+            if len(valid_years) > 0:
+                year_range = f"{valid_years.min()}-{valid_years.max()}"
+                print(f"✓ Extracted years from {col}: {year_range} ({len(valid_years)} valid)")
+                return years
+        except:
+            continue
+    
+    print(f"✗ Could not extract year from any date column")
+    return None
+
+def clean_reappointed_column(series):
+    """Clean and standardize the reappointed column"""
+    print(f"\nCLEANING REAPPOINTED COLUMN:")
+    
+    if series is None:
+        print(f"✗ Reappointed column is None")
+        return None
+    
+    # Print original value distribution
+    print(f"Original values:")
+    value_counts = series.value_counts(dropna=False)
+    for val, count in value_counts.items():
+        print(f"  '{val}': {count}")
+    
+    # Clean the column
+    cleaned = series.copy()
+    
+    # Convert to string first
+    cleaned = cleaned.astype(str).str.lower().str.strip()
+    
+    # Standardize boolean values
+    true_values = ['true', 'yes', 'y', '1', 'reappointed', 'reap']
+    false_values = ['false', 'no', 'n', '0', 'new', 'first']
+    
+    # Create boolean mapping
+    cleaned = cleaned.replace({
+        **{val: True for val in true_values},
+        **{val: False for val in false_values},
+        'nan': np.nan,
+        'none': np.nan,
+        '': np.nan
+    })
+    
+    # Print cleaned value distribution
+    print(f"Cleaned values:")
+    cleaned_counts = pd.Series(cleaned).value_counts(dropna=False)
+    for val, count in cleaned_counts.items():
+        print(f"  {val}: {count}")
+    
+    return cleaned
+
+def clean_text_columns(df, columns):
+    """Clean and standardize text columns"""
+    print(f"\nCLEANING TEXT COLUMNS:")
+    
+    for col in columns:
+        if col in df.columns:
+            print(f"Cleaning {col}...")
+            # Strip whitespace and handle empty strings
+            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].replace(['', 'nan', 'None'], np.nan)
+            
+            # Count non-null values
+            non_null_count = df[col].notna().sum()
+            print(f"  ✓ {col}: {non_null_count:,} non-null values")
+        else:
+            print(f"  ✗ {col}: Column not found")
+    
+    return df
+
+def extract_key_columns():
+    """Main function to extract key columns"""
+    print("=" * 60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("=" * 60)
+    
+    # Set up paths
+    input_path = Path("scripts/claudesonnet4/version2/execution5/analysis_data/step1_combined_appointments.csv")
+    output_path = Path("scripts/claudesonnet4/version2/execution5/analysis_data")
+    output_file = output_path / "step2_key_columns_data.csv"
+    
+    # Validate input file
+    if not validate_input_file(input_path):
+        sys.exit(1)
+    
+    # Load combined data
+    df = load_combined_data(input_path)
+    
+    # Identify key columns
+    column_mapping = identify_key_columns(df)
+    
+    # Check if we have all required columns
+    missing_columns = []
+    for target in ['reappointed', 'name', 'position', 'org']:
+        if target not in column_mapping:
+            missing_columns.append(target)
+    
+    if missing_columns:
+        print(f"\n✗ Missing required columns: {missing_columns}")
+        print("Available columns:", list(df.columns))
+        sys.exit(1)
+    
+    # Handle year column specially
+    if 'year' not in column_mapping:
+        print(f"\n⚠ Year column not found, attempting to extract from dates...")
+        year_series = extract_year_from_dates(df)
+        if year_series is not None:
+            df['year'] = year_series
+            column_mapping['year'] = 'year'
+        else:
+            print(f"✗ Could not determine year information")
+            sys.exit(1)
+    
+    # Extract the key columns
+    print(f"\nEXTRACTING KEY COLUMNS:")
+    
+    # Create new dataframe with key columns
+    key_columns_data = pd.DataFrame()
+    
+    # Map each column
+    for target, source in column_mapping.items():
+        key_columns_data[target] = df[source]
+        print(f"✓ Extracted {target} from {source}")
+    
+    # Clean the reappointed column
+    key_columns_data['reappointed'] = clean_reappointed_column(key_columns_data['reappointed'])
+    
+    # Clean text columns
+    text_columns = ['name', 'position', 'org']
+    key_columns_data = clean_text_columns(key_columns_data, text_columns)
+    
+    # Data quality summary
+    print(f"\nDATA QUALITY SUMMARY:")
+    print(f"- Total records: {len(key_columns_data):,}")
+    print(f"- Columns: {list(key_columns_data.columns)}")
+    
+    # Check each column
+    for col in key_columns_data.columns:
+        non_null = key_columns_data[col].notna().sum()
+        null_count = key_columns_data[col].isna().sum()
+        percentage_complete = (non_null / len(key_columns_data)) * 100
+        print(f"- {col}: {non_null:,} non-null ({percentage_complete:.1f}%), {null_count:,} missing")
+    
+    # Year distribution
+    if 'year' in key_columns_data.columns:
+        print(f"\nYEAR DISTRIBUTION:")
+        year_counts = key_columns_data['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} records")
+    
+    # Reappointed distribution
+    if 'reappointed' in key_columns_data.columns:
+        print(f"\nREAPPOINTED DISTRIBUTION:")
+        reap_counts = key_columns_data['reappointed'].value_counts(dropna=False)
+        for val, count in reap_counts.items():
+            print(f"  {val}: {count:,} records")
+    
+    # Check for completely empty records
+    empty_records = key_columns_data.isna().all(axis=1).sum()
+    if empty_records > 0:
+        print(f"\n⚠ Warning: {empty_records} completely empty records found")
+        key_columns_data = key_columns_data.dropna(how='all')
+        print(f"✓ Removed empty records, {len(key_columns_data):,} records remain")
+    
+    # Save the key columns data
+    try:
+        key_columns_data.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\n✓ Key columns data saved to: {output_file}")
+        print(f"  - File size: {output_file.stat().st_size / 1024:.1f} KB")
+        
+    except Exception as e:
+        print(f"✗ Error saving key columns data: {e}")
+        sys.exit(1)
+    
+    # Final validation
+    print(f"\nFINAL VALIDATION:")
+    try:
+        # Re-read the saved file to verify
+        validation_df = pd.read_csv(output_file)
+        if len(validation_df) == len(key_columns_data):
+            print(f"✓ File saved successfully and validated")
+            print(f"✓ Step 2 completed successfully!")
+        else:
+            print(f"✗ Validation failed: record count mismatch")
+            
+    except Exception as e:
+        print(f"✗ Validation error: {e}")
+    
+    print("=" * 60)
+    return key_columns_data
+
+if __name__ == "__main__":
+    # Execute the key column extraction
+    key_data = extract_key_columns()
+    
+    # Print final summary
+    print(f"\nSUMMARY:")
+    print(f"- Key columns extracted: {list(key_data.columns)}")
+    print(f"- Total records: {len(key_data):,}")
+    print(f"- Data quality: {key_data.notna().sum().sum():,}/{key_data.size:,} non-null values")
+    print(f"- Ready for Step 3: Marking repeat appointments")
+    print(f"- Output saved to: scripts/claudesonnet4/version2/execution5/analysis_data/step2_key_columns_data.csv")

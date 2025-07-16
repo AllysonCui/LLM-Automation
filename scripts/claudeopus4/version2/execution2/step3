@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark repeated appointments
+This script identifies repeated name-position-org combinations and marks
+them as reappointed (True), except for the first appearance.
+
+Author: Data Analysis Script
+Date: 2025-07-05
+Input: analysis_data/step2_key_columns_data.csv
+Output: analysis_data/step3_repeats_marked.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def setup_paths():
+    """Setup input and output paths."""
+    script_dir = Path(__file__).parent
+    analysis_dir = script_dir / "analysis_data"
+    
+    input_file = analysis_dir / "step2_key_columns_data.csv"
+    output_file = analysis_dir / "step3_repeats_marked.csv"
+    
+    return input_file, output_file, analysis_dir
+
+def create_appointment_key(df):
+    """Create a unique key for each appointment combination."""
+    # Handle missing values by converting to string 'MISSING'
+    df['name_clean'] = df['name'].fillna('MISSING').astype(str).str.strip().str.lower()
+    df['position_clean'] = df['position'].fillna('MISSING').astype(str).str.strip().str.lower()
+    df['org_clean'] = df['org'].fillna('MISSING').astype(str).str.strip().str.lower()
+    
+    # Create composite key
+    df['appointment_key'] = df['name_clean'] + '|' + df['position_clean'] + '|' + df['org_clean']
+    
+    # Count how many valid components each key has
+    df['key_validity'] = (
+        (df['name'] != 'MISSING').astype(int) +
+        (df['position'] != 'MISSING').astype(int) +
+        (df['org'] != 'MISSING').astype(int)
+    )
+    
+    return df
+
+def mark_reappointments(df):
+    """Mark repeated appointments as reappointed=True."""
+    print("\nMarking reappointments based on repeated combinations...")
+    
+    # Sort by year to ensure chronological order
+    df = df.sort_values(['year', 'appointment_key'], na_position='last').reset_index(drop=True)
+    
+    # Create a new column for our calculated reappointment status
+    df['calculated_reappointed'] = False
+    
+    # Group by appointment_key and mark all but the first as reappointed
+    valid_keys = df[df['key_validity'] >= 2].copy()  # At least 2 non-missing components
+    
+    # Track statistics
+    total_combinations = 0
+    total_reappointments = 0
+    reappointment_details = []
+    
+    for key, group in valid_keys.groupby('appointment_key'):
+        if len(group) > 1:
+            # Mark all occurrences except the first as reappointed
+            indices = group.index[1:]  # Skip the first occurrence
+            df.loc[indices, 'calculated_reappointed'] = True
+            
+            total_combinations += 1
+            total_reappointments += len(indices)
+            
+            # Store details for reporting
+            first_year = group['year'].iloc[0]
+            reappointment_years = group['year'].iloc[1:].tolist()
+            
+            # Parse the key for readable output
+            name, position, org = key.split('|')
+            if name != 'missing' and len(group) > 2:  # Only show interesting cases
+                reappointment_details.append({
+                    'name': group['name'].iloc[0],
+                    'position': group['position'].iloc[0],
+                    'org': group['org'].iloc[0],
+                    'first_year': first_year,
+                    'reappointment_years': reappointment_years,
+                    'total_appointments': len(group)
+                })
+    
+    # Print examples of reappointments
+    print(f"\n✓ Found {total_combinations:,} unique combinations with multiple appointments")
+    print(f"✓ Marked {total_reappointments:,} records as reappointments")
+    
+    if reappointment_details:
+        print("\nExamples of frequently reappointed individuals:")
+        # Sort by total appointments and show top 5
+        sorted_details = sorted(reappointment_details, 
+                               key=lambda x: x['total_appointments'], 
+                               reverse=True)[:5]
+        
+        for i, detail in enumerate(sorted_details, 1):
+            print(f"\n  {i}. {detail['name']}")
+            print(f"     Position: {detail['position']}")
+            print(f"     Organization: {detail['org']}")
+            print(f"     First appointed: {detail['first_year']:.0f}")
+            print(f"     Reappointed in: {[int(y) for y in detail['reappointment_years']]}")
+            print(f"     Total appointments: {detail['total_appointments']}")
+    
+    return df
+
+def reconcile_reappointment_columns(df):
+    """Reconcile original and calculated reappointment columns."""
+    print("\nReconciling reappointment data...")
+    
+    # Create final reappointed column
+    if 'reappointed' in df.columns:
+        # Compare original and calculated values
+        df['reappointed_original'] = df['reappointed'].copy()
+        
+        # Count agreements and disagreements
+        both_true = ((df['reappointed_original'] == True) & 
+                    (df['calculated_reappointed'] == True)).sum()
+        both_false = ((df['reappointed_original'] == False) & 
+                     (df['calculated_reappointed'] == False)).sum()
+        orig_true_calc_false = ((df['reappointed_original'] == True) & 
+                               (df['calculated_reappointed'] == False)).sum()
+        orig_false_calc_true = ((df['reappointed_original'] == False) & 
+                               (df['calculated_reappointed'] == True)).sum()
+        orig_null = df['reappointed_original'].isna().sum()
+        
+        print(f"\n  Comparison with original reappointed column:")
+        print(f"    - Both True (agreement): {both_true:,}")
+        print(f"    - Both False (agreement): {both_false:,}")
+        print(f"    - Original True, Calculated False: {orig_true_calc_false:,}")
+        print(f"    - Original False, Calculated True: {orig_false_calc_true:,}")
+        print(f"    - Original NULL: {orig_null:,}")
+        
+        # Use calculated value, but preserve original where calculated is False and original is True
+        # This assumes the original data might have additional information
+        df['reappointed'] = df['calculated_reappointed']
+        if orig_true_calc_false > 0:
+            print(f"\n  ℹ Preserving {orig_true_calc_false:,} original True values not detected by name-position-org matching")
+            mask = (df['reappointed_original'] == True) & (df['calculated_reappointed'] == False)
+            df.loc[mask, 'reappointed'] = True
+    else:
+        # No original column, use calculated values
+        df['reappointed'] = df['calculated_reappointed']
+        print("  ℹ No original reappointed column found, using calculated values only")
+    
+    return df
+
+def analyze_reappointments_by_org(df):
+    """Analyze reappointment patterns by organization."""
+    print("\n" + "-"*60)
+    print("REAPPOINTMENT ANALYSIS BY ORGANIZATION:")
+    print("-"*60)
+    
+    # Group by organization
+    org_stats = []
+    
+    for org, group in df[df['org'].notna()].groupby('org'):
+        total_appointments = len(group)
+        reappointments = group['reappointed'].sum()
+        reappointment_rate = (reappointments / total_appointments * 100) if total_appointments > 0 else 0
+        
+        if total_appointments >= 10:  # Only show orgs with significant data
+            org_stats.append({
+                'org': org,
+                'total': total_appointments,
+                'reappointments': reappointments,
+                'rate': reappointment_rate
+            })
+    
+    # Sort by reappointment rate
+    org_stats_sorted = sorted(org_stats, key=lambda x: x['rate'], reverse=True)
+    
+    print("\nTop 10 organizations by reappointment rate (min 10 appointments):")
+    for i, stat in enumerate(org_stats_sorted[:10], 1):
+        print(f"  {i:2d}. {stat['org'][:50]:<50} "
+              f"{stat['rate']:5.1f}% ({stat['reappointments']:,}/{stat['total']:,})")
+    
+    return org_stats_sorted
+
+def process_reappointments(input_file, output_file):
+    """Main processing function to mark reappointments."""
+    print("\n" + "="*60)
+    print("STEP 3: MARKING REPEATED APPOINTMENTS")
+    print("="*60)
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"\n✗ ERROR: Input file not found: {input_file}")
+        print("Please run Step 2 first to create the key columns dataset.")
+        return False
+    
+    # Load the data
+    print(f"\nLoading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8', low_memory=False)
+        print(f"✓ Loaded {len(df):,} rows")
+    except Exception as e:
+        print(f"✗ ERROR loading file: {str(e)}")
+        return False
+    
+    # Create appointment keys
+    df = create_appointment_key(df)
+    
+    # Show statistics about key validity
+    print("\nAppointment key statistics:")
+    print(f"  - Records with all 3 components: {(df['key_validity'] == 3).sum():,}")
+    print(f"  - Records with 2 components: {(df['key_validity'] == 2).sum():,}")
+    print(f"  - Records with 1 component: {(df['key_validity'] == 1).sum():,}")
+    print(f"  - Records with no valid components: {(df['key_validity'] == 0).sum():,}")
+    
+    # Mark reappointments
+    df = mark_reappointments(df)
+    
+    # Reconcile with original reappointment data
+    df = reconcile_reappointment_columns(df)
+    
+    # Analyze by organization
+    org_stats = analyze_reappointments_by_org(df)
+    
+    # Clean up temporary columns before saving
+    columns_to_drop = ['name_clean', 'position_clean', 'org_clean', 
+                      'appointment_key', 'key_validity', 'calculated_reappointed']
+    if 'reappointed_original' in df.columns:
+        columns_to_drop.append('reappointed_original')
+    
+    df_final = df.drop(columns=columns_to_drop, errors='ignore')
+    
+    # Save the results
+    print(f"\n→ Saving processed data to: {output_file}")
+    df_final.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Final summary
+    print("\n" + "-"*60)
+    print("PROCESSING SUMMARY:")
+    print("-"*60)
+    print(f"Total records processed: {len(df):,}")
+    print(f"Records marked as reappointed: {df_final['reappointed'].sum():,}")
+    print(f"Overall reappointment rate: {df_final['reappointed'].sum() / len(df) * 100:.1f}%")
+    
+    # Year-wise summary
+    print("\nReappointments by year:")
+    year_summary = df_final.groupby('year').agg({
+        'reappointed': ['count', 'sum', lambda x: x.sum() / len(x) * 100]
+    }).round(1)
+    year_summary.columns = ['Total', 'Reappointments', 'Rate (%)']
+    print(year_summary.to_string())
+    
+    # Data quality check
+    print("\n" + "-"*60)
+    print("DATA QUALITY CHECK:")
+    print("-"*60)
+    null_reappointed = df_final['reappointed'].isna().sum()
+    if null_reappointed > 0:
+        print(f"⚠ WARNING: {null_reappointed:,} records have NULL reappointed status")
+    else:
+        print("✓ All records have a valid reappointed status")
+    
+    # Verify the logic
+    print("\nLogic verification:")
+    # Check if any first appointments are marked as reappointed
+    first_appointments = df.groupby('appointment_key').first()
+    first_marked_as_reappointed = first_appointments[
+        first_appointments.index.isin(df[df['calculated_reappointed'] == True]['appointment_key'])
+    ]
+    if len(first_marked_as_reappointed) == 0:
+        print("✓ Logic check passed: No first appointments marked as reappointed")
+    else:
+        print(f"⚠ WARNING: Found {len(first_marked_as_reappointed)} first appointments marked as reappointed")
+    
+    print("\n✓ Step 3 completed successfully!")
+    print(f"✓ Output saved to: {output_file}")
+    print("="*60)
+    
+    return True
+
+def main():
+    """Main execution function."""
+    try:
+        # Setup paths
+        input_file, output_file, analysis_dir = setup_paths()
+        
+        # Ensure analysis directory exists
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Run the processing
+        success = process_reappointments(input_file, output_file)
+        
+        if success:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"\n✗ CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

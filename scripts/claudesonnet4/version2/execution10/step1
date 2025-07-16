@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets (2013-2024)
+Research Question: Which government branch in New Brunswick most frequently reappoints 
+past appointees, and is this trend increasing or declining over the past 12 years?
+
+This script combines all appointment data from 2013-2024 into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def setup_directories():
+    """Create necessary directories for the analysis."""
+    base_dir = Path("scripts/claudesonnet4/version2/execution10")
+    analysis_dir = base_dir / "analysis_data"
+    
+    # Create directories if they don't exist
+    base_dir.mkdir(parents=True, exist_ok=True)
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    
+    return base_dir, analysis_dir
+
+def validate_file_exists(file_path):
+    """Check if a file exists and provide informative error message."""
+    if not file_path.exists():
+        print(f"ERROR: File not found: {file_path}")
+        return False
+    return True
+
+def load_and_validate_csv(file_path, year):
+    """Load a CSV file and perform basic validation."""
+    try:
+        print(f"Loading {file_path.name}...")
+        df = pd.read_csv(file_path)
+        
+        # Add year column for tracking
+        df['year'] = year
+        
+        # Basic validation
+        print(f"  - Loaded {len(df)} rows with {len(df.columns)} columns")
+        
+        # Check for required columns
+        required_columns = ['name', 'position', 'org', 'reappointed']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            print(f"  - WARNING: Missing columns: {missing_columns}")
+        
+        # Check reappointed column format
+        if 'reappointed' in df.columns:
+            reappointed_values = df['reappointed'].value_counts()
+            print(f"  - Reappointed values: {dict(reappointed_values)}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"ERROR loading {file_path.name}: {str(e)}")
+        return None
+
+def standardize_reappointed_column(df):
+    """Standardize the reappointed column to boolean values."""
+    if 'reappointed' not in df.columns:
+        print("WARNING: No 'reappointed' column found")
+        return df
+    
+    # Convert string boolean values to actual booleans
+    df['reappointed'] = df['reappointed'].astype(str).str.lower()
+    df['reappointed'] = df['reappointed'].map({
+        'true': True,
+        'false': False,
+        '1': True,
+        '0': False,
+        'yes': True,
+        'no': False,
+        'nan': False,
+        'none': False
+    })
+    
+    # Handle any remaining NaN values
+    df['reappointed'] = df['reappointed'].fillna(False)
+    
+    return df
+
+def combine_datasets():
+    """Main function to combine all 12 datasets."""
+    print("=" * 60)
+    print("STEP 1: COMBINING RAW DATASETS (2013-2024)")
+    print("=" * 60)
+    
+    # Setup directories
+    base_dir, analysis_dir = setup_directories()
+    raw_data_dir = Path("raw_data")
+    
+    # Check if raw data directory exists
+    if not raw_data_dir.exists():
+        print(f"ERROR: Raw data directory not found: {raw_data_dir}")
+        print("Please ensure the raw_data directory exists and contains the CSV files.")
+        sys.exit(1)
+    
+    # List of years to process
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    # Store all dataframes
+    all_dataframes = []
+    successful_loads = 0
+    
+    print(f"\nAttempting to load {len(years)} files...")
+    print("-" * 40)
+    
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        
+        if validate_file_exists(file_path):
+            df = load_and_validate_csv(file_path, year)
+            if df is not None:
+                # Standardize the reappointed column
+                df = standardize_reappointed_column(df)
+                all_dataframes.append(df)
+                successful_loads += 1
+            else:
+                print(f"  - FAILED to load {file_path.name}")
+        else:
+            print(f"  - SKIPPED: {file_path.name} (file not found)")
+    
+    print("-" * 40)
+    print(f"Successfully loaded {successful_loads} out of {len(years)} files")
+    
+    if successful_loads == 0:
+        print("ERROR: No files were successfully loaded. Cannot proceed.")
+        sys.exit(1)
+    
+    # Combine all dataframes
+    print("\nCombining all datasets...")
+    try:
+        combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+        print(f"Combined dataset contains {len(combined_df)} total rows")
+        
+        # Display column information
+        print(f"\nColumns in combined dataset ({len(combined_df.columns)} total):")
+        for i, col in enumerate(combined_df.columns, 1):
+            print(f"  {i:2d}. {col}")
+        
+        # Display year distribution
+        print(f"\nYear distribution:")
+        year_counts = combined_df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count:,} appointments")
+        
+        # Display reappointed distribution
+        if 'reappointed' in combined_df.columns:
+            print(f"\nReappointed distribution:")
+            reappointed_counts = combined_df['reappointed'].value_counts()
+            total_appointments = len(combined_df)
+            for value, count in reappointed_counts.items():
+                percentage = (count / total_appointments) * 100
+                print(f"  {value}: {count:,} ({percentage:.1f}%)")
+        
+        # Display organization distribution (top 10)
+        if 'org' in combined_df.columns:
+            print(f"\nTop 10 organizations by appointment count:")
+            org_counts = combined_df['org'].value_counts().head(10)
+            for org, count in org_counts.items():
+                print(f"  {org}: {count:,}")
+        
+        # Save combined dataset
+        output_file = analysis_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(output_file, index=False)
+        print(f"\nCombined dataset saved to: {output_file}")
+        
+        # Data quality summary
+        print("\n" + "=" * 60)
+        print("DATA QUALITY SUMMARY")
+        print("=" * 60)
+        
+        # Check for missing values in key columns
+        key_columns = ['name', 'position', 'org', 'reappointed', 'year']
+        for col in key_columns:
+            if col in combined_df.columns:
+                missing_count = combined_df[col].isna().sum()
+                missing_pct = (missing_count / len(combined_df)) * 100
+                print(f"{col}: {missing_count:,} missing values ({missing_pct:.1f}%)")
+        
+        # Check for duplicates (same person, same position, same org, same year)
+        duplicate_cols = ['name', 'position', 'org', 'year']
+        available_duplicate_cols = [col for col in duplicate_cols if col in combined_df.columns]
+        
+        if len(available_duplicate_cols) >= 3:
+            duplicates = combined_df.duplicated(subset=available_duplicate_cols, keep=False)
+            duplicate_count = duplicates.sum()
+            print(f"\nPotential duplicates: {duplicate_count:,} rows")
+            
+            if duplicate_count > 0:
+                print("Note: Duplicates will be handled in subsequent analysis steps")
+        
+        print("\n" + "=" * 60)
+        print("STEP 1 COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+        print(f"Output file: {output_file}")
+        print(f"Total records: {len(combined_df):,}")
+        print(f"Years covered: {combined_df['year'].min()} - {combined_df['year'].max()}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"ERROR combining datasets: {str(e)}")
+        return False
+
+if __name__ == "__main__":
+    success = combine_datasets()
+    if not success:
+        sys.exit(1)
+    
+    print("\nReady for Step 2: Extract key columns and clean data")

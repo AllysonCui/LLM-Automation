@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""
+Step 3: Mark Repeated Appointments
+Marks "reappointed" as True for repeated "name"-"position"-"org" combinations
+except for the first appearance, ordered by year.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution6/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output directory ready: {output_dir}")
+    return output_dir
+
+def load_key_columns_data(input_file):
+    """Load the key columns dataset from step 2."""
+    try:
+        logger.info(f"Loading key columns dataset from: {input_file}")
+        
+        if not input_file.exists():
+            logger.error(f"Input file not found: {input_file}")
+            return None
+        
+        df = pd.read_csv(input_file, encoding='utf-8')
+        
+        if df.empty:
+            logger.error("Key columns dataset is empty")
+            return None
+            
+        logger.info(f"Loaded key columns dataset: {df.shape}")
+        
+        # Verify required columns exist
+        required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.error(f"Missing required columns: {missing_columns}")
+            return None
+        
+        logger.info("All required columns present")
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading key columns dataset: {str(e)}")
+        return None
+
+def normalize_text_for_comparison(text):
+    """Normalize text for consistent comparison."""
+    if pd.isna(text):
+        return ""
+    
+    # Convert to string, strip whitespace, and convert to lowercase
+    normalized = str(text).strip().lower()
+    
+    # Handle common variations and abbreviations
+    # Remove extra whitespace
+    normalized = ' '.join(normalized.split())
+    
+    return normalized
+
+def create_appointment_key(df):
+    """Create a normalized key for identifying unique appointments."""
+    logger.info("Creating normalized appointment keys...")
+    
+    # Normalize each component
+    df['name_normalized'] = df['name'].apply(normalize_text_for_comparison)
+    df['position_normalized'] = df['position'].apply(normalize_text_for_comparison)
+    df['org_normalized'] = df['org'].apply(normalize_text_for_comparison)
+    
+    # Create composite key
+    df['appointment_key'] = (df['name_normalized'] + '|' + 
+                           df['position_normalized'] + '|' + 
+                           df['org_normalized'])
+    
+    # Remove entries with incomplete keys
+    before_count = len(df)
+    df = df[df['appointment_key'].str.len() > 2]  # At least some content beyond separators
+    after_count = len(df)
+    
+    if before_count != after_count:
+        logger.warning(f"Removed {before_count - after_count} records with incomplete appointment keys")
+    
+    logger.info(f"Created {df['appointment_key'].nunique()} unique appointment keys")
+    
+    return df
+
+def identify_first_appointments(df):
+    """Identify the first appearance of each appointment combination."""
+    logger.info("Identifying first appointments for each combination...")
+    
+    # Sort by appointment key and year to ensure chronological order
+    df = df.sort_values(['appointment_key', 'year'], ascending=[True, True])
+    
+    # Create sequence number for each appointment key
+    df['appointment_sequence'] = df.groupby('appointment_key').cumcount() + 1
+    
+    # Mark first appointments
+    df['is_first_appointment'] = df['appointment_sequence'] == 1
+    
+    # Log statistics
+    first_appointments = df['is_first_appointment'].sum()
+    total_appointments = len(df)
+    repeat_appointments = total_appointments - first_appointments
+    
+    logger.info(f"First appointments: {first_appointments:,}")
+    logger.info(f"Repeat appointments: {repeat_appointments:,}")
+    logger.info(f"Repeat rate: {(repeat_appointments/total_appointments)*100:.1f}%")
+    
+    return df
+
+def mark_reappointments(df):
+    """Mark reappointments based on appointment sequence."""
+    logger.info("Marking reappointments...")
+    
+    # Store original reappointed values for comparison
+    df['original_reappointed'] = df['reappointed'].copy()
+    
+    # Mark reappointments: True for all appointments except the first
+    df['reappointed'] = ~df['is_first_appointment']
+    
+    # Compare with original values
+    original_true = df['original_reappointed'].sum()
+    new_true = df['reappointed'].sum()
+    
+    logger.info(f"Original reappointed count: {original_true:,}")
+    logger.info(f"New reappointed count: {new_true:,}")
+    logger.info(f"Difference: {new_true - original_true:,}")
+    
+    # Analyze changes by appointment sequence
+    sequence_stats = df.groupby('appointment_sequence').agg({
+        'reappointed': ['count', 'sum'],
+        'original_reappointed': 'sum'
+    }).round(2)
+    
+    logger.info("Reappointment statistics by sequence:")
+    for seq in sorted(df['appointment_sequence'].unique())[:10]:  # Show first 10 sequences
+        seq_data = df[df['appointment_sequence'] == seq]
+        count = len(seq_data)
+        new_reappointed = seq_data['reappointed'].sum()
+        original_reappointed = seq_data['original_reappointed'].sum()
+        
+        logger.info(f"  Sequence {seq}: {count:,} appointments, "
+                   f"{new_reappointed:,} marked as reappointed "
+                   f"(originally {original_reappointed:,})")
+    
+    return df
+
+def analyze_appointment_patterns(df):
+    """Analyze patterns in appointment data."""
+    logger.info("Analyzing appointment patterns...")
+    
+    # Most frequently reappointed combinations
+    repeat_combinations = df[df['appointment_sequence'] > 1]
+    
+    if len(repeat_combinations) > 0:
+        combination_counts = repeat_combinations['appointment_key'].value_counts()
+        
+        logger.info("Top 10 most frequently reappointed combinations:")
+        for i, (key, count) in enumerate(combination_counts.head(10).items(), 1):
+            # Get readable information for this key
+            sample_record = df[df['appointment_key'] == key].iloc[0]
+            name = sample_record['name']
+            position = sample_record['position']
+            org = sample_record['org']
+            
+            logger.info(f"  {i}. {name} - {position} at {org}: {count + 1} total appointments")
+    
+    # Analysis by organization
+    org_stats = df.groupby('org').agg({
+        'appointment_key': 'nunique',  # Unique appointment combinations
+        'reappointed': ['count', 'sum']  # Total appointments and reappointments
+    }).round(2)
+    
+    org_stats.columns = ['unique_combinations', 'total_appointments', 'reappointments']
+    org_stats['reappointment_rate'] = (org_stats['reappointments'] / org_stats['total_appointments'] * 100).round(1)
+    org_stats = org_stats.sort_values('reappointment_rate', ascending=False)
+    
+    logger.info("Top 10 organizations by reappointment rate:")
+    for org, stats in org_stats.head(10).iterrows():
+        logger.info(f"  {org}: {stats['reappointment_rate']:.1f}% "
+                   f"({stats['reappointments']:.0f}/{stats['total_appointments']:.0f} appointments)")
+    
+    # Analysis by year
+    year_stats = df.groupby('year').agg({
+        'appointment_key': 'nunique',
+        'reappointed': ['count', 'sum']
+    }).round(2)
+    
+    year_stats.columns = ['unique_combinations', 'total_appointments', 'reappointments']
+    year_stats['reappointment_rate'] = (year_stats['reappointments'] / year_stats['total_appointments'] * 100).round(1)
+    
+    logger.info("Reappointment rates by year:")
+    for year, stats in year_stats.iterrows():
+        logger.info(f"  {year:.0f}: {stats['reappointment_rate']:.1f}% "
+                   f"({stats['reappointments']:.0f}/{stats['total_appointments']:.0f} appointments)")
+    
+    return df
+
+def validate_results(df):
+    """Validate the results of the reappointment marking process."""
+    logger.info("Validating results...")
+    
+    # Check that first appointments are never marked as reappointed
+    first_appointments_marked = df[df['is_first_appointment'] & df['reappointed']]
+    if len(first_appointments_marked) > 0:
+        logger.error(f"ERROR: {len(first_appointments_marked)} first appointments incorrectly marked as reappointed")
+        return False
+    else:
+        logger.info("✓ No first appointments marked as reappointed")
+    
+    # Check that all non-first appointments are marked as reappointed
+    repeat_appointments_unmarked = df[~df['is_first_appointment'] & ~df['reappointed']]
+    if len(repeat_appointments_unmarked) > 0:
+        logger.error(f"ERROR: {len(repeat_appointments_unmarked)} repeat appointments not marked as reappointed")
+        return False
+    else:
+        logger.info("✓ All repeat appointments correctly marked as reappointed")
+    
+    # Check for reasonable appointment sequences
+    max_sequence = df['appointment_sequence'].max()
+    if max_sequence > 20:  # Sanity check - more than 20 appointments seems unusual
+        logger.warning(f"Very high appointment sequence detected: {max_sequence}")
+        
+        # Show the record with highest sequence
+        highest_seq_record = df[df['appointment_sequence'] == max_sequence].iloc[0]
+        logger.warning(f"Highest sequence record: {highest_seq_record['name']} - "
+                      f"{highest_seq_record['position']} at {highest_seq_record['org']}")
+    
+    logger.info("✓ Data validation completed successfully")
+    return True
+
+def mark_repeated_appointments():
+    """Main function to mark repeated appointments."""
+    logger.info("Starting Step 3: Marking repeated appointments...")
+    
+    # Setup directories
+    output_dir = setup_directories()
+    
+    # Define input and output paths
+    input_file = output_dir / "step2_key_columns_data.csv"
+    output_file = output_dir / "step3_repeats_marked.csv"
+    
+    # Load key columns data
+    df = load_key_columns_data(input_file)
+    if df is None:
+        logger.error("Failed to load key columns dataset")
+        sys.exit(1)
+    
+    # Create normalized appointment keys
+    df = create_appointment_key(df)
+    
+    # Identify first appointments
+    df = identify_first_appointments(df)
+    
+    # Mark reappointments
+    df = mark_reappointments(df)
+    
+    # Analyze patterns
+    df = analyze_appointment_patterns(df)
+    
+    # Validate results
+    if not validate_results(df):
+        logger.error("Validation failed - please check the data processing logic")
+        sys.exit(1)
+    
+    # Clean up temporary columns for final output
+    output_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    final_df = df[output_columns].copy()
+    
+    # Save results
+    try:
+        final_df.to_csv(output_file, index=False, encoding='utf-8')
+        logger.info(f"Successfully saved marked repeats dataset to: {output_file}")
+        
+    except Exception as e:
+        logger.error(f"Error saving marked repeats dataset: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary statistics
+    total_appointments = len(final_df)
+    total_reappointments = final_df['reappointed'].sum()
+    reappointment_rate = (total_reappointments / total_appointments) * 100
+    unique_combinations = df['appointment_key'].nunique()
+    
+    logger.info("=== STEP 3 SUMMARY ===")
+    logger.info(f"Total appointments processed: {total_appointments:,}")
+    logger.info(f"Unique appointment combinations: {unique_combinations:,}")
+    logger.info(f"Total reappointments: {total_reappointments:,}")
+    logger.info(f"Overall reappointment rate: {reappointment_rate:.1f}%")
+    logger.info(f"Organizations analyzed: {final_df['org'].nunique()}")
+    logger.info(f"Years covered: {final_df['year'].min():.0f} to {final_df['year'].max():.0f}")
+    logger.info(f"Output file: {output_file}")
+    logger.info("Step 3 completed successfully!")
+    
+    return final_df
+
+if __name__ == "__main__":
+    try:
+        marked_data = mark_repeated_appointments()
+        print("\n" + "="*50)
+        print("STEP 3: REPEAT MARKING COMPLETE")
+        print("="*50)
+        print(f"Processed {len(marked_data):,} appointments")
+        print(f"Reappointment rate: {marked_data['reappointed'].mean()*100:.1f}%")
+        print(f"Unique combinations: {len(marked_data.drop_duplicates(['name', 'position', 'org'])):,}")
+        print("Ready for Step 4: Appointment count analysis")
+        
+    except KeyboardInterrupt:
+        logger.info("Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {str(e)}")
+        sys.exit(1)

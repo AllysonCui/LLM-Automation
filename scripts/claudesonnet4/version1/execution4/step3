@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to identify and mark reappointments in New Brunswick government appointment data.
+Uses pandas best practices including .loc[], .tolist(), and stable sorting.
 Marks repeat appointments for the same person in the same position at the same organization.
 """
 
@@ -11,9 +12,9 @@ from pathlib import Path
 import sys
 import re
 
-def normalize_name(name):
+def normalize_name_single(name):
     """
-    Normalize name for comparison by handling common variations.
+    Normalize a single name for comparison by handling common variations.
     
     Args:
         name (str): Original name
@@ -21,7 +22,7 @@ def normalize_name(name):
     Returns:
         str: Normalized name
     """
-    if pd.isna(name) or name == '':
+    if pd.isna(name) or name == '' or str(name).lower() == 'nan':
         return ''
     
     # Convert to string and strip whitespace
@@ -53,9 +54,9 @@ def normalize_name(name):
     
     return name.strip()
 
-def normalize_text_field(text):
+def normalize_text_field_single(text):
     """
-    Normalize text fields (position, organization) for comparison.
+    Normalize a single text field (position, organization) for comparison.
     
     Args:
         text (str): Original text
@@ -63,7 +64,7 @@ def normalize_text_field(text):
     Returns:
         str: Normalized text
     """
-    if pd.isna(text) or text == '':
+    if pd.isna(text) or text == '' or str(text).lower() == 'nan':
         return ''
     
     # Convert to string and strip whitespace
@@ -102,6 +103,56 @@ def load_step2_data(input_file):
     except Exception as e:
         raise Exception(f"Error loading data: {str(e)}")
 
+def validate_data_types(df):
+    """
+    Validate and ensure proper data types for processing.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Dataset with validated data types
+    """
+    print("\nValidating data types...")
+    
+    # Ensure required columns exist
+    required_cols = ['name', 'position', 'org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
+    
+    df_validated = df.copy()
+    
+    # Convert text columns to string type
+    text_columns = ['name', 'position', 'org']
+    for col in text_columns:
+        df_validated.loc[:, col] = df_validated[col].astype(str)
+        # Handle 'nan' string values from conversion
+        nan_mask = df_validated[col] == 'nan'
+        if nan_mask.any():
+            df_validated.loc[nan_mask, col] = np.nan
+    
+    # Validate and convert year column
+    if 'year' in df_validated.columns:
+        try:
+            # Convert to numeric, handling any non-numeric values
+            df_validated.loc[:, 'year'] = pd.to_numeric(df_validated['year'], errors='coerce')
+        except Exception as e:
+            print(f"  Warning: Issue converting year column: {e}")
+    
+    # Initialize reappointed column if it doesn't exist
+    if 'reappointed' not in df_validated.columns:
+        df_validated.loc[:, 'reappointed'] = False
+        print("  Created new 'reappointed' column initialized to False")
+    else:
+        # Ensure reappointed column is boolean
+        df_validated.loc[:, 'reappointed'] = df_validated['reappointed'].astype(bool)
+    
+    print(f"  ✓ Data types validated for {len(df_validated)} records")
+    
+    return df_validated
+
 def analyze_original_reappointments(df):
     """
     Analyze original reappointment data before processing.
@@ -117,9 +168,9 @@ def analyze_original_reappointments(df):
     if 'reappointed' in df.columns:
         # Count original reappointments
         reappointed_counts = df['reappointed'].value_counts()
-        stats['original_true'] = reappointed_counts.get(True, 0)
-        stats['original_false'] = reappointed_counts.get(False, 0)
-        stats['original_missing'] = df['reappointed'].isna().sum()
+        stats['original_true'] = int(reappointed_counts.get(True, 0))
+        stats['original_false'] = int(reappointed_counts.get(False, 0))
+        stats['original_missing'] = int(df['reappointed'].isna().sum())
     else:
         stats['original_true'] = 0
         stats['original_false'] = 0
@@ -130,37 +181,27 @@ def analyze_original_reappointments(df):
 def identify_reappointments(df):
     """
     Identify and mark reappointments based on name, position, and organization.
+    Uses pandas best practices including .loc[], .tolist(), and stable sorting.
     
     Args:
         df (pd.DataFrame): Input dataset
     
     Returns:
-        pd.DataFrame: Dataset with updated reappointment markings
+        tuple: (updated_df, appointments_marked)
     """
-    print("\nIdentifying reappointments...")
+    print("\nIdentifying reappointments using pandas best practices...")
     
     # Create a copy to avoid modifying the original
     df_updated = df.copy()
     
-    # Ensure required columns exist
-    required_cols = ['name', 'position', 'org', 'year']
-    missing_cols = [col for col in required_cols if col not in df_updated.columns]
-    
-    if missing_cols:
-        raise ValueError(f"Missing required columns: {missing_cols}")
-    
-    # Initialize reappointed column if it doesn't exist
-    if 'reappointed' not in df_updated.columns:
-        df_updated['reappointed'] = False
-        print("Created new 'reappointed' column")
-    
-    # Create normalized versions for comparison
-    df_updated['name_normalized'] = df_updated['name'].apply(normalize_name)
-    df_updated['position_normalized'] = df_updated['position'].apply(normalize_text_field)
-    df_updated['org_normalized'] = df_updated['org'].apply(normalize_text_field)
+    # Create normalized versions for comparison using vectorized operations
+    print("  Creating normalized columns for comparison...")
+    df_updated.loc[:, 'name_normalized'] = df_updated['name'].apply(normalize_name_single)
+    df_updated.loc[:, 'position_normalized'] = df_updated['position'].apply(normalize_text_field_single)
+    df_updated.loc[:, 'org_normalized'] = df_updated['org'].apply(normalize_text_field_single)
     
     # Handle missing years by assigning a default value for sorting
-    df_updated['year_for_sorting'] = df_updated['year'].fillna(9999)
+    df_updated.loc[:, 'year_for_sorting'] = df_updated['year'].fillna(9999)
     
     # Group by normalized name, position, and organization
     grouping_cols = ['name_normalized', 'position_normalized', 'org_normalized']
@@ -169,49 +210,66 @@ def identify_reappointments(df):
     groups_processed = 0
     appointments_marked = 0
     
-    print("Processing appointment groups...")
+    print("  Processing appointment groups...")
     
-    for group_key, group_df in df_updated.groupby(grouping_cols):
-        name_norm, position_norm, org_norm = group_key
+    try:
+        # Group the data
+        grouped = df_updated.groupby(grouping_cols, dropna=False)
         
-        # Skip groups with empty normalized values
-        if not name_norm or not position_norm or not org_norm:
-            continue
-        
-        # Skip single-appointment groups
-        if len(group_df) <= 1:
-            continue
-        
-        groups_processed += 1
-        
-        # Sort by year (earliest first)
-        group_sorted = group_df.sort_values('year_for_sorting')
-        
-        # Mark all except the first as reappointments
-        indices_to_mark = group_sorted.index[1:].tolist()
-        
-        for idx in indices_to_mark:
-            # Only mark as reappointment if not already marked
-            if not df_updated.loc[idx, 'reappointed']:
-                df_updated.loc[idx, 'reappointed'] = True
-                appointments_marked += 1
-        
-        # Print sample of groups being processed
-        if groups_processed <= 5:
-            original_name = group_df['name'].iloc[0]
-            original_position = group_df['position'].iloc[0]
-            original_org = group_df['org'].iloc[0]
-            years = sorted(group_df['year'].dropna().astype(int).tolist())
+        for group_key, group_df in grouped:
+            name_norm, position_norm, org_norm = group_key
             
-            print(f"  Group {groups_processed}: {original_name} | {original_position} | {original_org}")
-            print(f"    Years: {years} ({len(group_df)} appointments)")
+            # Skip groups with empty normalized values (using pandas best practices)
+            if (pd.isna(name_norm) or name_norm == '' or
+                pd.isna(position_norm) or position_norm == '' or
+                pd.isna(org_norm) or org_norm == ''):
+                continue
+            
+            # Skip single-appointment groups
+            if len(group_df) <= 1:
+                continue
+            
+            groups_processed += 1
+            
+            # Sort by year using stable sort (pandas best practice)
+            group_sorted = group_df.sort_values('year_for_sorting', kind='stable')
+            
+            # Get indices to mark as reappointments (all except first)
+            indices_to_mark = group_sorted.index.tolist()[1:]  # Convert Index to list
+            
+            # Mark appointments as reappointments using .loc[]
+            for idx in indices_to_mark:
+                # Only mark as reappointment if not already marked
+                if not df_updated.loc[idx, 'reappointed']:
+                    df_updated.loc[idx, 'reappointed'] = True
+                    appointments_marked += 1
+            
+            # Print sample of groups being processed (first 5 only)
+            if groups_processed <= 5:
+                original_name = group_df['name'].iloc[0] if len(group_df) > 0 else 'Unknown'
+                original_position = group_df['position'].iloc[0] if len(group_df) > 0 else 'Unknown'
+                original_org = group_df['org'].iloc[0] if len(group_df) > 0 else 'Unknown'
+                
+                # Get years, handling potential NaN values
+                valid_years = group_df['year'].dropna()
+                if len(valid_years) > 0:
+                    years = sorted(valid_years.astype(int).tolist())
+                else:
+                    years = ['Unknown']
+                
+                print(f"    Group {groups_processed}: {original_name} | {original_position} | {original_org}")
+                print(f"      Years: {years} ({len(group_df)} appointments)")
+        
+    except Exception as e:
+        print(f"  Error during grouping operations: {e}")
+        raise
     
-    # Clean up temporary columns
-    df_updated.drop(['name_normalized', 'position_normalized', 'org_normalized', 'year_for_sorting'], 
-                   axis=1, inplace=True)
+    # Clean up temporary columns using .loc[]
+    temp_columns = ['name_normalized', 'position_normalized', 'org_normalized', 'year_for_sorting']
+    df_updated = df_updated.drop(columns=temp_columns)
     
-    print(f"\nProcessed {groups_processed} groups with multiple appointments")
-    print(f"Marked {appointments_marked} additional appointments as reappointments")
+    print(f"  ✓ Processed {groups_processed} groups with multiple appointments")
+    print(f"  ✓ Marked {appointments_marked} additional appointments as reappointments")
     
     return df_updated, appointments_marked
 
@@ -224,15 +282,15 @@ def analyze_updated_reappointments(df, original_stats, new_markings):
         original_stats (dict): Original reappointment statistics
         new_markings (int): Number of newly marked reappointments
     """
-    print("\n" + "="*50)
+    print("\n" + "="*60)
     print("REAPPOINTMENT ANALYSIS")
-    print("="*50)
+    print("="*60)
     
     # Current reappointment counts
     current_counts = df['reappointed'].value_counts()
-    current_true = current_counts.get(True, 0)
-    current_false = current_counts.get(False, 0)
-    current_missing = df['reappointed'].isna().sum()
+    current_true = int(current_counts.get(True, 0))
+    current_false = int(current_counts.get(False, 0))
+    current_missing = int(df['reappointed'].isna().sum())
     
     print("Original reappointment data:")
     print(f"  True (reappointed):     {original_stats['original_true']:,}")
@@ -250,8 +308,9 @@ def analyze_updated_reappointments(df, original_stats, new_markings):
     
     # Percentage calculations
     total_records = len(df)
-    reappointment_rate = (current_true / total_records) * 100
-    print(f"  Final reappointment rate: {reappointment_rate:.1f}%")
+    if total_records > 0:
+        reappointment_rate = (current_true / total_records) * 100
+        print(f"  Final reappointment rate: {reappointment_rate:.1f}%")
 
 def save_updated_data(df, output_dir="scripts/claudesonnet4/version1/execution4/analysis_data"):
     """
@@ -270,23 +329,70 @@ def save_updated_data(df, output_dir="scripts/claudesonnet4/version1/execution4/
     # Define output file path
     output_file = os.path.join(output_dir, "step3_repeats_marked.csv")
     
-    # Save to CSV
-    df.to_csv(output_file, index=False)
-    print(f"\n✓ Updated dataset saved to: {output_file}")
+    try:
+        # Save to CSV
+        df.to_csv(output_file, index=False)
+        print(f"\n✓ Updated dataset saved to: {output_file}")
+        
+    except Exception as e:
+        raise Exception(f"Error saving data: {str(e)}")
     
     return output_file
+
+def handle_edge_cases(df):
+    """
+    Handle edge cases like empty groups, missing data, and data quality issues.
+    
+    Args:
+        df (pd.DataFrame): Input dataset
+    
+    Returns:
+        pd.DataFrame: Dataset with edge cases handled
+    """
+    print("\nHandling edge cases...")
+    
+    df_handled = df.copy()
+    
+    # Handle completely empty names, positions, or organizations
+    text_cols = ['name', 'position', 'org']
+    for col in text_cols:
+        empty_mask = df_handled[col].isna() | (df_handled[col].str.strip() == '')
+        empty_count = empty_mask.sum()
+        if empty_count > 0:
+            print(f"  Found {empty_count} records with empty {col}")
+            # Fill with a placeholder to avoid grouping issues
+            df_handled.loc[empty_mask, col] = f'Unknown_{col.title()}'
+    
+    # Handle edge case where year is missing for sorting
+    missing_year_count = df_handled['year'].isna().sum()
+    if missing_year_count > 0:
+        print(f"  Found {missing_year_count} records with missing year")
+    
+    # Validate that we have sufficient data for processing
+    if len(df_handled) == 0:
+        raise ValueError("No data available for processing")
+    
+    print(f"  ✓ Edge cases handled for {len(df_handled)} records")
+    
+    return df_handled
 
 def main():
     """Main execution function."""
     try:
-        print("New Brunswick Appointments Data - Reappointment Marker")
-        print("="*57)
+        print("New Brunswick Appointments Data - Reappointment Marker (Best Practices)")
+        print("="*75)
         
         # Define input file path
         input_file = "scripts/claudesonnet4/version1/execution4/analysis_data/step2_key_columns_data.csv"
         
         # Load data from step 2
         df = load_step2_data(input_file)
+        
+        # Validate data types
+        df = validate_data_types(df)
+        
+        # Handle edge cases
+        df = handle_edge_cases(df)
         
         # Analyze original reappointments
         original_stats = analyze_original_reappointments(df)
@@ -300,11 +406,13 @@ def main():
         # Save updated data
         output_file = save_updated_data(df_updated)
         
-        print(f"\n✓ Process completed successfully!")
+        print(f"\n✓ Process completed successfully using pandas best practices!")
         print(f"Updated dataset with reappointment markings available at: {output_file}")
         
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

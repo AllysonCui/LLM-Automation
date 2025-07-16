@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis:
+- reappointed
+- name
+- position
+- org
+- year (from source_year)
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to extract key columns from combined dataset."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution4/analysis_data")
+    input_file = input_dir / "step1_combined_appointments.csv"
+    output_file = input_dir / "step2_key_columns_data.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run step1_combine_datasets.py first!")
+        sys.exit(1)
+    
+    print(f"Loading data from: {input_file}")
+    
+    try:
+        # Read the combined dataset
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"SUCCESS: Loaded {len(df)} rows and {len(df.columns)} columns")
+        
+    except Exception as e:
+        print(f"ERROR loading file: {str(e)}")
+        sys.exit(1)
+    
+    # Display original column information
+    print("\n" + "-"*60)
+    print("ORIGINAL DATASET STRUCTURE:")
+    print(f"- Total columns: {len(df.columns)}")
+    print(f"- Column names: {', '.join(df.columns.tolist())}")
+    
+    # Define required columns and their mappings
+    # Note: 'year' will come from 'source_year' column added in step 1
+    column_mapping = {
+        'reappointed': 'reappointed',
+        'name': 'name',
+        'position': 'position',
+        'org': 'org',
+        'source_year': 'year'  # Rename source_year to year
+    }
+    
+    # Check which columns are available
+    print("\n" + "-"*60)
+    print("CHECKING FOR REQUIRED COLUMNS:")
+    
+    available_columns = []
+    missing_columns = []
+    
+    for original_col, new_col in column_mapping.items():
+        if original_col in df.columns:
+            print(f"✓ {original_col} - FOUND")
+            available_columns.append(original_col)
+        else:
+            print(f"✗ {original_col} - MISSING")
+            missing_columns.append(original_col)
+    
+    # If critical columns are missing, try to handle it
+    if missing_columns:
+        print("\n" + "-"*60)
+        print("HANDLING MISSING COLUMNS:")
+        
+        # If source_year is missing but we have other year-related columns
+        if 'source_year' in missing_columns:
+            year_columns = [col for col in df.columns if 'year' in col.lower()]
+            if year_columns:
+                print(f"Found alternative year columns: {year_columns}")
+                # Use the first year-related column found
+                df['source_year'] = df[year_columns[0]]
+                available_columns.append('source_year')
+                missing_columns.remove('source_year')
+                print(f"Created 'source_year' from '{year_columns[0]}'")
+        
+        # Check if we still have critical missing columns
+        critical_missing = [col for col in ['reappointed', 'name'] if col in missing_columns]
+        if critical_missing:
+            print(f"\nERROR: Critical columns missing: {', '.join(critical_missing)}")
+            print("Cannot proceed without these columns!")
+            sys.exit(1)
+    
+    # Extract available columns
+    print("\n" + "-"*60)
+    print("EXTRACTING KEY COLUMNS:")
+    
+    # Create new dataframe with selected columns
+    selected_data = pd.DataFrame()
+    
+    for original_col in available_columns:
+        new_col = column_mapping[original_col]
+        selected_data[new_col] = df[original_col]
+        print(f"- Extracted '{original_col}' as '{new_col}'")
+    
+    # Add placeholder columns for any missing non-critical columns
+    all_expected_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    for col in all_expected_columns:
+        if col not in selected_data.columns:
+            selected_data[col] = np.nan
+            print(f"- Added placeholder column '{col}' with NaN values")
+    
+    # Reorder columns to match expected order
+    selected_data = selected_data[all_expected_columns]
+    
+    # Display extraction summary
+    print("\n" + "-"*60)
+    print("EXTRACTION SUMMARY:")
+    print(f"- Original dataset: {len(df)} rows × {len(df.columns)} columns")
+    print(f"- Extracted dataset: {len(selected_data)} rows × {len(selected_data.columns)} columns")
+    print(f"- Columns retained: {', '.join(selected_data.columns.tolist())}")
+    
+    # Analyze data quality in extracted columns
+    print("\n" + "-"*60)
+    print("DATA QUALITY ANALYSIS:")
+    
+    for col in selected_data.columns:
+        missing_count = selected_data[col].isna().sum()
+        missing_pct = (missing_count / len(selected_data)) * 100
+        unique_count = selected_data[col].nunique()
+        
+        print(f"\n{col}:")
+        print(f"  - Missing values: {missing_count} ({missing_pct:.2f}%)")
+        print(f"  - Unique values: {unique_count}")
+        
+        # Special analysis for specific columns
+        if col == 'reappointed':
+            print(f"  - Data type: {selected_data[col].dtype}")
+            value_counts = selected_data[col].value_counts()
+            print("  - Value distribution:")
+            for val, count in value_counts.items():
+                pct = (count / len(selected_data)) * 100
+                print(f"    • {val}: {count} ({pct:.2f}%)")
+        
+        elif col == 'year':
+            if not selected_data[col].isna().all():
+                print(f"  - Year range: {selected_data[col].min():.0f} - {selected_data[col].max():.0f}")
+    
+    # Display sample of extracted data
+    print("\n" + "-"*60)
+    print("SAMPLE OF EXTRACTED DATA (first 10 rows):")
+    print(selected_data.head(10))
+    
+    # Additional validation for the research question
+    print("\n" + "-"*60)
+    print("VALIDATION FOR RESEARCH QUESTION:")
+    
+    # Check if we have the necessary data to answer the research question
+    has_reappointed = 'reappointed' in selected_data.columns and not selected_data['reappointed'].isna().all()
+    has_org = 'org' in selected_data.columns and not selected_data['org'].isna().all()
+    has_year = 'year' in selected_data.columns and not selected_data['year'].isna().all()
+    
+    print(f"- Has reappointed data: {'YES' if has_reappointed else 'NO'}")
+    print(f"- Has organization data: {'YES' if has_org else 'NO'}")
+    print(f"- Has year data: {'YES' if has_year else 'NO'}")
+    
+    if has_reappointed and has_org and has_year:
+        print("\n✓ All critical data available for research question analysis!")
+    else:
+        print("\n⚠ WARNING: Some critical data missing for complete analysis!")
+    
+    # Save the extracted data
+    print("\n" + "-"*60)
+    print(f"SAVING EXTRACTED DATA TO: {output_file}")
+    
+    try:
+        selected_data.to_csv(output_file, index=False, encoding='utf-8')
+        print("SUCCESS: Key columns data saved successfully!")
+        
+        # Verify saved file
+        verify_df = pd.read_csv(output_file)
+        if len(verify_df) == len(selected_data):
+            print(f"VERIFICATION: Saved file contains {len(verify_df)} rows ✓")
+            print(f"VERIFICATION: Saved file contains {len(verify_df.columns)} columns ✓")
+        else:
+            print(f"WARNING: Verification failed!")
+            
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 2 COMPLETED SUCCESSFULLY!")
+    print(f"Extracted {len(selected_data)} records with {len(selected_data.columns)} key columns")
+    print("="*60 + "\n")
+    
+    return selected_data
+
+if __name__ == "__main__":
+    # Run the main function
+    extracted_data = main()

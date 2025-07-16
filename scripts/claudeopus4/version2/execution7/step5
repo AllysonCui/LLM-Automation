@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""
+Step 5: Count reappointments by organization and year
+This script counts how many times each organization has appointments 
+marked as reappointed=True for each year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to count reappointments by organization and year."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution7/analysis_data")
+    input_file = input_dir / "step3_repeats_marked.csv"
+    employee_counts_file = input_dir / "step4_employee_counts.csv"
+    output_file = input_dir / "step5_reappointment_counts.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 5: COUNTING REAPPOINTMENTS BY ORGANIZATION AND YEAR")
+    print("="*60 + "\n")
+    
+    # Check if input files exist
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 3 first to generate the reappointments dataset.")
+        sys.exit(1)
+    
+    if not employee_counts_file.exists():
+        print(f"ERROR: Appointment counts file not found: {employee_counts_file}")
+        print("Please run Step 4 first to generate the employee counts.")
+        sys.exit(1)
+    
+    # Read the main data
+    print(f"Reading appointment data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows")
+    except Exception as e:
+        print(f"ERROR reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Read employee counts for comparison
+    print(f"\nReading employee counts from: {employee_counts_file}")
+    try:
+        employee_counts = pd.read_csv(employee_counts_file, encoding='utf-8')
+        print(f"Successfully loaded {len(employee_counts):,} organization-year combinations")
+    except Exception as e:
+        print(f"ERROR reading employee counts: {str(e)}")
+        employee_counts = None
+    
+    # Display initial data info
+    print("\nInitial data summary:")
+    print(f"  - Total rows: {len(df):,}")
+    print(f"  - Columns: {', '.join(df.columns)}")
+    
+    # Check for required columns
+    required_cols = ['org', 'year', 'reappointed']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"\nERROR: Missing required columns: {', '.join(missing_cols)}")
+        sys.exit(1)
+    
+    # Data quality checks
+    print("\n" + "-"*60)
+    print("DATA QUALITY CHECKS:")
+    print("-"*60)
+    
+    # Check reappointed column
+    print("\nReappointed column analysis:")
+    reappointed_counts = df['reappointed'].value_counts(dropna=False)
+    for value, count in reappointed_counts.items():
+        pct = (count / len(df)) * 100
+        print(f"  - {value}: {count:,} ({pct:.1f}%)")
+    
+    # Handle missing values
+    print("\nHandling missing values...")
+    df['org_clean'] = df['org'].fillna('Unknown Organization')
+    df['year_numeric'] = pd.to_numeric(df['year'], errors='coerce')
+    
+    # Check for rows with missing years
+    missing_years = df['year_numeric'].isna().sum()
+    if missing_years > 0:
+        print(f"  - Found {missing_years:,} rows with invalid/missing years (will be excluded)")
+    
+    # Filter to valid rows with reappointed=True
+    df_reappointed = df[(df['year_numeric'].notna()) & (df['reappointed'] == True)].copy()
+    print(f"\nProcessing {len(df_reappointed):,} reappointments (reappointed=True with valid years)")
+    
+    # Count reappointments by organization and year
+    print("\n" + "-"*60)
+    print("COUNTING REAPPOINTMENTS:")
+    print("-"*60)
+    
+    # Group by org and year to count reappointments
+    reappointment_counts = df_reappointed.groupby(['org_clean', 'year_numeric']).size().reset_index(name='reappointment_count')
+    
+    # Rename columns for clarity
+    reappointment_counts.rename(columns={
+        'org_clean': 'organization',
+        'year_numeric': 'year'
+    }, inplace=True)
+    
+    # Convert year back to integer
+    reappointment_counts['year'] = reappointment_counts['year'].astype(int)
+    
+    print(f"Generated {len(reappointment_counts):,} organization-year combinations with reappointments")
+    
+    # Merge with employee counts if available
+    if employee_counts is not None:
+        print("\nMerging with total employee counts...")
+        merged_data = pd.merge(
+            reappointment_counts,
+            employee_counts,
+            on=['organization', 'year'],
+            how='outer'
+        )
+        
+        # Fill missing values
+        merged_data['reappointment_count'] = merged_data['reappointment_count'].fillna(0).astype(int)
+        merged_data['employee_count'] = merged_data['employee_count'].fillna(0).astype(int)
+        
+        # Calculate reappointment rate
+        merged_data['reappointment_rate'] = np.where(
+            merged_data['employee_count'] > 0,
+            (merged_data['reappointment_count'] / merged_data['employee_count']) * 100,
+            0
+        )
+        
+        reappointment_counts = merged_data
+        print(f"Merged data contains {len(reappointment_counts):,} organization-year combinations")
+    
+    # Summary statistics
+    print("\n" + "="*60)
+    print("REAPPOINTMENT STATISTICS:")
+    print("="*60)
+    
+    # Overall statistics
+    print("\nReappointment count statistics:")
+    reapp_only = reappointment_counts[reappointment_counts['reappointment_count'] > 0]
+    if len(reapp_only) > 0:
+        print(f"  - Organizations with reappointments: {reapp_only['organization'].nunique():,}")
+        print(f"  - Mean reappointments per org-year: {reapp_only['reappointment_count'].mean():.1f}")
+        print(f"  - Median reappointments per org-year: {reapp_only['reappointment_count'].median():.0f}")
+        print(f"  - Max reappointments in single org-year: {reapp_only['reappointment_count'].max():,}")
+    
+    # Top organizations by total reappointments
+    print("\n" + "-"*60)
+    print("TOP 10 ORGANIZATIONS BY TOTAL REAPPOINTMENTS (ALL YEARS):")
+    print("-"*60)
+    org_totals = reappointment_counts.groupby('organization')['reappointment_count'].sum().sort_values(ascending=False)
+    for i, (org, total) in enumerate(org_totals.head(10).items(), 1):
+        if total > 0:
+            print(f"  {i:2d}. {org}: {total:,} total reappointments")
+    
+    # Organizations with highest reappointment rates (if we have employee counts)
+    if 'reappointment_rate' in reappointment_counts.columns:
+        print("\n" + "-"*60)
+        print("TOP 10 ORGANIZATIONS BY REAPPOINTMENT RATE (MIN 10 TOTAL APPOINTMENTS):")
+        print("-"*60)
+        
+        # Calculate overall rates by organization
+        org_rates = reappointment_counts.groupby('organization').agg({
+            'reappointment_count': 'sum',
+            'employee_count': 'sum'
+        })
+        org_rates = org_rates[org_rates['employee_count'] >= 10]  # Min 10 appointments
+        org_rates['overall_rate'] = (org_rates['reappointment_count'] / org_rates['employee_count']) * 100
+        org_rates = org_rates.sort_values('overall_rate', ascending=False)
+        
+        for i, (org, row) in enumerate(org_rates.head(10).iterrows(), 1):
+            print(f"  {i:2d}. {org}: {row['overall_rate']:.1f}% ({int(row['reappointment_count'])}/{int(row['employee_count'])})")
+    
+    # Year-by-year analysis
+    print("\n" + "-"*60)
+    print("REAPPOINTMENTS BY YEAR:")
+    print("-"*60)
+    year_summary = reappointment_counts.groupby('year').agg({
+        'reappointment_count': 'sum'
+    })
+    
+    if 'employee_count' in reappointment_counts.columns:
+        year_summary['total_appointments'] = reappointment_counts.groupby('year')['employee_count'].sum()
+        year_summary['reappointment_rate'] = (year_summary['reappointment_count'] / year_summary['total_appointments']) * 100
+        
+        for year, row in year_summary.iterrows():
+            print(f"  {year}: {int(row['reappointment_count']):,} reappointments / {int(row['total_appointments']):,} total ({row['reappointment_rate']:.1f}%)")
+    else:
+        for year, count in year_summary['reappointment_count'].items():
+            print(f"  {year}: {int(count):,} reappointments")
+    
+    # Organizations with consistent reappointments
+    print("\n" + "-"*60)
+    print("ORGANIZATIONS WITH CONSISTENT REAPPOINTMENTS:")
+    print("-"*60)
+    
+    # Find organizations with reappointments in multiple years
+    org_years_with_reapp = reappointment_counts[reappointment_counts['reappointment_count'] > 0].groupby('organization')['year'].nunique()
+    consistent_orgs = org_years_with_reapp[org_years_with_reapp >= 5].sort_values(ascending=False)
+    
+    print(f"\nOrganizations with reappointments in 5+ years: {len(consistent_orgs)}")
+    for i, (org, years) in enumerate(consistent_orgs.head(10).items(), 1):
+        total_reapp = org_totals.get(org, 0)
+        print(f"  {i:2d}. {org}: {years} years ({total_reapp:,} total reappointments)")
+    
+    # Sample of the output data
+    print("\n" + "-"*60)
+    print("SAMPLE OUTPUT DATA (first 15 rows with reappointments):")
+    print("-"*60)
+    sample_data = reappointment_counts[reappointment_counts['reappointment_count'] > 0].head(15)
+    if 'reappointment_rate' in sample_data.columns:
+        display_cols = ['organization', 'year', 'reappointment_count', 'employee_count', 'reappointment_rate']
+    else:
+        display_cols = ['organization', 'year', 'reappointment_count']
+    print(sample_data[display_cols].to_string(index=False))
+    
+    # Government branch analysis (using keywords from Step 4)
+    print("\n" + "="*60)
+    print("REAPPOINTMENTS BY GOVERNMENT BRANCH:")
+    print("="*60)
+    
+    # Classify organizations by branch
+    branch_keywords = {
+        'Executive': ['minister', 'deputy', 'executive', 'premier', 'cabinet'],
+        'Legislative': ['legislative', 'assembly', 'speaker', 'clerk'],
+        'Judicial': ['court', 'judge', 'judicial', 'justice', 'tribunal'],
+        'Crown Corporations': ['corporation', 'corp', 'inc', 'ltd', 'limited'],
+        'Boards/Commissions': ['board', 'commission', 'committee', 'council', 'authority'],
+        'Other': []
+    }
+    
+    # Classify organizations
+    org_classification = {}
+    for org in reappointment_counts['organization'].unique():
+        org_lower = org.lower()
+        classified = False
+        
+        for branch, keywords in branch_keywords.items():
+            if branch == 'Other':
+                continue
+            if any(keyword in org_lower for keyword in keywords):
+                org_classification[org] = branch
+                classified = True
+                break
+        
+        if not classified:
+            org_classification[org] = 'Other'
+    
+    # Add classification
+    reappointment_counts['branch'] = reappointment_counts['organization'].map(org_classification)
+    
+    # Summarize by branch
+    branch_summary = reappointment_counts.groupby('branch').agg({
+        'reappointment_count': 'sum'
+    })
+    
+    if 'employee_count' in reappointment_counts.columns:
+        branch_summary['total_appointments'] = reappointment_counts.groupby('branch')['employee_count'].sum()
+        branch_summary['reappointment_rate'] = (branch_summary['reappointment_count'] / branch_summary['total_appointments']) * 100
+        branch_summary = branch_summary.sort_values('reappointment_rate', ascending=False)
+        
+        print("\nReappointment rates by government branch:")
+        for branch, row in branch_summary.iterrows():
+            print(f"  {branch}:")
+            print(f"    - Reappointments: {int(row['reappointment_count']):,}")
+            print(f"    - Total appointments: {int(row['total_appointments']):,}")
+            print(f"    - Reappointment rate: {row['reappointment_rate']:.1f}%")
+    else:
+        branch_summary = branch_summary.sort_values('reappointment_count', ascending=False)
+        print("\nReappointments by government branch:")
+        for branch, count in branch_summary['reappointment_count'].items():
+            print(f"  {branch}: {int(count):,} reappointments")
+    
+    # Save the results
+    print("\n" + "-"*60)
+    print(f"Saving results to: {output_file}")
+    
+    # Sort by organization and year for better readability
+    reappointment_counts_sorted = reappointment_counts.sort_values(['organization', 'year'])
+    
+    # Select columns to save (exclude branch classification)
+    save_columns = [col for col in reappointment_counts_sorted.columns if col != 'branch']
+    reappointment_counts_sorted[save_columns].to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Verify saved file
+    saved_df = pd.read_csv(output_file)
+    if len(saved_df) == len(reappointment_counts):
+        print(f"SUCCESS: Data saved successfully ({len(saved_df):,} rows)")
+    else:
+        print("WARNING: Row count mismatch in saved file!")
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 5 COMPLETED SUCCESSFULLY")
+    print("="*60)
+    print(f"\nSummary:")
+    print(f"  - Total reappointments counted: {reappointment_counts['reappointment_count'].sum():,}")
+    print(f"  - Organizations with reappointments: {(reappointment_counts['reappointment_count'] > 0).sum():,}")
+    print(f"  - Years covered: {reappointment_counts['year'].min()} - {reappointment_counts['year'].max()}")
+    print(f"  - Output file: {output_file}")
+    
+    if 'reappointment_rate' in reappointment_counts.columns:
+        overall_rate = (reappointment_counts['reappointment_count'].sum() / 
+                       reappointment_counts['employee_count'].sum() * 100)
+        print(f"  - Overall reappointment rate: {overall_rate:.1f}%")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count total number of employees for each organization in each year
+This script aggregates the appointment data to count employees by org and year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+# Define paths
+INPUT_DIR = Path("scripts/claudeopus4/version2/execution8/analysis_data")
+INPUT_FILE = INPUT_DIR / "step3_repeats_marked.csv"
+OUTPUT_FILE = INPUT_DIR / "step4_employee_counts.csv"
+
+def load_marked_data():
+    """Load the dataset with marked repeats from step 3."""
+    try:
+        if not INPUT_FILE.exists():
+            print(f"✗ Error: Input file not found: {INPUT_FILE}")
+            return None
+        
+        print(f"Loading marked dataset from: {INPUT_FILE}")
+        df = pd.read_csv(INPUT_FILE, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} rows, {len(df.columns)} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading marked dataset: {e}")
+        return None
+
+def analyze_org_year_data(df):
+    """Analyze the organization and year data quality."""
+    print("\n" + "="*60)
+    print("ORGANIZATION AND YEAR DATA ANALYSIS")
+    print("="*60)
+    
+    # Check org column
+    print("\nOrganization (org) column:")
+    if 'org' not in df.columns:
+        print("  ✗ 'org' column is missing!")
+        return False
+    
+    org_missing = df['org'].isna().sum()
+    org_empty = (df['org'].fillna('') == '').sum()
+    org_unique = df['org'].nunique(dropna=True)
+    
+    print(f"  - Total records: {len(df):,}")
+    print(f"  - Missing values: {org_missing:,} ({org_missing/len(df)*100:.1f}%)")
+    print(f"  - Empty strings: {org_empty - org_missing:,}")
+    print(f"  - Unique organizations: {org_unique:,}")
+    
+    # Check year column
+    print("\nYear column:")
+    if 'year' not in df.columns:
+        print("  ✗ 'year' column is missing!")
+        return False
+    
+    year_missing = df['year'].isna().sum()
+    year_range = f"{df['year'].min():.0f} - {df['year'].max():.0f}" if year_missing < len(df) else "N/A"
+    
+    print(f"  - Missing values: {year_missing:,} ({year_missing/len(df)*100:.1f}%)")
+    print(f"  - Year range: {year_range}")
+    
+    # Show sample of organizations
+    if org_unique > 0 and org_unique <= 20:
+        print("\nAll organizations:")
+        for org in sorted(df['org'].dropna().unique()):
+            count = (df['org'] == org).sum()
+            print(f"  - {org}: {count:,} appointments")
+    elif org_unique > 20:
+        print(f"\nTop 20 organizations by appointment count:")
+        org_counts = df['org'].value_counts().head(20)
+        for org, count in org_counts.items():
+            print(f"  - {org}: {count:,} appointments")
+    
+    return True
+
+def clean_org_names(df):
+    """Clean and standardize organization names."""
+    print("\n" + "="*60)
+    print("CLEANING ORGANIZATION NAMES")
+    print("="*60)
+    
+    # Create a copy to avoid modifying original
+    df = df.copy()
+    
+    # Store original for comparison
+    df['org_original'] = df['org'].copy()
+    
+    # Basic cleaning
+    print("Applying organization name cleaning...")
+    
+    # Convert to string and strip whitespace
+    df['org'] = df['org'].fillna('').astype(str).str.strip()
+    
+    # Replace empty strings with a standard value
+    empty_count = (df['org'] == '').sum()
+    if empty_count > 0:
+        df.loc[df['org'] == '', 'org'] = 'Unknown Organization'
+        print(f"  - Replaced {empty_count:,} empty organization names with 'Unknown Organization'")
+    
+    # Standardize case (title case for consistency)
+    df['org'] = df['org'].str.title()
+    
+    # Fix common variations (customize based on actual data)
+    standardization_map = {
+        # Add common variations found in the data
+        # Example mappings:
+        'Dept': 'Department',
+        'Dept.': 'Department',
+        'Gov': 'Government',
+        "Gov'T": 'Government',
+        'Nb': 'New Brunswick',
+        'N.B.': 'New Brunswick',
+        'Corp': 'Corporation',
+        'Corp.': 'Corporation',
+        'Assoc': 'Association',
+        'Assoc.': 'Association',
+        'Comm': 'Commission',
+        'Comm.': 'Commission',
+    }
+    
+    # Apply standardization
+    changes_made = 0
+    for old, new in standardization_map.items():
+        mask = df['org'].str.contains(old, case=False, na=False)
+        if mask.any():
+            df.loc[mask, 'org'] = df.loc[mask, 'org'].str.replace(old, new, case=False, regex=False)
+            changes_made += mask.sum()
+    
+    print(f"  - Applied {len(standardization_map)} standardization rules, affecting {changes_made:,} records")
+    
+    # Report on changes
+    changed_mask = df['org'] != df['org_original']
+    changes_count = changed_mask.sum()
+    print(f"\nTotal organization names changed: {changes_count:,}")
+    
+    if changes_count > 0 and changes_count <= 20:
+        print("\nSample of changes:")
+        changed_sample = df[changed_mask][['org_original', 'org']].drop_duplicates().head(10)
+        for _, row in changed_sample.iterrows():
+            print(f"  '{row['org_original']}' → '{row['org']}'")
+    
+    # Update unique count after cleaning
+    new_unique = df['org'].nunique()
+    original_unique = df['org_original'].nunique()
+    print(f"\nUnique organizations: {original_unique:,} → {new_unique:,} (reduced by {original_unique - new_unique})")
+    
+    # Drop temporary column
+    df = df.drop('org_original', axis=1)
+    
+    return df
+
+def count_employees_by_org_year(df):
+    """Count total employees for each organization in each year."""
+    print("\n" + "="*60)
+    print("COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60)
+    
+    # Filter out records with missing org or year
+    valid_mask = df['org'].notna() & df['year'].notna() & (df['org'] != '')
+    valid_records = valid_mask.sum()
+    invalid_records = len(df) - valid_records
+    
+    print(f"Valid records for counting: {valid_records:,}")
+    if invalid_records > 0:
+        print(f"Excluded records (missing org or year): {invalid_records:,}")
+    
+    # Create the employee count aggregation
+    print("\nAggregating employee counts...")
+    employee_counts = df[valid_mask].groupby(['org', 'year']).agg({
+        'name': 'count',  # Total appointments
+        'reappointed': [
+            lambda x: (x == True).sum(),  # Count of reappointments
+            lambda x: (x == False).sum(),  # Count of first appointments
+            lambda x: x.isna().sum()       # Count of unknown
+        ]
+    }).reset_index()
+    
+    # Flatten column names
+    employee_counts.columns = ['org', 'year', 'total_appointments', 
+                              'reappointments', 'first_appointments', 'unknown_appointments']
+    
+    # Convert year to integer for clarity
+    employee_counts['year'] = employee_counts['year'].astype(int)
+    
+    # Sort by org and year
+    employee_counts = employee_counts.sort_values(['org', 'year']).reset_index(drop=True)
+    
+    print(f"✓ Created aggregated dataset with {len(employee_counts):,} org-year combinations")
+    
+    return employee_counts
+
+def analyze_employee_counts(df):
+    """Analyze the employee count data and provide insights."""
+    print("\n" + "="*60)
+    print("EMPLOYEE COUNT ANALYSIS")
+    print("="*60)
+    
+    # Overall statistics
+    print("\nOverall Statistics:")
+    print(f"  - Total org-year combinations: {len(df):,}")
+    print(f"  - Unique organizations: {df['org'].nunique():,}")
+    print(f"  - Years covered: {df['year'].min()} - {df['year'].max()}")
+    print(f"  - Total appointments across all years: {df['total_appointments'].sum():,}")
+    
+    # Year-by-year totals
+    print("\nAppointments by year:")
+    yearly_totals = df.groupby('year')['total_appointments'].sum().sort_index()
+    for year, total in yearly_totals.items():
+        print(f"  {year}: {total:,} appointments")
+    
+    # Organizations with most appointments (across all years)
+    print("\nTop 15 organizations by total appointments (all years):")
+    org_totals = df.groupby('org')['total_appointments'].sum().sort_values(ascending=False).head(15)
+    for i, (org, total) in enumerate(org_totals.items(), 1):
+        years_active = df[df['org'] == org]['year'].nunique()
+        avg_per_year = total / years_active
+        print(f"  {i:2d}. {org}: {total:,} total ({avg_per_year:.1f} avg/year, {years_active} years)")
+    
+    # Organizations with highest single-year appointments
+    print("\nTop 10 single-year appointment counts:")
+    top_single_year = df.nlargest(10, 'total_appointments')[['org', 'year', 'total_appointments']]
+    for _, row in top_single_year.iterrows():
+        print(f"  - {row['org']} ({row['year']}): {row['total_appointments']:,} appointments")
+    
+    # Reappointment statistics
+    print("\nReappointment Statistics:")
+    total_reappointments = df['reappointments'].sum()
+    total_first = df['first_appointments'].sum()
+    total_unknown = df['unknown_appointments'].sum()
+    total_all = df['total_appointments'].sum()
+    
+    print(f"  - Total reappointments: {total_reappointments:,} ({total_reappointments/total_all*100:.1f}%)")
+    print(f"  - Total first appointments: {total_first:,} ({total_first/total_all*100:.1f}%)")
+    print(f"  - Total unknown: {total_unknown:,} ({total_unknown/total_all*100:.1f}%)")
+    
+    # Growth analysis
+    print("\nOrganization Growth Analysis:")
+    
+    # Find organizations that existed in both first and last year
+    first_year = df['year'].min()
+    last_year = df['year'].max()
+    
+    first_year_orgs = set(df[df['year'] == first_year]['org'])
+    last_year_orgs = set(df[df['year'] == last_year]['org'])
+    consistent_orgs = first_year_orgs & last_year_orgs
+    
+    print(f"  - Organizations in both {first_year} and {last_year}: {len(consistent_orgs)}")
+    
+    if len(consistent_orgs) > 0:
+        print(f"\n  Top 10 organizations by appointment growth ({first_year} → {last_year}):")
+        
+        growth_data = []
+        for org in consistent_orgs:
+            first_count = df[(df['org'] == org) & (df['year'] == first_year)]['total_appointments'].iloc[0]
+            last_count = df[(df['org'] == org) & (df['year'] == last_year)]['total_appointments'].iloc[0]
+            growth = last_count - first_count
+            growth_pct = (growth / first_count * 100) if first_count > 0 else 0
+            growth_data.append({
+                'org': org,
+                'first_year_count': first_count,
+                'last_year_count': last_count,
+                'growth': growth,
+                'growth_pct': growth_pct
+            })
+        
+        growth_df = pd.DataFrame(growth_data).sort_values('growth', ascending=False)
+        
+        for _, row in growth_df.head(10).iterrows():
+            print(f"    - {row['org']}: {row['first_year_count']} → {row['last_year_count']} "
+                  f"({row['growth']:+d}, {row['growth_pct']:+.1f}%)")
+
+def create_summary_statistics(df):
+    """Create additional summary statistics for the report."""
+    print("\n" + "="*60)
+    print("CREATING SUMMARY STATISTICS")
+    print("="*60)
+    
+    # Add calculated fields
+    df['reappointment_rate'] = df['reappointments'] / df['total_appointments']
+    df['reappointment_rate'] = df['reappointment_rate'].fillna(0)
+    
+    # Calculate year-over-year changes
+    df = df.sort_values(['org', 'year'])
+    df['total_appointments_yoy_change'] = df.groupby('org')['total_appointments'].diff()
+    df['reappointments_yoy_change'] = df.groupby('org')['reappointments'].diff()
+    
+    print("✓ Added calculated fields:")
+    print("  - reappointment_rate: Proportion of appointments that are reappointments")
+    print("  - total_appointments_yoy_change: Year-over-year change in total appointments")
+    print("  - reappointments_yoy_change: Year-over-year change in reappointments")
+    
+    return df
+
+def main():
+    """Main execution function."""
+    print("STEP 4: COUNT EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load data from step 3
+    df = load_marked_data()
+    if df is None:
+        sys.exit(1)
+    
+    # Analyze org and year data quality
+    if not analyze_org_year_data(df):
+        print("\n✗ ERROR: Missing required columns (org or year)")
+        sys.exit(1)
+    
+    # Clean organization names
+    df = clean_org_names(df)
+    
+    # Count employees by org and year
+    employee_counts = count_employees_by_org_year(df)
+    
+    # Add summary statistics
+    employee_counts = create_summary_statistics(employee_counts)
+    
+    # Analyze the results
+    analyze_employee_counts(employee_counts)
+    
+    # Save results
+    print(f"\nSaving employee counts to: {OUTPUT_FILE}")
+    try:
+        employee_counts.to_csv(OUTPUT_FILE, index=False, encoding='utf-8')
+        print(f"✓ Successfully saved employee counts")
+        print(f"  File size: {OUTPUT_FILE.stat().st_size / 1024:.2f} KB")
+        
+    except Exception as e:
+        print(f"✗ Error saving employee counts: {e}")
+        sys.exit(1)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("STEP 4 COMPLETED SUCCESSFULLY")
+    print(f"Output file: {OUTPUT_FILE}")
+    print(f"Total org-year combinations: {len(employee_counts):,}")
+    
+    # Column summary
+    print("\nOutput columns:")
+    for col in employee_counts.columns:
+        print(f"  - {col}")
+    
+    # Sample output
+    print("\nSample output (first 5 rows):")
+    print(employee_counts.head())
+    
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

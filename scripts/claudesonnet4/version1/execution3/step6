@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 New Brunswick Government Reappointment Rates Calculator
-Calculates reappointment rates by merging employee counts and reappointment counts.
+Calculates reappointment rates by merging appointment counts and reappointment counts.
 """
 
 import pandas as pd
@@ -10,340 +10,194 @@ import os
 from pathlib import Path
 import sys
 
-def load_and_validate_datasets(input_dir):
+def load_datasets(data_dir):
     """
-    Load both employee counts and reappointment counts datasets with validation.
+    Load appointment counts and reappointment counts datasets.
     
     Args:
-        input_dir (Path): Directory containing the input files
+        data_dir (Path): Directory containing the data files
     
     Returns:
-        tuple: (employee_counts_df, reappointment_counts_df)
+        tuple: (appointment_counts_df, reappointment_counts_df)
     """
-    # Define file paths
-    employee_file = input_dir / "step4_employee_counts.csv"
-    reappointment_file = input_dir / "step5_reappointment_counts.csv"
+    appointment_file = data_dir / "step4_appointment_counts.csv"
+    reappointment_file = data_dir / "step5_reappointment_counts.csv"
     
-    # Check if files exist
-    if not employee_file.exists():
-        raise FileNotFoundError(f"Employee counts file not found: {employee_file}")
+    # Load appointment counts
+    if not appointment_file.exists():
+        raise FileNotFoundError(f"Appointment counts file not found: {appointment_file}")
+    
+    print(f"Loading appointment counts from: {appointment_file}")
+    appointment_df = pd.read_csv(appointment_file, index_col=0)
+    print(f"Appointment counts shape: {appointment_df.shape}")
+    
+    # Load reappointment counts
     if not reappointment_file.exists():
         raise FileNotFoundError(f"Reappointment counts file not found: {reappointment_file}")
     
-    print("Loading datasets...")
+    print(f"Loading reappointment counts from: {reappointment_file}")
+    reappointment_df = pd.read_csv(reappointment_file, index_col=0)
+    print(f"Reappointment counts shape: {reappointment_df.shape}")
     
-    # Load employee counts
-    print(f"  Loading employee counts from: {employee_file}")
-    employee_df = pd.read_csv(employee_file, index_col=0)  # Organization names as index
-    print(f"    Shape: {employee_df.shape}")
-    
-    # Load reappointment counts
-    print(f"  Loading reappointment counts from: {reappointment_file}")
-    reappointment_df = pd.read_csv(reappointment_file, index_col=0)  # Organization names as index
-    print(f"    Shape: {reappointment_df.shape}")
-    
-    # Basic validation
-    print("\nDataset validation:")
-    print(f"  Employee counts organizations: {len(employee_df.index)}")
-    print(f"  Reappointment counts organizations: {len(reappointment_df.index)}")
-    print(f"  Employee counts years: {len([col for col in employee_df.columns if col != 'Total'])}")
-    print(f"  Reappointment counts years: {len([col for col in reappointment_df.columns if col != 'Total'])}")
-    
-    return employee_df, reappointment_df
+    return appointment_df, reappointment_df
 
-def prepare_datasets_for_merge(employee_df, reappointment_df):
+def convert_to_long_format(df, value_name):
     """
-    Prepare datasets for merging by converting to long format.
+    Convert pivot table to long format.
     
     Args:
-        employee_df (pd.DataFrame): Employee counts pivot table
-        reappointment_df (pd.DataFrame): Reappointment counts pivot table
+        df (pd.DataFrame): Pivot table with orgs as rows, years as columns
+        value_name (str): Name for the value column
     
     Returns:
-        tuple: (employee_long, reappointment_long)
+        pd.DataFrame: Long format DataFrame
     """
-    print("Preparing datasets for merge...")
+    # Remove 'Total' column if it exists
+    if 'Total' in df.columns:
+        df = df.drop('Total', axis=1)
     
-    # Remove 'Total' columns and rows if they exist
-    employee_clean = employee_df.copy()
-    reappointment_clean = reappointment_df.copy()
+    # Reset index to make org a column
+    df_reset = df.reset_index()
     
-    if 'Total' in employee_clean.columns:
-        employee_clean = employee_clean.drop('Total', axis=1)
-    if 'Total' in employee_clean.index:
-        employee_clean = employee_clean.drop('Total', axis=0)
+    # Melt to long format
+    long_df = pd.melt(df_reset, id_vars=['org'], var_name='year', value_name=value_name)
     
-    if 'Total' in reappointment_clean.columns:
-        reappointment_clean = reappointment_clean.drop('Total', axis=1)
-    if 'Total' in reappointment_clean.index:
-        reappointment_clean = reappointment_clean.drop('Total', axis=0)
+    # Ensure year is integer
+    long_df['year'] = pd.to_numeric(long_df['year'], errors='coerce').astype('Int64')
     
-    print(f"  Cleaned employee data shape: {employee_clean.shape}")
-    print(f"  Cleaned reappointment data shape: {reappointment_clean.shape}")
-    
-    # Convert to long format
-    employee_long = employee_clean.reset_index().melt(
-        id_vars=['org'], 
-        var_name='year', 
-        value_name='total_employees'
-    )
-    
-    reappointment_long = reappointment_clean.reset_index().melt(
-        id_vars=['org'], 
-        var_name='year', 
-        value_name='reappointments'
-    )
-    
-    # Convert years to consistent format (integers)
-    print("  Converting years to integers...")
-    
-    def convert_year_to_int(year_series):
-        """Convert year column to integers, handling special cases."""
-        result = year_series.copy()
-        
-        # Handle string representations
-        if result.dtype == 'object':
-            # Replace special year labels
-            result = result.replace({
-                'Unknown Year': -1,
-                'Missing Year': -1,
-                'unknown': -1,
-                'missing': -1
-            })
-        
-        # Convert to numeric
-        result = pd.to_numeric(result, errors='coerce')
-        result = result.fillna(-1)  # Use -1 for any conversion failures
-        result = result.astype(int)
-        
-        return result
-    
-    employee_long['year'] = convert_year_to_int(employee_long['year'])
-    reappointment_long['year'] = convert_year_to_int(reappointment_long['year'])
-    
-    # Fill missing values
-    employee_long['total_employees'] = employee_long['total_employees'].fillna(0)
-    reappointment_long['reappointments'] = reappointment_long['reappointments'].fillna(0)
-    
-    print(f"  Employee long format shape: {employee_long.shape}")
-    print(f"  Reappointment long format shape: {reappointment_long.shape}")
-    
-    # Show sample data
-    print("\nSample employee data:")
-    print(employee_long.head())
-    print("\nSample reappointment data:")
-    print(reappointment_long.head())
-    
-    return employee_long, reappointment_long
+    return long_df
 
-def merge_and_calculate_rates(employee_long, reappointment_long):
+def merge_and_calculate_rates(appointment_long, reappointment_long):
     """
     Merge datasets and calculate reappointment rates.
     
     Args:
-        employee_long (pd.DataFrame): Employee counts in long format
+        appointment_long (pd.DataFrame): Appointment counts in long format
         reappointment_long (pd.DataFrame): Reappointment counts in long format
     
     Returns:
-        pd.DataFrame: Merged dataset with reappointment rates
+        pd.DataFrame: Merged data with reappointment rates
     """
-    print("Merging datasets and calculating rates...")
+    print("\nMerging datasets...")
     
-    # Merge on organization and year
-    merged_df = pd.merge(
-        employee_long, 
-        reappointment_long, 
-        on=['org', 'year'], 
-        how='outer'  # Keep all combinations
+    # Merge on org and year
+    merged = pd.merge(appointment_long, reappointment_long, on=['org', 'year'], how='left')
+    
+    # Fill missing reappointments with 0
+    merged['reappointments'] = merged['reappointments'].fillna(0)
+    
+    print(f"Merged dataset shape: {merged.shape}")
+    print(f"Organizations: {merged['org'].nunique()}")
+    print(f"Year range: {merged['year'].min()}-{merged['year'].max()}")
+    
+    # Handle division by zero and calculate reappointment rate
+    print("\nCalculating reappointment rates...")
+    
+    # Create a mask for valid calculations (total_appointments > 0)
+    valid_mask = merged['total_appointments'] > 0
+    
+    # Initialize reappointment_rate column
+    merged['reappointment_rate'] = np.nan
+    
+    # Calculate rates only where we have appointments
+    merged.loc[valid_mask, 'reappointment_rate'] = (
+        merged.loc[valid_mask, 'reappointments'] / merged.loc[valid_mask, 'total_appointments']
     )
     
-    print(f"  Merged dataset shape: {merged_df.shape}")
+    # Check for edge cases
+    zero_appointments = (merged['total_appointments'] == 0).sum()
+    if zero_appointments > 0:
+        print(f"Warning: {zero_appointments} records with zero total appointments")
     
-    # Fill missing values after merge
-    merged_df['total_employees'] = merged_df['total_employees'].fillna(0)
-    merged_df['reappointments'] = merged_df['reappointments'].fillna(0)
+    rates_over_1 = (merged['reappointment_rate'] > 1.0).sum()
+    if rates_over_1 > 0:
+        print(f"Warning: {rates_over_1} records with reappointment rate > 100%")
+        print("This may indicate data quality issues")
     
-    # Validate data types
-    merged_df['total_employees'] = pd.to_numeric(merged_df['total_employees'], errors='coerce').fillna(0)
-    merged_df['reappointments'] = pd.to_numeric(merged_df['reappointments'], errors='coerce').fillna(0)
-    
-    print("Calculating reappointment rates...")
-    
-    # Handle division by zero cases
-    def calculate_rate(row):
-        """Calculate reappointment rate with proper handling of edge cases."""
-        total = row['total_employees']
-        reappoints = row['reappointments']
-        
-        # Handle edge cases
-        if pd.isna(total) or pd.isna(reappoints):
-            return np.nan
-        if total == 0:
-            if reappoints == 0:
-                return np.nan  # 0/0 case - undefined
-            else:
-                return np.inf  # Should not happen in practice
-        
-        return reappoints / total
-    
-    merged_df['reappointment_rate'] = merged_df.apply(calculate_rate, axis=1)
-    
-    # Convert infinities to NaN for cleaner handling
-    merged_df['reappointment_rate'] = merged_df['reappointment_rate'].replace([np.inf, -np.inf], np.nan)
-    
-    # Sort by organization and year
-    merged_df = merged_df.sort_values(['org', 'year'])
-    
-    # Reset index
-    merged_df = merged_df.reset_index(drop=True)
-    
-    return merged_df
+    return merged
 
-def validate_merged_data(merged_df):
+def validate_results(merged_df):
     """
-    Validate the merged dataset and print statistics.
-    
-    Args:
-        merged_df (pd.DataFrame): Merged dataset
-    
-    Returns:
-        dict: Validation statistics
-    """
-    print("\nValidating merged dataset...")
-    
-    validation_stats = {
-        'total_records': len(merged_df),
-        'unique_organizations': merged_df['org'].nunique(),
-        'unique_years': merged_df['year'].nunique(),
-        'records_with_employees': (merged_df['total_employees'] > 0).sum(),
-        'records_with_reappointments': (merged_df['reappointments'] > 0).sum(),
-        'records_with_rates': merged_df['reappointment_rate'].notna().sum(),
-        'zero_employees_zero_reappointments': ((merged_df['total_employees'] == 0) & (merged_df['reappointments'] == 0)).sum(),
-        'zero_employees_nonzero_reappointments': ((merged_df['total_employees'] == 0) & (merged_df['reappointments'] > 0)).sum(),
-        'impossible_rates': (merged_df['reappointment_rate'] > 1.0).sum()
-    }
-    
-    print(f"  Total records: {validation_stats['total_records']:,}")
-    print(f"  Unique organizations: {validation_stats['unique_organizations']:,}")
-    print(f"  Unique years: {validation_stats['unique_years']:,}")
-    print(f"  Records with employees > 0: {validation_stats['records_with_employees']:,}")
-    print(f"  Records with reappointments > 0: {validation_stats['records_with_reappointments']:,}")
-    print(f"  Records with calculable rates: {validation_stats['records_with_rates']:,}")
-    print(f"  Zero employees, zero reappointments: {validation_stats['zero_employees_zero_reappointments']:,}")
-    print(f"  Zero employees, non-zero reappointments: {validation_stats['zero_employees_nonzero_reappointments']:,}")
-    print(f"  Impossible rates (>100%): {validation_stats['impossible_rates']:,}")
-    
-    if validation_stats['zero_employees_nonzero_reappointments'] > 0:
-        print("  ⚠ Warning: Found reappointments without corresponding employee counts!")
-    
-    if validation_stats['impossible_rates'] > 0:
-        print("  ⚠ Warning: Found reappointment rates > 100%!")
-        print("    Sample impossible rates:")
-        impossible_rates = merged_df[merged_df['reappointment_rate'] > 1.0]
-        print(impossible_rates[['org', 'year', 'total_employees', 'reappointments', 'reappointment_rate']].head())
-    
-    return validation_stats
-
-def analyze_reappointment_patterns(merged_df):
-    """
-    Analyze reappointment patterns and identify key insights.
+    Validate the calculated results.
     
     Args:
         merged_df (pd.DataFrame): Merged dataset with rates
-    
-    Returns:
-        dict: Analysis results
     """
-    print("\nAnalyzing reappointment patterns...")
+    print(f"\n{'='*50}")
+    print("DATA VALIDATION")
+    print(f"{'='*50}")
     
-    # Filter for valid rates (not NaN, not infinite)
-    valid_rates = merged_df[merged_df['reappointment_rate'].notna() & 
-                           (merged_df['reappointment_rate'] != np.inf) &
-                           (merged_df['total_employees'] > 0)]
+    # Basic statistics
+    total_records = len(merged_df)
+    records_with_appointments = (merged_df['total_appointments'] > 0).sum()
+    records_with_reappointments = (merged_df['reappointments'] > 0).sum()
+    records_with_rates = merged_df['reappointment_rate'].notna().sum()
     
-    print(f"  Records with valid rates: {len(valid_rates):,}")
+    print(f"Total records: {total_records:,}")
+    print(f"Records with appointments: {records_with_appointments:,}")
+    print(f"Records with reappointments: {records_with_reappointments:,}")
+    print(f"Records with calculated rates: {records_with_rates:,}")
     
-    if len(valid_rates) == 0:
-        print("  No valid rates found for analysis!")
-        return {}
+    # Rate statistics
+    if records_with_rates > 0:
+        rate_stats = merged_df['reappointment_rate'].describe()
+        print(f"\nReappointment rate statistics:")
+        print(f"  Mean: {rate_stats['mean']:.3f} ({rate_stats['mean']*100:.1f}%)")
+        print(f"  Median: {rate_stats['50%']:.3f} ({rate_stats['50%']*100:.1f}%)")
+        print(f"  Max: {rate_stats['max']:.3f} ({rate_stats['max']*100:.1f}%)")
+        print(f"  Min: {rate_stats['min']:.3f} ({rate_stats['min']*100:.1f}%)")
     
-    # Calculate average reappointment rate by organization
-    org_avg_rates = valid_rates.groupby('org').agg({
-        'reappointment_rate': ['mean', 'count', 'std'],
-        'total_employees': 'sum',
-        'reappointments': 'sum'
-    }).round(4)
-    
-    # Flatten column names
-    org_avg_rates.columns = ['avg_rate', 'year_count', 'rate_std', 'total_employees', 'total_reappointments']
-    
-    # Calculate overall rate for comparison
-    org_avg_rates['overall_rate'] = org_avg_rates['total_reappointments'] / org_avg_rates['total_employees']
-    
-    # Sort by average rate
-    org_avg_rates = org_avg_rates.sort_values('avg_rate', ascending=False)
-    
-    # Overall statistics
-    analysis = {
-        'overall_avg_rate': valid_rates['reappointment_rate'].mean(),
-        'overall_median_rate': valid_rates['reappointment_rate'].median(),
-        'total_employees_analyzed': valid_rates['total_employees'].sum(),
-        'total_reappointments_analyzed': valid_rates['reappointments'].sum(),
-        'org_rankings': org_avg_rates
-    }
-    
-    analysis['overall_calculated_rate'] = analysis['total_reappointments_analyzed'] / analysis['total_employees_analyzed']
-    
-    return analysis
+    # Check for anomalies
+    high_rates = merged_df[merged_df['reappointment_rate'] > 0.5]
+    if len(high_rates) > 0:
+        print(f"\nRecords with reappointment rate > 50%: {len(high_rates)}")
 
-def print_summary_statistics(merged_df, validation_stats, analysis):
+def print_top_organizations(merged_df):
     """
-    Print comprehensive summary statistics.
+    Print organizations with highest average reappointment rates.
     
     Args:
-        merged_df (pd.DataFrame): Merged dataset
-        validation_stats (dict): Validation statistics
-        analysis (dict): Analysis results
+        merged_df (pd.DataFrame): Merged dataset with rates
     """
-    print("\n" + "="*60)
-    print("REAPPOINTMENT RATES ANALYSIS SUMMARY")
-    print("="*60)
+    print(f"\n{'='*50}")
+    print("ORGANIZATIONS WITH HIGHEST AVERAGE REAPPOINTMENT RATES")
+    print(f"{'='*50}")
     
-    print("Dataset Overview:")
-    print(f"  Total org-year combinations: {validation_stats['total_records']:,}")
-    print(f"  Organizations: {validation_stats['unique_organizations']:,}")
-    print(f"  Years covered: {validation_stats['unique_years']:,}")
-    print(f"  Valid rates calculated: {validation_stats['records_with_rates']:,}")
+    # Calculate average reappointment rate by organization
+    # Only include organizations with at least some reappointments and valid rates
+    org_stats = merged_df[
+        (merged_df['reappointment_rate'].notna()) & 
+        (merged_df['reappointments'] > 0)
+    ].groupby('org').agg({
+        'reappointment_rate': ['mean', 'count'],
+        'total_appointments': 'sum',
+        'reappointments': 'sum'
+    }).round(3)
     
-    if analysis:
-        print(f"\nOverall Reappointment Statistics:")
-        print(f"  Average reappointment rate: {analysis['overall_avg_rate']:.1%}")
-        print(f"  Median reappointment rate: {analysis['overall_median_rate']:.1%}")
-        print(f"  Overall calculated rate: {analysis['overall_calculated_rate']:.1%}")
-        print(f"  Total employees analyzed: {analysis['total_employees_analyzed']:,}")
-        print(f"  Total reappointments analyzed: {analysis['total_reappointments_analyzed']:,}")
-        
-        print(f"\nTop 15 Organizations by Average Reappointment Rate:")
-        print("(Minimum 10 total employees for statistical significance)")
-        
-        # Filter for organizations with substantial data
-        substantial_orgs = analysis['org_rankings'][analysis['org_rankings']['total_employees'] >= 10]
-        
-        for i, (org, row) in enumerate(substantial_orgs.head(15).iterrows(), 1):
-            org_display = org[:50] + "..." if len(org) > 50 else org
-            print(f"  {i:2d}. {org_display}")
-            print(f"      Avg Rate: {row['avg_rate']:.1%} | Years: {row['year_count']} | "
-                  f"Employees: {row['total_employees']:.0f} | Reappointments: {row['total_reappointments']:.0f}")
+    # Flatten column names
+    org_stats.columns = ['avg_rate', 'years_with_data', 'total_appointments', 'total_reappointments']
     
-    # Sample of the final dataset
-    print(f"\nSample of Final Dataset:")
-    sample_data = merged_df[merged_df['reappointment_rate'].notna()].head(10)
-    for _, row in sample_data.iterrows():
-        org_display = row['org'][:40] + "..." if len(row['org']) > 40 else row['org']
-        year_display = "Missing" if row['year'] == -1 else str(int(row['year']))
-        rate_display = f"{row['reappointment_rate']:.1%}" if pd.notna(row['reappointment_rate']) else "N/A"
-        print(f"  {org_display} | {year_display} | "
-              f"Employees: {row['total_employees']:.0f} | Reappoint: {row['reappointments']:.0f} | Rate: {rate_display}")
+    # Filter organizations with multiple years of data for more reliable averages
+    org_stats_filtered = org_stats[org_stats['years_with_data'] >= 2]
+    
+    if len(org_stats_filtered) > 0:
+        # Sort by average reappointment rate
+        top_orgs = org_stats_filtered.sort_values('avg_rate', ascending=False).head(10)
+        
+        print(f"Top 10 organizations (with 2+ years of data):")
+        for i, (org, row) in enumerate(top_orgs.iterrows(), 1):
+            print(f"  {i:2d}. {org}")
+            print(f"      Avg rate: {row['avg_rate']:.3f} ({row['avg_rate']*100:.1f}%)")
+            print(f"      Years: {int(row['years_with_data'])}, Appointments: {int(row['total_appointments'])}, Reappointments: {int(row['total_reappointments'])}")
+    else:
+        print("Not enough organizations with multiple years of data for reliable averages")
+        
+        # Show single-year data instead
+        single_year = org_stats[org_stats['years_with_data'] == 1].sort_values('avg_rate', ascending=False).head(5)
+        if len(single_year) > 0:
+            print(f"\nTop 5 organizations (single year data):")
+            for i, (org, row) in enumerate(single_year.iterrows(), 1):
+                print(f"  {i}. {org}: {row['avg_rate']:.3f} ({row['avg_rate']*100:.1f}%)")
 
 def main():
     """Main execution function."""
@@ -352,30 +206,32 @@ def main():
         print("="*60)
         
         # Define paths
-        input_dir = Path("scripts/claudesonnet4/version1/execution3/analysis_data")
-        output_file = input_dir / "step6_reappointment_rates.csv"
+        data_dir = Path("scripts/claudesonnet4/version1/execution3/analysis_data")
+        output_file = data_dir / "step6_reappointment_rates.csv"
         
-        # Load and validate datasets
-        employee_df, reappointment_df = load_and_validate_datasets(input_dir)
+        # Load datasets
+        appointment_df, reappointment_df = load_datasets(data_dir)
         
-        # Prepare datasets for merge
-        employee_long, reappointment_long = prepare_datasets_for_merge(employee_df, reappointment_df)
+        # Convert to long format
+        print("\nConverting to long format...")
+        appointment_long = convert_to_long_format(appointment_df, 'total_appointments')
+        reappointment_long = convert_to_long_format(reappointment_df, 'reappointments')
+        
+        print(f"Appointment long format: {appointment_long.shape}")
+        print(f"Reappointment long format: {reappointment_long.shape}")
         
         # Merge and calculate rates
-        merged_df = merge_and_calculate_rates(employee_long, reappointment_long)
+        merged_df = merge_and_calculate_rates(appointment_long, reappointment_long)
         
-        # Validate merged data
-        validation_stats = validate_merged_data(merged_df)
+        # Validate results
+        validate_results(merged_df)
         
-        # Analyze patterns
-        analysis = analyze_reappointment_patterns(merged_df)
-        
-        # Print summary
-        print_summary_statistics(merged_df, validation_stats, analysis)
+        # Print top organizations
+        print_top_organizations(merged_df)
         
         # Save results
         merged_df.to_csv(output_file, index=False)
-        print(f"\nReappointment rates dataset saved to: {output_file}")
+        print(f"\nReappointment rates saved to: {output_file}")
         
         print("\nReappointment rates calculation completed successfully!")
         

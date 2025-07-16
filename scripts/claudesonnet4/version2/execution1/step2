@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+New Brunswick Government Appointments Analysis
+
+This script extracts and retains the key columns needed for reappointment analysis:
+"reappointed", "name", "position", "org", and "year".
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
+def create_output_directories():
+    """Create necessary output directories if they don't exist."""
+    output_dir = Path("scripts/gpt4o/version2/execution4/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Created output directory: {output_dir}")
+    return output_dir
+
+def load_combined_dataset():
+    """
+    Load the combined dataset from step 1.
+    
+    Returns:
+        pd.DataFrame: Combined appointments dataset
+    """
+    # Try multiple possible input locations
+    input_paths = [
+        Path("scripts/claudesonnet4/version2/execution1/analysis_data/step1_combined_appointments.csv"),
+        Path("scripts/gpt4o/version2/execution4/analysis_data/step1_combined_appointments.csv"),
+        Path("step1_combined_appointments.csv")
+    ]
+    
+    for input_path in input_paths:
+        if input_path.exists():
+            try:
+                df = pd.read_csv(input_path, encoding='utf-8')
+                print(f"✓ Loaded combined dataset from: {input_path}")
+                print(f"   Dataset shape: {df.shape[0]:,} rows, {df.shape[1]} columns")
+                return df
+            except Exception as e:
+                print(f"❌ Error loading {input_path}: {e}")
+                continue
+    
+    print("❌ Error: Could not find step1_combined_appointments.csv")
+    print("   Please ensure Step 1 has been completed successfully")
+    sys.exit(1)
+
+def identify_year_column(df):
+    """
+    Identify the year column in the dataset.
+    
+    Args:
+        df (pd.DataFrame): Input dataframe
+    
+    Returns:
+        str: Name of the year column
+    """
+    # Possible year column names
+    year_candidates = ['year', 'source_year', 'appointment_year', 'posted_year']
+    
+    for candidate in year_candidates:
+        if candidate in df.columns:
+            print(f"✓ Found year column: {candidate}")
+            return candidate
+    
+    # If no direct year column, try to extract from date columns
+    date_columns = [col for col in df.columns if 'date' in col.lower()]
+    if date_columns:
+        print(f"   No direct year column found, but found date columns: {date_columns}")
+        print(f"   Will extract year from first date column: {date_columns[0]}")
+        return date_columns[0]
+    
+    print("⚠️  Warning: No year column found")
+    return None
+
+def extract_year_from_date(df, date_column):
+    """
+    Extract year from a date column.
+    
+    Args:
+        df (pd.DataFrame): Input dataframe
+        date_column (str): Name of the date column
+    
+    Returns:
+        pd.Series: Year values
+    """
+    try:
+        # Try different date parsing methods
+        dates = pd.to_datetime(df[date_column], errors='coerce')
+        years = dates.dt.year
+        
+        # Fill missing years with source_year if available
+        if 'source_year' in df.columns:
+            years = years.fillna(df['source_year'])
+        
+        return years
+    except Exception as e:
+        print(f"❌ Error extracting year from {date_column}: {e}")
+        return None
+
+def standardize_reappointed_column(df):
+    """
+    Standardize the reappointed column to boolean values.
+    
+    Args:
+        df (pd.DataFrame): Input dataframe
+    
+    Returns:
+        pd.Series: Standardized reappointed column
+    """
+    if 'reappointed' not in df.columns:
+        print("⚠️  Warning: 'reappointed' column not found")
+        return None
+    
+    reappointed = df['reappointed'].copy()
+    
+    # Check current data types and values
+    print(f"   Original reappointed column type: {reappointed.dtype}")
+    print(f"   Unique values: {sorted(reappointed.unique())}")
+    
+    # Standardize to boolean
+    if reappointed.dtype == 'bool':
+        print("✓ Reappointed column already boolean")
+        return reappointed
+    
+    # Convert text values to boolean
+    reappointed = reappointed.astype(str).str.lower().str.strip()
+    
+    # Map various text representations to boolean
+    boolean_map = {
+        'true': True,
+        'false': False,
+        'yes': True,
+        'no': False,
+        '1': True,
+        '0': False,
+        'y': True,
+        'n': False,
+        'nan': False,
+        'none': False,
+        '': False
+    }
+    
+    standardized = reappointed.map(boolean_map)
+    
+    # Handle any unmapped values
+    unmapped = standardized.isna()
+    if unmapped.any():
+        unmapped_values = reappointed[unmapped].unique()
+        print(f"⚠️  Warning: Unmapped reappointed values: {unmapped_values}")
+        print(f"   Setting {unmapped.sum()} unmapped values to False")
+        standardized = standardized.fillna(False)
+    
+    print(f"✓ Standardized reappointed column")
+    print(f"   Final distribution: {standardized.value_counts().to_dict()}")
+    
+    return standardized
+
+def clean_text_columns(df, columns):
+    """
+    Clean and standardize text columns.
+    
+    Args:
+        df (pd.DataFrame): Input dataframe
+        columns (list): List of column names to clean
+    
+    Returns:
+        pd.DataFrame: Dataframe with cleaned columns
+    """
+    df_clean = df.copy()
+    
+    for col in columns:
+        if col in df_clean.columns and df_clean[col].dtype == 'object':
+            # Strip whitespace and standardize
+            df_clean[col] = df_clean[col].astype(str).str.strip()
+            
+            # Replace various null representations
+            null_values = ['nan', 'none', 'null', '', 'n/a', 'na']
+            df_clean[col] = df_clean[col].replace(null_values, np.nan)
+            
+            # Convert back to proper null values
+            df_clean[col] = df_clean[col].replace('nan', np.nan)
+            
+            print(f"✓ Cleaned {col} column: {df_clean[col].notna().sum():,} non-null values")
+    
+    return df_clean
+
+def extract_key_columns():
+    """
+    Main function to extract key columns from the combined dataset.
+    
+    Returns:
+        pd.DataFrame: Dataset with key columns only
+    """
+    print("=" * 60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("=" * 60)
+    
+    # Create output directory
+    output_dir = create_output_directories()
+    
+    # Load combined dataset
+    print(f"\n📁 Loading combined dataset...")
+    df = load_combined_dataset()
+    
+    # Identify required columns
+    print(f"\n🔍 Identifying required columns...")
+    
+    # Check for required columns
+    required_base_columns = ['name', 'position', 'org', 'reappointed']
+    missing_columns = [col for col in required_base_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"❌ Error: Missing required columns: {missing_columns}")
+        print(f"   Available columns: {list(df.columns)}")
+        sys.exit(1)
+    
+    print(f"✓ Found all required base columns: {required_base_columns}")
+    
+    # Identify year column
+    year_column = identify_year_column(df)
+    if year_column is None:
+        print("❌ Error: Could not identify year column")
+        sys.exit(1)
+    
+    # Extract year if needed
+    if year_column in ['year', 'source_year']:
+        year_values = df[year_column]
+        print(f"✓ Using existing year column: {year_column}")
+    else:
+        print(f"🔧 Extracting year from date column: {year_column}")
+        year_values = extract_year_from_date(df, year_column)
+        if year_values is None:
+            print("❌ Error: Could not extract year values")
+            sys.exit(1)
+    
+    # Create key columns dataset
+    print(f"\n🔧 Creating key columns dataset...")
+    
+    key_df = pd.DataFrame({
+        'name': df['name'],
+        'position': df['position'],
+        'org': df['org'],
+        'reappointed': df['reappointed'],
+        'year': year_values
+    })
+    
+    # Standardize reappointed column
+    print(f"\n🔧 Standardizing reappointed column...")
+    standardized_reappointed = standardize_reappointed_column(key_df)
+    if standardized_reappointed is not None:
+        key_df['reappointed'] = standardized_reappointed
+    
+    # Clean text columns
+    print(f"\n🔧 Cleaning text columns...")
+    text_columns = ['name', 'position', 'org']
+    key_df = clean_text_columns(key_df, text_columns)
+    
+    # Final validation and statistics
+    print(f"\n📊 Key Columns Dataset Statistics:")
+    print(f"   Total rows: {len(key_df):,}")
+    print(f"   Total columns: {len(key_df.columns)}")
+    print(f"   Year range: {key_df['year'].min()} - {key_df['year'].max()}")
+    
+    # Data quality checks
+    print(f"\n🔍 Data Quality Checks:")
+    for col in key_df.columns:
+        null_count = key_df[col].isna().sum()
+        null_pct = (null_count / len(key_df)) * 100
+        print(f"   {col}: {null_count:,} null values ({null_pct:.1f}%)")
+    
+    # Year distribution
+    print(f"\n📈 Year Distribution:")
+    year_counts = key_df['year'].value_counts().sort_index()
+    for year, count in year_counts.items():
+        print(f"   {year}: {count:,} appointments")
+    
+    # Reappointment distribution
+    if key_df['reappointed'].dtype == 'bool':
+        reappointed_counts = key_df['reappointed'].value_counts()
+        total_reappointed = reappointed_counts.get(True, 0)
+        total_appointments = len(key_df)
+        reappointed_rate = (total_reappointed / total_appointments) * 100
+        print(f"\n📈 Reappointment Distribution:")
+        print(f"   Total appointments: {total_appointments:,}")
+        print(f"   Reappointments: {total_reappointed:,} ({reappointed_rate:.1f}%)")
+        print(f"   New appointments: {total_appointments - total_reappointed:,} ({100 - reappointed_rate:.1f}%)")
+    
+    # Organization distribution (top 10)
+    print(f"\n📈 Top 10 Organizations by Appointment Count:")
+    org_counts = key_df['org'].value_counts().head(10)
+    for org, count in org_counts.items():
+        print(f"   {org}: {count:,} appointments")
+    
+    return key_df
+
+def save_key_columns_dataset(key_df, output_dir):
+    """
+    Save the key columns dataset to CSV.
+    
+    Args:
+        key_df (pd.DataFrame): Key columns dataset
+        output_dir (Path): Output directory
+    """
+    try:
+        output_file = output_dir / "step2_key_columns_data.csv"
+        key_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Saved key columns dataset to: {output_file}")
+        print(f"   File size: {output_file.stat().st_size / 1024:.1f} KB")
+        
+        # Verify the saved file
+        verification_df = pd.read_csv(output_file)
+        if len(verification_df) == len(key_df):
+            print(f"✓ File verification successful: {len(verification_df):,} rows")
+        else:
+            print(f"⚠️  Warning: Row count mismatch in saved file")
+            
+    except Exception as e:
+        print(f"❌ Error saving key columns dataset: {e}")
+        sys.exit(1)
+
+def main():
+    """Main execution function."""
+    try:
+        # Extract key columns
+        key_df = extract_key_columns()
+        
+        # Create output directory
+        output_dir = Path("scripts/claudesonnet4/version2/execution1/analysis_data")
+        
+        # Save key columns dataset
+        save_key_columns_dataset(key_df, output_dir)
+        
+        print("\n" + "=" * 60)
+        print("STEP 2 COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+        print(f"✅ Extracted key columns from {len(key_df):,} appointment records")
+        print(f"✅ Key columns: name, position, org, reappointed, year")
+        print(f"✅ Output saved to: step2_key_columns_data.csv")
+        print(f"✅ Ready for Step 3: Identifying repeat appointments")
+        
+    except KeyboardInterrupt:
+        print(f"\n❌ Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main execution: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

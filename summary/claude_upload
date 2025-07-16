@@ -1,0 +1,88 @@
+import anthropic
+import os
+import json
+from datetime import datetime
+
+client = anthropic.Anthropic(api_key="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")
+
+
+def upload_step_files_with_mapping(folder_path):
+    uploaded_files = []
+    
+    for root, dirs, files in os.walk(folder_path):
+        for filename in files:
+            if not filename.startswith("step"):
+                continue
+                
+            file_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(file_path, folder_path)
+            
+            # Replace forward slashes with double underscores to avoid forbidden character error
+            safe_filename = relative_path.replace('/', '__')
+            
+            try:
+                mime_type = get_mime_type(filename)
+                
+                response = client.beta.files.upload(
+                    file=(safe_filename, open(file_path, "rb"), mime_type),
+                )
+                
+                uploaded_files.append({
+                    'file_id': response.id,  # Use dot notation instead of bracket notation
+                    'original_path': file_path,
+                    'relative_path': relative_path,
+                    'safe_filename': safe_filename,
+                    'upload_time': datetime.now().isoformat(),
+                    'response': {
+                        'id': response.id,
+                        'filename': response.filename,
+                        'size_bytes': response.size_bytes,
+                        'type': response.type,
+                        'created_at': response.created_at
+                    }
+                })
+                
+                print(f"✓ Uploaded: {relative_path} -> {safe_filename} (ID: {response.id})")
+                
+            except Exception as e:
+                print(f"✗ Failed to upload {relative_path}: {e}")
+    
+    # Save mapping to file
+    mapping_file = "/Users/jiaxincui/VSCode/LLM-Automation/uploaded_files_mapping.json"
+    with open(mapping_file, 'w') as f:
+        json.dump(uploaded_files, f, indent=2, default=str)  # Added default=str to handle datetime objects
+    
+    print(f"\nFile mapping saved to: {mapping_file}")
+    return uploaded_files
+
+def get_mime_type(filename):
+    """Simple MIME type detection based on file extension"""
+    extension = os.path.splitext(filename)[1].lower()
+    
+    mime_types = {
+        '.py': 'text/x-python',
+        '.js': 'text/javascript',
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.json': 'application/json',
+        '.xml': 'application/xml',
+        '.md': 'text/markdown',
+        '.txt': 'text/plain',
+        '.yml': 'text/yaml',
+        '.yaml': 'text/yaml',
+        '.sql': 'text/plain',
+        '.sh': 'text/x-shellscript',
+        '.bat': 'text/plain',
+        '.csv': 'text/csv',
+        '.log': 'text/plain',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+    }
+    
+    return mime_types.get(extension, 'text/plain')
+
+# Upload files
+scripts_folder = "/Users/jiaxincui/VSCode/LLM-Automation/scripts"
+uploaded_files = upload_step_files_with_mapping(scripts_folder)

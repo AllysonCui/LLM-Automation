@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count total number of employees for each organization in each year
+This script creates a summary of employee counts by organization and year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to count employees by organization and year."""
+    
+    # Define paths
+    input_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    output_dir = Path("scripts/claudeopus4/version2/execution9/analysis_data")
+    
+    # Input and output files
+    input_file = input_dir / "step3_repeats_marked.csv"
+    output_file = output_dir / "step4_employee_counts.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 4: COUNT EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"ERROR: Input file not found: {input_file}")
+        print("Please run Step 3 first to create the marked dataset.")
+        sys.exit(1)
+    
+    # Load the dataset
+    print(f"Loading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"Successfully loaded {len(df):,} rows")
+    except Exception as e:
+        print(f"ERROR: Failed to load input file: {str(e)}")
+        sys.exit(1)
+    
+    # Verify required columns exist
+    required_columns = ['org', 'year', 'name']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        sys.exit(1)
+    
+    print(f"Columns present: {', '.join(df.columns)}")
+    
+    # Basic data overview
+    print("\n" + "-"*60)
+    print("DATA OVERVIEW:")
+    print("-"*60)
+    
+    print(f"\nTotal appointments: {len(df):,}")
+    print(f"Unique organizations: {df['org'].nunique():,}")
+    print(f"Unique employees: {df['name'].nunique():,}")
+    print(f"Years covered: {df['year'].min()}-{df['year'].max()}")
+    
+    # Count employees by organization and year
+    print("\n" + "-"*60)
+    print("COUNTING EMPLOYEES BY ORGANIZATION AND YEAR:")
+    print("-"*60)
+    
+    # Method: Count unique names per org per year
+    # Note: An employee is counted once per org-year combination regardless of multiple positions
+    employee_counts = df.groupby(['org', 'year'])['name'].nunique().reset_index()
+    employee_counts.columns = ['org', 'year', 'employee_count']
+    
+    print(f"\nCreated summary with {len(employee_counts):,} org-year combinations")
+    
+    # Add additional statistics
+    print("\nAdding additional statistics...")
+    
+    # Total appointments per org-year (including multiple positions per person)
+    appointment_counts = df.groupby(['org', 'year']).size().reset_index(name='total_appointments')
+    
+    # Number of reappointments per org-year
+    reappointment_counts = df[df['reappointed'] == True].groupby(['org', 'year']).size().reset_index(name='reappointments')
+    
+    # Merge all statistics
+    employee_counts = employee_counts.merge(appointment_counts, on=['org', 'year'], how='left')
+    employee_counts = employee_counts.merge(reappointment_counts, on=['org', 'year'], how='left')
+    
+    # Fill NaN reappointments with 0
+    employee_counts['reappointments'] = employee_counts['reappointments'].fillna(0).astype(int)
+    
+    # Calculate average positions per employee
+    employee_counts['avg_positions_per_employee'] = (
+        employee_counts['total_appointments'] / employee_counts['employee_count']
+    ).round(2)
+    
+    # Sort by organization and year
+    employee_counts = employee_counts.sort_values(['org', 'year']).reset_index(drop=True)
+    
+    # Analysis of results
+    print("\n" + "-"*60)
+    print("ANALYSIS OF EMPLOYEE COUNTS:")
+    print("-"*60)
+    
+    # Organizations with most employees (aggregate across all years)
+    print("\nTop 10 organizations by total unique employees (all years):")
+    org_totals = df.groupby('org')['name'].nunique().sort_values(ascending=False).head(10)
+    for idx, (org, count) in enumerate(org_totals.items(), 1):
+        print(f"{idx:2d}. {org[:50]:<50} : {count:,} unique employees")
+    
+    # Year-wise summary
+    print("\n" + "-"*60)
+    print("YEAR-WISE SUMMARY:")
+    print("-"*60)
+    
+    yearly_summary = employee_counts.groupby('year').agg({
+        'org': 'count',
+        'employee_count': 'sum',
+        'total_appointments': 'sum',
+        'reappointments': 'sum'
+    }).round(0).astype(int)
+    yearly_summary.columns = ['active_orgs', 'total_employees', 'total_appointments', 'total_reappointments']
+    
+    print("\nAppointment counts by year:")
+    print(yearly_summary.to_string())
+    
+    # Organizations with highest growth/decline
+    print("\n" + "-"*60)
+    print("ORGANIZATION GROWTH ANALYSIS:")
+    print("-"*60)
+    
+    # Calculate year-over-year changes
+    employee_counts['prev_year_count'] = employee_counts.groupby('org')['employee_count'].shift(1)
+    employee_counts['yoy_change'] = employee_counts['employee_count'] - employee_counts['prev_year_count']
+    employee_counts['yoy_pct_change'] = (
+        (employee_counts['yoy_change'] / employee_counts['prev_year_count']) * 100
+    ).round(1)
+    
+    # Find organizations with largest absolute growth
+    max_growth = employee_counts.nlargest(5, 'yoy_change')[['org', 'year', 'employee_count', 'prev_year_count', 'yoy_change']]
+    print("\nTop 5 year-over-year increases in employee count:")
+    for idx, row in max_growth.iterrows():
+        print(f"  {row['org'][:40]:<40} : {int(row['prev_year_count']):>3} → {int(row['employee_count']):>3} "
+              f"(+{int(row['yoy_change'])} employees) in {int(row['year'])}")
+    
+    # Find organizations with largest decline
+    max_decline = employee_counts.nsmallest(5, 'yoy_change')[['org', 'year', 'employee_count', 'prev_year_count', 'yoy_change']]
+    print("\nTop 5 year-over-year decreases in employee count:")
+    for idx, row in max_decline.iterrows():
+        if pd.notna(row['yoy_change']) and row['yoy_change'] < 0:
+            print(f"  {row['org'][:40]:<40} : {int(row['prev_year_count']):>3} → {int(row['employee_count']):>3} "
+                  f"({int(row['yoy_change'])} employees) in {int(row['year'])}")
+    
+    # Sample of data
+    print("\n" + "-"*60)
+    print("SAMPLE DATA:")
+    print("-"*60)
+    
+    print("\nFirst 10 rows of employee counts:")
+    display_cols = ['org', 'year', 'employee_count', 'total_appointments', 'reappointments', 'avg_positions_per_employee']
+    print(employee_counts[display_cols].head(10).to_string(index=False))
+    
+    # Organizations active across all years
+    print("\n" + "-"*60)
+    print("ORGANIZATION CONTINUITY:")
+    print("-"*60)
+    
+    years_range = df['year'].max() - df['year'].min() + 1
+    org_year_counts = employee_counts.groupby('org')['year'].count()
+    orgs_all_years = org_year_counts[org_year_counts == years_range]
+    
+    print(f"\nOrganizations active in all {years_range} years: {len(orgs_all_years)}")
+    if len(orgs_all_years) > 0:
+        print("Examples:")
+        for idx, org in enumerate(orgs_all_years.index[:5], 1):
+            avg_employees = employee_counts[employee_counts['org'] == org]['employee_count'].mean()
+            print(f"  {idx}. {org[:50]:<50} (avg: {avg_employees:.1f} employees/year)")
+    
+    # Statistics about organization sizes
+    print("\n" + "-"*60)
+    print("ORGANIZATION SIZE DISTRIBUTION:")
+    print("-"*60)
+    
+    size_bins = [0, 1, 5, 10, 20, 50, 100, 1000]
+    size_labels = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+']
+    employee_counts['size_category'] = pd.cut(
+        employee_counts['employee_count'], 
+        bins=size_bins, 
+        labels=size_labels,
+        include_lowest=True
+    )
+    
+    size_distribution = employee_counts['size_category'].value_counts().sort_index()
+    print("\nDistribution of organization sizes (by employee count):")
+    for size, count in size_distribution.items():
+        pct = (count / len(employee_counts)) * 100
+        print(f"  {size:>6} employees: {count:,} org-years ({pct:.1f}%)")
+    
+    # Remove helper columns before saving
+    columns_to_save = ['org', 'year', 'employee_count', 'total_appointments', 
+                       'reappointments', 'avg_positions_per_employee']
+    final_df = employee_counts[columns_to_save].copy()
+    
+    # Save the employee counts
+    print("\n" + "-"*60)
+    print("SAVING EMPLOYEE COUNTS:")
+    print("-"*60)
+    
+    try:
+        final_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"\nSuccessfully saved to: {output_file}")
+        print(f"Output file contains {len(final_df):,} rows (org-year combinations)")
+        
+    except Exception as e:
+        print(f"\nERROR: Failed to save output file: {str(e)}")
+        sys.exit(1)
+    
+    # Validation check
+    print("\n" + "-"*60)
+    print("VALIDATION:")
+    print("-"*60)
+    
+    # Check that total appointments match
+    total_appointments_original = len(df)
+    total_appointments_summary = final_df['total_appointments'].sum()
+    
+    print(f"\nTotal appointments in original data: {total_appointments_original:,}")
+    print(f"Total appointments in summary: {total_appointments_summary:,}")
+    
+    if total_appointments_original == total_appointments_summary:
+        print("✓ Validation passed: appointment counts match")
+    else:
+        print("✗ WARNING: appointment count mismatch!")
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("SUMMARY:")
+    print("="*60)
+    
+    print(f"\nProcessed: {len(df):,} appointments")
+    print(f"Created summary for: {len(final_df):,} organization-year combinations")
+    print(f"Covering: {df['org'].nunique():,} unique organizations")
+    print(f"Across: {df['year'].nunique()} years ({df['year'].min()}-{df['year'].max()})")
+    print(f"\nOutput columns: {', '.join(columns_to_save)}")
+    
+    print("\n" + "="*60)
+    print("Step 4 completed successfully!")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

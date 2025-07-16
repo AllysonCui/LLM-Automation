@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine Raw Datasets
+New Brunswick Government Appointments Analysis
+
+This script combines 12 CSV files containing New Brunswick government appointment 
+data from 2013-2024 into a single consolidated dataset.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
+def create_output_directories():
+    """Create necessary output directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution1/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Created output directory: {output_dir}")
+    return output_dir
+
+def validate_file_exists(file_path):
+    """Check if a file exists and is readable."""
+    if not file_path.exists():
+        print(f"⚠️  Warning: File not found - {file_path}")
+        return False
+    if not file_path.is_file():
+        print(f"⚠️  Warning: Path is not a file - {file_path}")
+        return False
+    return True
+
+def load_single_csv(file_path, year):
+    """
+    Load a single CSV file with error handling and basic validation.
+    
+    Args:
+        file_path (Path): Path to the CSV file
+        year (int): Year for the dataset (for adding year column)
+    
+    Returns:
+        pd.DataFrame: Loaded and validated dataframe
+    """
+    try:
+        # Load the CSV file
+        df = pd.read_csv(file_path, encoding='utf-8')
+        
+        # Add year column to track source
+        df['source_year'] = year
+        
+        # Basic validation
+        if df.empty:
+            print(f"⚠️  Warning: {file_path.name} is empty")
+            return pd.DataFrame()
+        
+        print(f"✓ Loaded {file_path.name}: {len(df)} rows, {len(df.columns)} columns")
+        
+        # Print column names for first file to understand structure
+        if year == 2013:
+            print(f"   Columns: {list(df.columns)}")
+        
+        return df
+        
+    except pd.errors.EmptyDataError:
+        print(f"❌ Error: {file_path.name} is empty or corrupted")
+        return pd.DataFrame()
+    except pd.errors.ParserError as e:
+        print(f"❌ Error parsing {file_path.name}: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"❌ Unexpected error loading {file_path.name}: {e}")
+        return pd.DataFrame()
+
+def standardize_columns(df_list):
+    """
+    Standardize column names across all dataframes and handle missing columns.
+    
+    Args:
+        df_list (list): List of dataframes to standardize
+    
+    Returns:
+        list: List of standardized dataframes
+    """
+    if not df_list:
+        return []
+    
+    # Get all unique columns across all dataframes
+    all_columns = set()
+    for df in df_list:
+        all_columns.update(df.columns)
+    
+    print(f"✓ Found {len(all_columns)} unique columns across all files")
+    print(f"   Columns: {sorted(all_columns)}")
+    
+    # Standardize each dataframe
+    standardized_dfs = []
+    for df in df_list:
+        if df.empty:
+            continue
+            
+        # Add missing columns with NaN values
+        for col in all_columns:
+            if col not in df.columns:
+                df[col] = np.nan
+        
+        # Reorder columns consistently
+        df = df[sorted(all_columns)]
+        standardized_dfs.append(df)
+    
+    return standardized_dfs
+
+def combine_datasets():
+    """
+    Main function to combine all 12 appointment datasets.
+    
+    Returns:
+        pd.DataFrame: Combined dataset
+    """
+    print("=" * 60)
+    print("STEP 1: COMBINING RAW DATASETS")
+    print("=" * 60)
+    
+    # Create output directory
+    output_dir = create_output_directories()
+    
+    # Define file paths
+    raw_data_dir = Path("raw_data")
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    # Check if raw_data directory exists
+    if not raw_data_dir.exists():
+        print(f"❌ Error: Raw data directory not found - {raw_data_dir}")
+        print("   Please ensure the raw_data directory exists with CSV files")
+        sys.exit(1)
+    
+    # Load all CSV files
+    dataframes = []
+    missing_files = []
+    
+    print(f"\n📁 Loading CSV files from {raw_data_dir}")
+    print("-" * 40)
+    
+    for year in years:
+        file_path = raw_data_dir / f"appointments_{year}.csv"
+        
+        if validate_file_exists(file_path):
+            df = load_single_csv(file_path, year)
+            if not df.empty:
+                dataframes.append(df)
+        else:
+            missing_files.append(file_path.name)
+    
+    # Report on file loading
+    print(f"\n📊 File Loading Summary:")
+    print(f"   Successfully loaded: {len(dataframes)} files")
+    print(f"   Missing files: {len(missing_files)}")
+    
+    if missing_files:
+        print(f"   Missing: {', '.join(missing_files)}")
+    
+    if not dataframes:
+        print("❌ Error: No valid CSV files found")
+        sys.exit(1)
+    
+    # Standardize columns across all dataframes
+    print(f"\n🔧 Standardizing column structure...")
+    standardized_dfs = standardize_columns(dataframes)
+    
+    if not standardized_dfs:
+        print("❌ Error: No valid dataframes after standardization")
+        sys.exit(1)
+    
+    # Combine all dataframes
+    print(f"\n🔗 Combining {len(standardized_dfs)} dataframes...")
+    try:
+        combined_df = pd.concat(standardized_dfs, ignore_index=True, sort=False)
+        print(f"✓ Successfully combined datasets")
+        
+        # Basic statistics
+        print(f"\n📈 Combined Dataset Statistics:")
+        print(f"   Total rows: {len(combined_df):,}")
+        print(f"   Total columns: {len(combined_df.columns)}")
+        print(f"   Years covered: {sorted(combined_df['source_year'].unique())}")
+        print(f"   Date range: {combined_df['source_year'].min()} - {combined_df['source_year'].max()}")
+        
+        # Check for key columns
+        key_columns = ['name', 'position', 'org', 'reappointed']
+        missing_key_cols = [col for col in key_columns if col not in combined_df.columns]
+        if missing_key_cols:
+            print(f"⚠️  Warning: Missing key columns: {missing_key_cols}")
+        else:
+            print(f"✓ All key columns present: {key_columns}")
+        
+        # Data quality checks
+        print(f"\n🔍 Data Quality Checks:")
+        print(f"   Duplicate rows: {combined_df.duplicated().sum():,}")
+        print(f"   Rows with missing names: {combined_df['name'].isna().sum():,}")
+        
+        if 'reappointed' in combined_df.columns:
+            print(f"   Reappointed column data types: {combined_df['reappointed'].dtype}")
+            print(f"   Unique reappointed values: {sorted(combined_df['reappointed'].unique())}")
+        
+        return combined_df
+        
+    except Exception as e:
+        print(f"❌ Error combining dataframes: {e}")
+        sys.exit(1)
+
+def save_combined_dataset(combined_df, output_dir):
+    """
+    Save the combined dataset to CSV.
+    
+    Args:
+        combined_df (pd.DataFrame): Combined dataset
+        output_dir (Path): Output directory
+    """
+    try:
+        output_file = output_dir / "step1_combined_appointments.csv"
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✓ Saved combined dataset to: {output_file}")
+        print(f"   File size: {output_file.stat().st_size / 1024:.1f} KB")
+        
+        # Verify the saved file
+        verification_df = pd.read_csv(output_file)
+        if len(verification_df) == len(combined_df):
+            print(f"✓ File verification successful: {len(verification_df):,} rows")
+        else:
+            print(f"⚠️  Warning: Row count mismatch in saved file")
+            
+    except Exception as e:
+        print(f"❌ Error saving combined dataset: {e}")
+        sys.exit(1)
+
+def main():
+    """Main execution function."""
+    try:
+        # Combine all datasets
+        combined_df = combine_datasets()
+        
+        # Create output directory
+        output_dir = Path("scripts/claudesonnet4/version2/execution1/analysis_data")
+        
+        # Save combined dataset
+        save_combined_dataset(combined_df, output_dir)
+        
+        print("\n" + "=" * 60)
+        print("STEP 1 COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+        print(f"✅ Combined {len(combined_df):,} appointment records from 2013-2024")
+        print(f"✅ Output saved to: step1_combined_appointments.csv")
+        print(f"✅ Ready for Step 2: Key columns extraction")
+        
+    except KeyboardInterrupt:
+        print(f"\n❌ Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main execution: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

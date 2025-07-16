@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count the total number of appointments for each "org" in each year
+New Brunswick Government Appointments Analysis
+
+This script counts the total number of appointments (appointees) for each organization
+in each year to understand the size and scope of government appointments.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from typing import List, Dict, Any
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define file paths
+INPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+OUTPUT_PATH = Path("scripts/claudesonnet4/version2/execution9/analysis_data")
+INPUT_FILE = "step3_repeats_marked.csv"
+OUTPUT_FILE = "step4_appointment_counts.csv"
+
+def setup_directories():
+    """Create output directories if they don't exist"""
+    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created/verified output directory: {OUTPUT_PATH}")
+
+def validate_input_file() -> bool:
+    """Check if the input file exists and is readable"""
+    input_file_path = INPUT_PATH / INPUT_FILE
+    if not input_file_path.exists():
+        logger.error(f"Input file not found: {input_file_path}")
+        return False
+    if not input_file_path.is_file():
+        logger.error(f"Path is not a file: {input_file_path}")
+        return False
+    return True
+
+def load_marked_data() -> pd.DataFrame:
+    """
+    Load the dataset with marked reappointments from Step 3
+    
+    Returns:
+        DataFrame with marked reappointment data
+    """
+    input_file_path = INPUT_PATH / INPUT_FILE
+    
+    try:
+        logger.info(f"Loading marked reappointments dataset from: {input_file_path}")
+        df = pd.read_csv(input_file_path, encoding='utf-8')
+        
+        logger.info(f"Loaded dataset with {len(df)} records and {len(df.columns)} columns")
+        logger.info(f"Columns: {list(df.columns)}")
+        
+        # Validate required columns
+        required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading marked reappointments dataset: {str(e)}")
+        raise
+
+def validate_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Validate data quality before counting appointments
+    
+    Args:
+        df: Input DataFrame
+    
+    Returns:
+        Dictionary with data quality metrics
+    """
+    logger.info("Validating data quality for appointment counting")
+    
+    quality_metrics = {
+        'total_records': len(df),
+        'missing_org': df['org'].isnull().sum(),
+        'missing_year': df['year'].isnull().sum(),
+        'missing_name': df['name'].isnull().sum(),
+        'unique_orgs': df['org'].nunique(),
+        'unique_years': sorted(df['year'].unique()),
+        'year_range': f"{df['year'].min()}-{df['year'].max()}",
+        'duplicate_records': df.duplicated().sum()
+    }
+    
+    # Check for invalid years
+    valid_years = range(2013, 2025)
+    invalid_years = df[~df['year'].isin(valid_years)]['year'].unique()
+    quality_metrics['invalid_years'] = list(invalid_years)
+    
+    logger.info(f"Data quality validation completed:")
+    logger.info(f"  - Total records: {quality_metrics['total_records']:,}")
+    logger.info(f"  - Missing org: {quality_metrics['missing_org']}")
+    logger.info(f"  - Missing year: {quality_metrics['missing_year']}")
+    logger.info(f"  - Missing name: {quality_metrics['missing_name']}")
+    logger.info(f"  - Unique organizations: {quality_metrics['unique_orgs']:,}")
+    logger.info(f"  - Years covered: {quality_metrics['unique_years']}")
+    logger.info(f"  - Invalid years: {quality_metrics['invalid_years']}")
+    logger.info(f"  - Duplicate records: {quality_metrics['duplicate_records']}")
+    
+    return quality_metrics
+
+def clean_data_for_counting(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean data specifically for appointment counting
+    
+    Args:
+        df: Input DataFrame
+    
+    Returns:
+        Cleaned DataFrame ready for counting
+    """
+    logger.info("Cleaning data for appointment counting")
+    
+    # Create a copy to avoid modifying original
+    clean_df = df.copy()
+    
+    # Remove rows with missing essential data
+    before_count = len(clean_df)
+    clean_df = clean_df.dropna(subset=['org', 'year', 'name'])
+    after_count = len(clean_df)
+    
+    if before_count != after_count:
+        logger.info(f"Removed {before_count - after_count} rows with missing essential data")
+    
+    # Filter to valid years only
+    valid_years = range(2013, 2025)
+    before_count = len(clean_df)
+    clean_df = clean_df[clean_df['year'].isin(valid_years)]
+    after_count = len(clean_df)
+    
+    if before_count != after_count:
+        logger.info(f"Removed {before_count - after_count} rows with invalid years")
+    
+    # Clean organization names for consistent counting
+    clean_df['org'] = clean_df['org'].astype(str).str.strip()
+    
+    # Clean names for consistent counting
+    clean_df['name'] = clean_df['name'].astype(str).str.strip()
+    
+    # Remove any completely duplicate records
+    before_count = len(clean_df)
+    clean_df = clean_df.drop_duplicates()
+    after_count = len(clean_df)
+    
+    if before_count != after_count:
+        logger.info(f"Removed {before_count - after_count} duplicate records")
+    
+    logger.info(f"Data cleaning completed. Final records: {len(clean_df):,}")
+    
+    return clean_df
+
+def count_appointments_by_org_year(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Count total number of appointments for each organization in each year
+    
+    Args:
+        df: Cleaned DataFrame with appointment data
+    
+    Returns:
+        DataFrame with appointment counts by organization and year
+    """
+    logger.info("Counting appointments by organization and year")
+    
+    # Count unique appointments (names) per organization per year
+    # This ensures we don't double-count the same person in the same org in the same year
+    appointment_counts = (
+        df.groupby(['org', 'year'])['name']
+        .nunique()
+        .reset_index()
+        .rename(columns={'name': 'appointment_count'})
+    )
+    
+    # Sort by organization and year for better readability
+    appointment_counts = appointment_counts.sort_values(['org', 'year'])
+    
+    logger.info(f"Appointment counting completed. Generated {len(appointment_counts)} org-year combinations")
+    
+    return appointment_counts
+
+def generate_summary_statistics(df: pd.DataFrame, appointment_counts: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Generate summary statistics for appointment counts
+    
+    Args:
+        df: Original data
+        appointment_counts: Appointment counts by org and year
+    
+    Returns:
+        Dictionary with summary statistics
+    """
+    logger.info("Generating summary statistics")
+    
+    # Basic statistics
+    stats = {
+        'total_org_year_combinations': len(appointment_counts),
+        'unique_organizations': appointment_counts['org'].nunique(),
+        'years_covered': sorted(appointment_counts['year'].unique()),
+        'total_appointment_count_sum': appointment_counts['appointment_count'].sum(),
+        'avg_appointments_per_org_year': appointment_counts['appointment_count'].mean(),
+        'median_appointments_per_org_year': appointment_counts['appointment_count'].median(),
+        'max_appointments_single_org_year': appointment_counts['appointment_count'].max(),
+        'min_appointments_single_org_year': appointment_counts['appointment_count'].min()
+    }
+    
+    # Year-over-year totals
+    yearly_totals = appointment_counts.groupby('year')['appointment_count'].sum().to_dict()
+    stats['yearly_totals'] = yearly_totals
+    
+    # Top organizations by total appointments across all years
+    org_totals = appointment_counts.groupby('org')['appointment_count'].sum().sort_values(ascending=False)
+    stats['top_orgs_by_total_appointments'] = org_totals.head(10).to_dict()
+    
+    # Organizations with highest single-year appointment counts
+    max_single_year = appointment_counts.loc[appointment_counts['appointment_count'].idxmax()]
+    stats['highest_single_year'] = {
+        'org': max_single_year['org'],
+        'year': max_single_year['year'],
+        'count': max_single_year['appointment_count']
+    }
+    
+    # Organizations appearing in all years
+    orgs_per_year = appointment_counts.groupby('org')['year'].nunique()
+    total_years = len(stats['years_covered'])
+    orgs_all_years = orgs_per_year[orgs_per_year == total_years].index.tolist()
+    stats['orgs_in_all_years'] = orgs_all_years
+    stats['orgs_in_all_years_count'] = len(orgs_all_years)
+    
+    # Average growth rate calculation (if we have multiple years)
+    if len(stats['years_covered']) > 1:
+        first_year = min(stats['years_covered'])
+        last_year = max(stats['years_covered'])
+        first_year_total = yearly_totals.get(first_year, 0)
+        last_year_total = yearly_totals.get(last_year, 0)
+        
+        if first_year_total > 0:
+            total_growth_rate = ((last_year_total - first_year_total) / first_year_total) * 100
+            annual_growth_rate = total_growth_rate / (last_year - first_year)
+            stats['total_growth_rate'] = total_growth_rate
+            stats['annual_growth_rate'] = annual_growth_rate
+        else:
+            stats['total_growth_rate'] = None
+            stats['annual_growth_rate'] = None
+    
+    return stats
+
+def create_pivot_table(appointment_counts: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create a pivot table showing organizations as rows and years as columns
+    
+    Args:
+        appointment_counts: Appointment counts by org and year
+    
+    Returns:
+        Pivot table DataFrame
+    """
+    logger.info("Creating pivot table for better visualization")
+    
+    # Create pivot table
+    pivot_table = appointment_counts.pivot(index='org', columns='year', values='appointment_count')
+    
+    # Fill NaN values with 0 (organizations that had no appointments in certain years)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    # Add total column
+    pivot_table['Total'] = pivot_table.sum(axis=1)
+    
+    # Sort by total appointments (descending)
+    pivot_table = pivot_table.sort_values('Total', ascending=False)
+    
+    return pivot_table
+
+def save_results(appointment_counts: pd.DataFrame, pivot_table: pd.DataFrame, stats: Dict[str, Any]):
+    """
+    Save the appointment counts and generate comprehensive report
+    
+    Args:
+        appointment_counts: Appointment counts by org and year
+        pivot_table: Pivot table for visualization
+        stats: Summary statistics
+    """
+    output_file_path = OUTPUT_PATH / OUTPUT_FILE
+    
+    try:
+        # Save main appointment counts dataset
+        appointment_counts.to_csv(output_file_path, index=False, encoding='utf-8')
+        logger.info(f"Appointment counts dataset saved to: {output_file_path}")
+        
+        # Save pivot table
+        pivot_path = OUTPUT_PATH / "step4_appointment_counts_pivot.csv"
+        pivot_table.to_csv(pivot_path, encoding='utf-8')
+        logger.info(f"Appointment counts pivot table saved to: {pivot_path}")
+        
+        # Generate comprehensive report
+        report = f"""
+STEP 4 - EMPLOYEE COUNTS BY ORGANIZATION AND YEAR
+================================================
+
+Dataset Overview:
+- Total Org-Year Combinations: {stats['total_org_year_combinations']:,}
+- Unique Organizations: {stats['unique_organizations']:,}
+- Years Covered: {stats['years_covered']}
+- Total Appointment Appointments: {stats['total_appointment_count_sum']:,}
+
+Statistical Summary:
+- Average Appointments per Org-Year: {stats['avg_appointments_per_org_year']:.1f}
+- Median Appointments per Org-Year: {stats['median_appointments_per_org_year']:.1f}
+- Maximum Appointments (Single Org-Year): {stats['max_appointments_single_org_year']:,}
+- Minimum Appointments (Single Org-Year): {stats['min_appointments_single_org_year']:,}
+
+Yearly Totals:
+{chr(10).join([f"  {year}: {count:,} appointments" for year, count in stats['yearly_totals'].items()])}
+
+Top 10 Organizations by Total Appointments (All Years):
+{chr(10).join([f"  {org}: {count:,} total appointments" for org, count in stats['top_orgs_by_total_appointments'].items()])}
+
+Highest Single-Year Appointment Count:
+- Organization: {stats['highest_single_year']['org']}
+- Year: {stats['highest_single_year']['year']}
+- Appointment Count: {stats['highest_single_year']['count']:,}
+
+Organizations Present in All Years: {stats['orgs_in_all_years_count']:,}
+{chr(10).join([f"  - {org}" for org in stats['orgs_in_all_years'][:10]])}
+{'...' if len(stats['orgs_in_all_years']) > 10 else ''}
+
+Growth Analysis:
+{f"- Total Growth Rate ({min(stats['years_covered'])}-{max(stats['years_covered'])}): {stats['total_growth_rate']:.1f}%" if stats['total_growth_rate'] is not None else "- Growth rate calculation not available"}
+{f"- Average Annual Growth Rate: {stats['annual_growth_rate']:.1f}%" if stats['annual_growth_rate'] is not None else ""}
+
+Data Quality Notes:
+- Each appointment counted once per organization per year
+- Duplicate appointments within same org-year removed
+- Missing data cleaned and filtered
+- Ready for Step 5 reappointment analysis
+
+Output Files:
+- Main Dataset: {output_file_path}
+- Pivot Table: {pivot_path}
+"""
+        
+        # Save comprehensive report
+        report_path = OUTPUT_PATH / "step4_appointment_counts_report.txt"
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(report)
+        
+        logger.info(f"Comprehensive report saved to: {report_path}")
+        print(report)
+        
+    except Exception as e:
+        logger.error(f"Error saving results: {str(e)}")
+        raise
+
+def main():
+    """Main execution function"""
+    try:
+        logger.info("=" * 60)
+        logger.info("STEP 4: COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+        logger.info("=" * 60)
+        
+        # Setup directories
+        setup_directories()
+        
+        # Validate input file
+        if not validate_input_file():
+            logger.error("Input file validation failed")
+            sys.exit(1)
+        
+        # Load marked data
+        df = load_marked_data()
+        
+        # Validate data quality
+        quality_metrics = validate_data_quality(df)
+        
+        # Clean data for counting
+        clean_df = clean_data_for_counting(df)
+        
+        if clean_df.empty:
+            logger.error("No valid data remaining after cleaning")
+            sys.exit(1)
+        
+        # Count appointments by organization and year
+        appointment_counts = count_appointments_by_org_year(clean_df)
+        
+        # Generate summary statistics
+        stats = generate_summary_statistics(clean_df, appointment_counts)
+        
+        # Create pivot table for better visualization
+        pivot_table = create_pivot_table(appointment_counts)
+        
+        # Save results
+        save_results(appointment_counts, pivot_table, stats)
+        
+        logger.info("Step 4 completed successfully!")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Step 4 failed: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

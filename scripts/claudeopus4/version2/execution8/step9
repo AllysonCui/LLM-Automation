@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""
+Step 9: Linear regression analysis
+This script runs a comprehensive linear regression analysis on the annual 
+reappointment proportions to assess trend direction and significance.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import sys
+from datetime import datetime
+from scipy import stats
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_squared_error
+import statsmodels.api as sm
+from statsmodels.stats.diagnostic import het_breuschpagan
+from statsmodels.stats.stattools import durbin_watson
+
+# Define paths
+INPUT_DIR = Path("scripts/claudeopus4/version2/execution8/analysis_data")
+INPUT_FILE = INPUT_DIR / "step8_annual_proportions.csv"
+OUTPUT_FILE = INPUT_DIR / "step9_regression_results.txt"
+OUTPUT_PLOT = INPUT_DIR / "step9_regression_analysis.png"
+
+# Set style for plots
+try:
+    plt.style.use('seaborn-darkgrid')
+except:
+    plt.style.use('ggplot')  # Fallback style
+sns.set_palette("husl")
+
+def load_annual_proportions():
+    """Load the annual proportions dataset from step 8."""
+    try:
+        if not INPUT_FILE.exists():
+            print(f"✗ Error: Input file not found: {INPUT_FILE}")
+            return None
+        
+        print(f"Loading annual proportions from: {INPUT_FILE}")
+        df = pd.read_csv(INPUT_FILE, encoding='utf-8')
+        print(f"✓ Loaded dataset: {len(df):,} rows (years)")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading annual proportions: {e}")
+        return None
+
+def prepare_regression_data(df):
+    """Prepare data for regression analysis."""
+    print("\n" + "="*60)
+    print("PREPARING REGRESSION DATA")
+    print("="*60)
+    
+    # Extract relevant columns
+    years = df['year'].values
+    proportions = df['gov_wide_proportion_pct'].values
+    
+    # Create time index (0, 1, 2, ...) for regression
+    time_index = np.arange(len(years))
+    
+    # Check for missing values
+    missing_count = pd.isna(proportions).sum()
+    if missing_count > 0:
+        print(f"⚠ Warning: {missing_count} missing values in proportions")
+        # Remove missing values
+        valid_mask = ~pd.isna(proportions)
+        years = years[valid_mask]
+        proportions = proportions[valid_mask]
+        time_index = np.arange(len(years))
+    
+    print(f"\nData Summary:")
+    print(f"  - Years: {years.min()} to {years.max()}")
+    print(f"  - Number of observations: {len(years)}")
+    print(f"  - Proportion range: {proportions.min():.1f}% to {proportions.max():.1f}%")
+    print(f"  - Mean proportion: {proportions.mean():.1f}%")
+    print(f"  - Standard deviation: {proportions.std():.1f}%")
+    
+    return years, proportions, time_index
+
+def perform_simple_regression(years, proportions, time_index):
+    """Perform simple linear regression analysis."""
+    print("\n" + "="*60)
+    print("SIMPLE LINEAR REGRESSION")
+    print("="*60)
+    
+    # Using scipy.stats for basic regression
+    slope, intercept, r_value, p_value, std_err = stats.linregress(time_index, proportions)
+    
+    # Calculate predictions
+    predictions = slope * time_index + intercept
+    
+    # Calculate residuals
+    residuals = proportions - predictions
+    
+    # Calculate additional statistics
+    n = len(proportions)
+    dof = n - 2  # degrees of freedom
+    t_stat = slope / std_err
+    
+    # Confidence intervals for slope (95%)
+    t_critical = stats.t.ppf(0.975, dof)
+    slope_ci_lower = slope - t_critical * std_err
+    slope_ci_upper = slope + t_critical * std_err
+    
+    print(f"\nRegression Equation:")
+    print(f"  Proportion = {intercept:.3f} + {slope:.3f} × Year_Index")
+    print(f"  (where Year_Index starts at 0 for {years[0]})")
+    
+    print(f"\nSlope Analysis:")
+    print(f"  - Slope: {slope:.4f}% per year")
+    print(f"  - 95% Confidence Interval: [{slope_ci_lower:.4f}, {slope_ci_upper:.4f}]")
+    print(f"  - Standard Error: {std_err:.4f}")
+    print(f"  - t-statistic: {t_stat:.3f}")
+    
+    print(f"\nModel Fit:")
+    print(f"  - R-squared: {r_value**2:.4f}")
+    print(f"  - Correlation coefficient (r): {r_value:.4f}")
+    print(f"  - P-value: {p_value:.6f}")
+    
+    # Interpret results
+    print(f"\nInterpretation:")
+    if p_value < 0.001:
+        significance = "highly significant (p < 0.001)"
+    elif p_value < 0.01:
+        significance = "very significant (p < 0.01)"
+    elif p_value < 0.05:
+        significance = "significant (p < 0.05)"
+    else:
+        significance = "not significant (p ≥ 0.05)"
+    
+    print(f"  - Statistical significance: {significance}")
+    
+    if p_value < 0.05:
+        if slope > 0:
+            print(f"  - ✓ INCREASING TREND: Reappointment proportions are increasing")
+            print(f"      by an average of {slope:.3f}% per year")
+        else:
+            print(f"  - ✓ DECREASING TREND: Reappointment proportions are decreasing")
+            print(f"      by an average of {abs(slope):.3f}% per year")
+    else:
+        print(f"  - NO SIGNIFICANT TREND: The data does not show a statistically")
+        print(f"      significant linear trend over time")
+    
+    # Effect size
+    print(f"\nEffect Size:")
+    total_change = slope * (len(years) - 1)
+    print(f"  - Total change over period: {total_change:.2f} percentage points")
+    print(f"  - Average annual change: {slope:.3f} percentage points")
+    print(f"  - R² indicates that {r_value**2*100:.1f}% of variance is explained by time")
+    
+    return {
+        'slope': slope,
+        'intercept': intercept,
+        'r_value': r_value,
+        'p_value': p_value,
+        'std_err': std_err,
+        'predictions': predictions,
+        'residuals': residuals,
+        'slope_ci': (slope_ci_lower, slope_ci_upper)
+    }
+
+def perform_advanced_regression(years, proportions, time_index):
+    """Perform advanced regression analysis using statsmodels."""
+    print("\n" + "="*60)
+    print("ADVANCED REGRESSION ANALYSIS")
+    print("="*60)
+    
+    # Prepare data for statsmodels
+    X = sm.add_constant(time_index)  # Add intercept
+    y = proportions
+    
+    # Fit OLS model
+    model = sm.OLS(y, X)
+    results = model.fit()
+    
+    print("\nDetailed Regression Results:")
+    print(results.summary())
+    
+    # Diagnostic tests
+    print("\n" + "="*60)
+    print("REGRESSION DIAGNOSTICS")
+    print("="*60)
+    
+    # 1. Normality of residuals (Jarque-Bera test)
+    jb_stat, jb_pvalue = stats.jarque_bera(results.resid)
+    print(f"\n1. Normality Test (Jarque-Bera):")
+    print(f"   - Statistic: {jb_stat:.3f}")
+    print(f"   - P-value: {jb_pvalue:.4f}")
+    if jb_pvalue > 0.05:
+        print("   - ✓ Residuals appear to be normally distributed")
+    else:
+        print("   - ⚠ Residuals may not be normally distributed")
+    
+    # 2. Heteroscedasticity (Breusch-Pagan test)
+    bp_stat, bp_pvalue, _, _ = het_breuschpagan(results.resid, X)
+    print(f"\n2. Heteroscedasticity Test (Breusch-Pagan):")
+    print(f"   - Statistic: {bp_stat:.3f}")
+    print(f"   - P-value: {bp_pvalue:.4f}")
+    if bp_pvalue > 0.05:
+        print("   - ✓ No evidence of heteroscedasticity (constant variance)")
+    else:
+        print("   - ⚠ Evidence of heteroscedasticity (non-constant variance)")
+    
+    # 3. Autocorrelation (Durbin-Watson test)
+    dw_stat = durbin_watson(results.resid)
+    print(f"\n3. Autocorrelation Test (Durbin-Watson):")
+    print(f"   - Statistic: {dw_stat:.3f}")
+    if 1.5 <= dw_stat <= 2.5:
+        print("   - ✓ No strong evidence of autocorrelation")
+    else:
+        print("   - ⚠ Evidence of autocorrelation in residuals")
+    
+    # 4. Check for outliers
+    standardized_resid = results.resid / np.std(results.resid)
+    outliers = np.abs(standardized_resid) > 2.5
+    print(f"\n4. Outlier Detection:")
+    print(f"   - Number of potential outliers (|z| > 2.5): {outliers.sum()}")
+    if outliers.sum() > 0:
+        outlier_years = years[outliers]
+        print(f"   - Years with outliers: {outlier_years}")
+    
+    return results
+
+def calculate_predictions(regression_results, years, future_years=3):
+    """Calculate predictions and forecast future values."""
+    print("\n" + "="*60)
+    print("PREDICTIONS AND FORECASTING")
+    print("="*60)
+    
+    slope = regression_results['slope']
+    intercept = regression_results['intercept']
+    
+    # Historical predictions
+    print("\nHistorical Fit:")
+    print("Year | Actual | Predicted | Residual")
+    print("-" * 40)
+    
+    for i, (year, actual, pred) in enumerate(zip(years, 
+                                                  regression_results['predictions'], 
+                                                  regression_results['predictions'])):
+        residual = actual - pred
+        print(f"{int(year)} | {actual:.1f}% | {pred:.1f}% | {residual:+.1f}%")
+    
+    # Future predictions
+    if future_years > 0:
+        print(f"\nFuture Projections (next {future_years} years):")
+        print("Year | Projected Proportion | 95% Prediction Interval")
+        print("-" * 55)
+        
+        last_index = len(years) - 1
+        std_residual = np.std(regression_results['residuals'])
+        
+        for i in range(1, future_years + 1):
+            future_index = last_index + i
+            future_year = int(years[-1]) + i
+            prediction = intercept + slope * future_index
+            
+            # 95% prediction interval
+            margin = 1.96 * std_residual
+            lower_bound = max(0, prediction - margin)  # Can't be negative
+            upper_bound = min(100, prediction + margin)  # Can't exceed 100%
+            
+            print(f"{future_year} | {prediction:.1f}% | [{lower_bound:.1f}%, {upper_bound:.1f}%]")
+    
+    # Long-term implications
+    print("\nLong-term Implications:")
+    years_to_50 = (50 - regression_results['intercept']) / slope if slope != 0 else np.inf
+    years_to_75 = (75 - regression_results['intercept']) / slope if slope != 0 else np.inf
+    
+    if slope > 0:
+        if years_to_50 > 0 and years_to_50 < 100:
+            print(f"  - At current trend, 50% reappointment would be reached in year {int(years[0] + years_to_50)}")
+        if years_to_75 > 0 and years_to_75 < 100:
+            print(f"  - At current trend, 75% reappointment would be reached in year {int(years[0] + years_to_75)}")
+    elif slope < 0:
+        print(f"  - The decreasing trend suggests reappointment proportions will continue to decline")
+
+def create_comprehensive_plots(df, years, proportions, regression_results):
+    """Create comprehensive regression analysis plots."""
+    print("\n" + "="*60)
+    print("CREATING REGRESSION PLOTS")
+    print("="*60)
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=(16, 12))
+    
+    # Main regression plot
+    ax1 = plt.subplot(2, 2, 1)
+    ax1.scatter(years, proportions, s=100, alpha=0.7, label='Observed', color='blue')
+    ax1.plot(years, regression_results['predictions'], 'r-', linewidth=2, label='Regression Line')
+    
+    # Add confidence interval
+    std_err = regression_results['std_err']
+    n = len(years)
+    t_critical = stats.t.ppf(0.975, n-2)
+    margin = t_critical * std_err * np.sqrt(1/n + (np.arange(n) - np.mean(np.arange(n)))**2 / np.sum((np.arange(n) - np.mean(np.arange(n)))**2))
+    
+    ax1.fill_between(years, 
+                     regression_results['predictions'] - margin,
+                     regression_results['predictions'] + margin,
+                     alpha=0.2, color='red', label='95% Confidence Band')
+    
+    # Add equation
+    equation = f"y = {regression_results['intercept']:.2f} + {regression_results['slope']:.3f}x"
+    r2 = regression_results['r_value']**2
+    p_val = regression_results['p_value']
+    ax1.text(0.05, 0.95, f"{equation}\nR² = {r2:.3f}\np = {p_val:.4f}",
+             transform=ax1.transAxes, fontsize=10,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    ax1.set_xlabel('Year', fontsize=12)
+    ax1.set_ylabel('Reappointment Proportion (%)', fontsize=12)
+    ax1.set_title('Linear Regression: Reappointment Proportions Over Time', fontsize=14)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Residual plot
+    ax2 = plt.subplot(2, 2, 2)
+    residuals = regression_results['residuals']
+    ax2.scatter(years, residuals, s=60, alpha=0.7, color='green')
+    ax2.axhline(y=0, color='red', linestyle='--', linewidth=1)
+    ax2.set_xlabel('Year', fontsize=12)
+    ax2.set_ylabel('Residuals (%)', fontsize=12)
+    ax2.set_title('Residual Plot', fontsize=14)
+    ax2.grid(True, alpha=0.3)
+    
+    # Add residual statistics
+    ax2.text(0.05, 0.95, f"Mean: {np.mean(residuals):.3f}\nStd: {np.std(residuals):.3f}",
+             transform=ax2.transAxes, fontsize=10,
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+    
+    # Q-Q plot for normality
+    ax3 = plt.subplot(2, 2, 3)
+    stats.probplot(residuals, dist="norm", plot=ax3)
+    ax3.set_title('Q-Q Plot: Testing Normality of Residuals', fontsize=14)
+    ax3.grid(True, alpha=0.3)
+    
+    # Histogram of residuals
+    ax4 = plt.subplot(2, 2, 4)
+    n_bins = min(10, len(residuals))
+    ax4.hist(residuals, bins=n_bins, alpha=0.7, color='purple', edgecolor='black')
+    ax4.axvline(x=0, color='red', linestyle='--', linewidth=2)
+    
+    # Overlay normal distribution
+    mu, sigma = np.mean(residuals), np.std(residuals)
+    x = np.linspace(residuals.min(), residuals.max(), 100)
+    ax4.plot(x, len(residuals) * (residuals.max() - residuals.min()) / n_bins * 
+             stats.norm.pdf(x, mu, sigma), 'r-', linewidth=2, label='Normal')
+    
+    ax4.set_xlabel('Residuals (%)', fontsize=12)
+    ax4.set_ylabel('Frequency', fontsize=12)
+    ax4.set_title('Histogram of Residuals', fontsize=14)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    plt.suptitle('Comprehensive Regression Analysis: Reappointment Trends', fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    
+    # Save plot
+    print(f"\nSaving regression plots to: {OUTPUT_PLOT}")
+    plt.savefig(OUTPUT_PLOT, dpi=300, bbox_inches='tight')
+    print("✓ Plots saved successfully")
+    
+    # Close plot to free memory
+    plt.close()
+
+def save_regression_report(df, regression_results, advanced_results, output_file):
+    """Save comprehensive regression report to text file."""
+    print("\n" + "="*60)
+    print("SAVING REGRESSION REPORT")
+    print("="*60)
+    
+    with open(output_file, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("LINEAR REGRESSION ANALYSIS REPORT\n")
+        f.write("New Brunswick Government Reappointment Trends\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("="*80 + "\n\n")
+        
+        # Executive Summary
+        f.write("EXECUTIVE SUMMARY\n")
+        f.write("-"*40 + "\n")
+        
+        slope = regression_results['slope']
+        p_value = regression_results['p_value']
+        r_squared = regression_results['r_value']**2
+        
+        if p_value < 0.05:
+            if slope > 0:
+                trend = "INCREASING"
+                direction = "upward"
+            else:
+                trend = "DECREASING"
+                direction = "downward"
+            f.write(f"The analysis reveals a statistically significant {trend} trend in government-wide\n")
+            f.write(f"reappointment proportions over the study period. The {direction} trend shows an\n")
+            f.write(f"average change of {abs(slope):.3f}% per year (p = {p_value:.4f}).\n")
+        else:
+            f.write("The analysis does not reveal a statistically significant trend in government-wide\n")
+            f.write(f"reappointment proportions over the study period (p = {p_value:.4f}).\n")
+        
+        f.write(f"\nThe linear model explains {r_squared*100:.1f}% of the variance in reappointment proportions.\n")
+        
+        # Detailed Results
+        f.write("\n\nDETAILED REGRESSION RESULTS\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Regression Equation: y = {regression_results['intercept']:.3f} + {slope:.4f}x\n")
+        f.write(f"Slope: {slope:.4f}% per year\n")
+        f.write(f"95% CI for slope: [{regression_results['slope_ci'][0]:.4f}, {regression_results['slope_ci'][1]:.4f}]\n")
+        f.write(f"R-squared: {r_squared:.4f}\n")
+        f.write(f"P-value: {p_value:.6f}\n")
+        f.write(f"Standard Error: {regression_results['std_err']:.4f}\n")
+        
+        # Model Diagnostics
+        f.write("\n\nMODEL DIAGNOSTICS\n")
+        f.write("-"*40 + "\n")
+        f.write("1. Residual Analysis:\n")
+        f.write(f"   - Mean of residuals: {np.mean(regression_results['residuals']):.4f}\n")
+        f.write(f"   - Std of residuals: {np.std(regression_results['residuals']):.4f}\n")
+        f.write("\n2. Statistical Tests:\n")
+        f.write("   - See advanced regression output for detailed diagnostics\n")
+        
+        # Predictions
+        f.write("\n\nPREDICTIONS\n")
+        f.write("-"*40 + "\n")
+        f.write("Year-by-Year Fit:\n")
+        years = df['year'].values
+        proportions = df['gov_wide_proportion_pct'].values
+        predictions = regression_results['predictions']
+        
+        for year, actual, pred in zip(years, proportions, predictions):
+            f.write(f"{int(year)}: Actual = {actual:.1f}%, Predicted = {pred:.1f}%, Residual = {actual-pred:+.1f}%\n")
+        
+        # Research Question Answer
+        f.write("\n\nRESEARCH QUESTION ANSWER\n")
+        f.write("-"*40 + "\n")
+        f.write("Question: Is the reappointment trend increasing or declining over the past 12 years?\n\n")
+        
+        if p_value < 0.05:
+            if slope > 0:
+                f.write("Answer: The trend is STATISTICALLY SIGNIFICANTLY INCREASING.\n")
+                f.write(f"- The reappointment proportion increases by {slope:.3f}% per year on average.\n")
+                f.write(f"- Over the {len(years)}-year period, this represents a total increase of {slope*(len(years)-1):.1f} percentage points.\n")
+            else:
+                f.write("Answer: The trend is STATISTICALLY SIGNIFICANTLY DECREASING.\n")
+                f.write(f"- The reappointment proportion decreases by {abs(slope):.3f}% per year on average.\n")
+                f.write(f"- Over the {len(years)}-year period, this represents a total decrease of {abs(slope*(len(years)-1)):.1f} percentage points.\n")
+        else:
+            f.write("Answer: There is NO STATISTICALLY SIGNIFICANT TREND.\n")
+            f.write(f"- The apparent change of {slope:.3f}% per year is not statistically significant.\n")
+            f.write("- The data does not provide strong evidence for either an increasing or decreasing trend.\n")
+        
+        f.write(f"\nStatistical confidence: p-value = {p_value:.4f}\n")
+        f.write(f"Model reliability: R² = {r_squared:.3f} ({r_squared*100:.1f}% of variance explained)\n")
+        
+        # Advanced Results Summary
+        f.write("\n\nADVANCED REGRESSION OUTPUT\n")
+        f.write("-"*40 + "\n")
+        f.write(str(advanced_results.summary()))
+        
+    print(f"✓ Regression report saved to: {output_file}")
+
+def main():
+    """Main execution function."""
+    print("STEP 9: LINEAR REGRESSION ANALYSIS")
+    print("="*60)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load data
+    df = load_annual_proportions()
+    if df is None:
+        sys.exit(1)
+    
+    # Prepare regression data
+    years, proportions, time_index = prepare_regression_data(df)
+    
+    # Perform simple regression
+    regression_results = perform_simple_regression(years, proportions, time_index)
+    
+    # Perform advanced regression
+    advanced_results = perform_advanced_regression(years, proportions, time_index)
+    
+    # Calculate predictions
+    calculate_predictions(regression_results, years, future_years=3)
+    
+    # Create plots
+    create_comprehensive_plots(df, years, proportions, regression_results)
+    
+    # Save regression report
+    save_regression_report(df, regression_results, advanced_results, OUTPUT_FILE)
+    
+    # Final summary
+    print("\n" + "="*60)
+    print("FINAL RESEARCH QUESTION ANSWER")
+    print("="*60)
+    
+    print("\nBased on comprehensive linear regression analysis:")
+    
+    if regression_results['p_value'] < 0.05:
+        if regression_results['slope'] > 0:
+            print("\n✓ The reappointment trend is SIGNIFICANTLY INCREASING")
+            print(f"  - Annual increase: {regression_results['slope']:.3f}% per year")
+            print(f"  - Statistical significance: p = {regression_results['p_value']:.4f}")
+            print(f"  - Model fit: R² = {regression_results['r_value']**2:.3f}")
+        else:
+            print("\n✓ The reappointment trend is SIGNIFICANTLY DECREASING")
+            print(f"  - Annual decrease: {abs(regression_results['slope']):.3f}% per year")
+            print(f"  - Statistical significance: p = {regression_results['p_value']:.4f}")
+            print(f"  - Model fit: R² = {regression_results['r_value']**2:.3f}")
+    else:
+        print("\n○ The reappointment trend shows NO SIGNIFICANT CHANGE")
+        print(f"  - Observed change: {regression_results['slope']:.3f}% per year")
+        print(f"  - Not statistically significant: p = {regression_results['p_value']:.4f}")
+        print(f"  - Model fit: R² = {regression_results['r_value']**2:.3f}")
+    
+    print("\n" + "="*60)
+    print("STEP 9 COMPLETED SUCCESSFULLY")
+    print(f"Output files:")
+    print(f"  - Regression report: {OUTPUT_FILE}")
+    print(f"  - Regression plots: {OUTPUT_PLOT}")
+    print(f"\nEnd time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
+
+if __name__ == "__main__":
+    main()

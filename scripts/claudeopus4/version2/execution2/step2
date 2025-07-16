@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract and retain key columns
+This script extracts the key columns needed for analysis:
+- reappointed: whether the person was reappointed
+- name: appointee name
+- position: appointment position
+- org: organization/branch
+- year: extracted from data_year or date columns
+
+Author: Data Analysis Script
+Date: 2025-07-05
+Input: analysis_data/step1_combined_appointments.csv
+Output: analysis_data/step2_key_columns_data.csv
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+from datetime import datetime
+
+def setup_paths():
+    """Setup input and output paths."""
+    script_dir = Path(__file__).parent
+    analysis_dir = script_dir / "analysis_data"
+    
+    input_file = analysis_dir / "step1_combined_appointments.csv"
+    output_file = analysis_dir / "step2_key_columns_data.csv"
+    
+    return input_file, output_file, analysis_dir
+
+def extract_year_from_dates(df):
+    """Extract year from various date columns if data_year is not available."""
+    year_extracted = False
+    
+    # Priority order for date columns to extract year from
+    date_columns = ['posted_date', 'start_date', 'end_date']
+    
+    for date_col in date_columns:
+        if date_col in df.columns and df[date_col].notna().any():
+            try:
+                # Convert to datetime and extract year
+                df['temp_year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year
+                
+                # Fill missing years with extracted years
+                if 'year' not in df.columns:
+                    df['year'] = df['temp_year']
+                else:
+                    df['year'] = df['year'].fillna(df['temp_year'])
+                
+                year_extracted = True
+                print(f"  ✓ Extracted year from '{date_col}' column")
+                
+                # Drop temporary column
+                df.drop('temp_year', axis=1, inplace=True)
+                
+                # If we successfully extracted years, no need to try other columns
+                if df['year'].notna().sum() > len(df) * 0.5:  # If more than 50% have years
+                    break
+                    
+            except Exception as e:
+                print(f"  ⚠ Could not extract year from '{date_col}': {str(e)}")
+    
+    return df, year_extracted
+
+def standardize_reappointed_column(df):
+    """Standardize the reappointed column to boolean values."""
+    if 'reappointed' not in df.columns:
+        print("  ⚠ WARNING: 'reappointed' column not found!")
+        df['reappointed'] = np.nan
+        return df
+    
+    # Get current data type and unique values
+    dtype = df['reappointed'].dtype
+    unique_vals = df['reappointed'].dropna().unique()
+    
+    print(f"\n  Standardizing 'reappointed' column:")
+    print(f"    - Current dtype: {dtype}")
+    print(f"    - Unique values: {unique_vals}")
+    
+    # If already boolean, no conversion needed
+    if dtype == 'bool':
+        print("    - Already in boolean format")
+        return df
+    
+    # Create a mapping for common text values to boolean
+    true_values = ['true', 'yes', '1', 't', 'y', 'reappointed', 'TRUE', 'True', 'YES', 'Yes']
+    false_values = ['false', 'no', '0', 'f', 'n', 'FALSE', 'False', 'NO', 'No']
+    
+    # Convert to string and lower case for comparison
+    df['reappointed_str'] = df['reappointed'].astype(str).str.lower().str.strip()
+    
+    # Map to boolean
+    df.loc[df['reappointed_str'].isin(true_values), 'reappointed_bool'] = True
+    df.loc[df['reappointed_str'].isin(false_values), 'reappointed_bool'] = False
+    
+    # Count conversions
+    converted_true = df['reappointed_bool'].eq(True).sum()
+    converted_false = df['reappointed_bool'].eq(False).sum()
+    not_converted = df['reappointed_bool'].isna().sum() - df['reappointed'].isna().sum()
+    
+    print(f"    - Converted to True: {converted_true:,}")
+    print(f"    - Converted to False: {converted_false:,}")
+    print(f"    - Could not convert: {not_converted:,}")
+    
+    # Replace original column with boolean version
+    df['reappointed'] = df['reappointed_bool']
+    df.drop(['reappointed_str', 'reappointed_bool'], axis=1, inplace=True)
+    
+    return df
+
+def clean_text_columns(df, columns):
+    """Clean text columns by removing extra whitespace and standardizing."""
+    for col in columns:
+        if col in df.columns:
+            # Remove leading/trailing whitespace
+            df[col] = df[col].astype(str).str.strip()
+            
+            # Replace multiple spaces with single space
+            df[col] = df[col].str.replace(r'\s+', ' ', regex=True)
+            
+            # Replace 'nan' string with actual NaN
+            df[col] = df[col].replace(['nan', 'None', 'NaN', ''], np.nan)
+            
+            print(f"  ✓ Cleaned text column: {col}")
+    
+    return df
+
+def extract_key_columns(input_file, output_file):
+    """Extract and process key columns from the combined dataset."""
+    print("\n" + "="*60)
+    print("STEP 2: EXTRACTING KEY COLUMNS")
+    print("="*60)
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"\n✗ ERROR: Input file not found: {input_file}")
+        print("Please run Step 1 first to create the combined dataset.")
+        return False
+    
+    # Load the combined dataset
+    print(f"\nLoading data from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8', low_memory=False)
+        print(f"✓ Loaded {len(df):,} rows and {len(df.columns)} columns")
+    except Exception as e:
+        print(f"✗ ERROR loading file: {str(e)}")
+        return False
+    
+    # Define required columns
+    required_columns = ['reappointed', 'name', 'position', 'org']
+    year_column = 'year'
+    
+    # Check which columns are available
+    print("\nChecking column availability:")
+    missing_columns = []
+    for col in required_columns:
+        if col in df.columns:
+            non_null = df[col].notna().sum()
+            print(f"  ✓ {col}: found ({non_null:,} non-null values)")
+        else:
+            print(f"  ✗ {col}: NOT FOUND")
+            missing_columns.append(col)
+    
+    # Handle year column
+    if 'data_year' in df.columns:
+        df['year'] = df['data_year']
+        print(f"  ✓ year: created from 'data_year' column")
+    else:
+        print(f"  ⚠ 'data_year' column not found, attempting to extract from date columns...")
+        df, year_extracted = extract_year_from_dates(df)
+        if not year_extracted:
+            print(f"  ✗ ERROR: Could not extract year information")
+            return False
+    
+    # Create a new dataframe with only the key columns
+    all_columns = required_columns + ['year']
+    available_columns = [col for col in all_columns if col in df.columns or col == 'year']
+    
+    print(f"\nExtracting {len(available_columns)} columns: {', '.join(available_columns)}")
+    key_df = df[available_columns].copy()
+    
+    # Standardize the reappointed column
+    key_df = standardize_reappointed_column(key_df)
+    
+    # Clean text columns
+    text_columns = ['name', 'position', 'org']
+    key_df = clean_text_columns(key_df, text_columns)
+    
+    # Data quality report before saving
+    print("\n" + "-"*60)
+    print("DATA QUALITY REPORT:")
+    print("-"*60)
+    
+    for col in key_df.columns:
+        null_count = key_df[col].isna().sum()
+        null_pct = (null_count / len(key_df)) * 100
+        print(f"{col}:")
+        print(f"  - Non-null values: {len(key_df) - null_count:,} ({100 - null_pct:.1f}%)")
+        print(f"  - Null values: {null_count:,} ({null_pct:.1f}%)")
+        
+        if col == 'reappointed' and key_df[col].dtype == 'bool':
+            value_counts = key_df[col].value_counts()
+            print(f"  - True (reappointed): {value_counts.get(True, 0):,}")
+            print(f"  - False (not reappointed): {value_counts.get(False, 0):,}")
+        elif col == 'year':
+            print(f"  - Year range: {key_df[col].min():.0f} - {key_df[col].max():.0f}")
+        elif col == 'org':
+            print(f"  - Unique organizations: {key_df[col].nunique():,}")
+    
+    # Remove rows where ALL key columns are null
+    before_rows = len(key_df)
+    key_df = key_df.dropna(how='all')
+    after_rows = len(key_df)
+    if before_rows > after_rows:
+        print(f"\n✓ Removed {before_rows - after_rows:,} completely empty rows")
+    
+    # Save the extracted data
+    print(f"\n→ Saving extracted data to: {output_file}")
+    key_df.to_csv(output_file, index=False, encoding='utf-8')
+    
+    # Final summary
+    print("\n" + "-"*60)
+    print("EXTRACTION SUMMARY:")
+    print("-"*60)
+    print(f"Input rows: {len(df):,}")
+    print(f"Output rows: {len(key_df):,}")
+    print(f"Columns extracted: {len(key_df.columns)}")
+    print(f"Years covered: {key_df['year'].min():.0f} - {key_df['year'].max():.0f}")
+    
+    # Calculate data completeness
+    total_cells = len(key_df) * len(key_df.columns)
+    non_null_cells = key_df.notna().sum().sum()
+    completeness = (non_null_cells / total_cells) * 100
+    print(f"Overall data completeness: {completeness:.1f}%")
+    
+    # Warn about critical missing data
+    if key_df['reappointed'].isna().all():
+        print("\n⚠ WARNING: All 'reappointed' values are missing!")
+        print("This will significantly impact the analysis.")
+    
+    if key_df['org'].isna().sum() > len(key_df) * 0.5:
+        print("\n⚠ WARNING: More than 50% of 'org' values are missing!")
+        print("This may affect the ability to analyze by government branch.")
+    
+    print("\n✓ Step 2 completed successfully!")
+    print(f"✓ Output saved to: {output_file}")
+    print("="*60)
+    
+    return True
+
+def main():
+    """Main execution function."""
+    try:
+        # Setup paths
+        input_file, output_file, analysis_dir = setup_paths()
+        
+        # Ensure analysis directory exists
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Run the extraction process
+        success = extract_key_columns(input_file, output_file)
+        
+        if success:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"\n✗ CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

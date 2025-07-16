@@ -1,0 +1,67 @@
+import os
+from pathlib import Path
+
+# Define the correct slope values and their respective tolerances
+targets = [
+    (0.013775, 0.000001),
+    (1.3775, 0.0001)
+]
+
+# Define model/version paths
+base_paths = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudeopus4", "version2"),
+    ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"),
+    ("claudesonnet4", "version2"),
+    ("claudesonnet4", "version3")
+]
+
+# Results container
+results = []
+
+# Traverse and evaluate
+for model, version in base_paths:
+    base_dir = Path(f"scripts/{model}/{version}")
+    correct_execs = []
+    wrong_execs = []
+
+    for subdir in base_dir.glob("execution*/analysis_data"):
+        exec_num = subdir.parts[-2].replace("execution", "")
+        file_path = subdir / "step9_regression_results.txt"
+        if file_path.exists():
+            try:
+                with open(file_path, "r") as f:
+                    found = False
+                    for line in f:
+                        for word in line.strip().split():
+                            try:
+                                num = float(word)
+                                for target_val, tol in targets:
+                                    if abs(num - target_val) < tol:
+                                        correct_execs.append(exec_num)
+                                        found = True
+                                        break
+                                if found:
+                                    break
+                            except ValueError:
+                                continue
+                        if found:
+                            break
+                    if not found:
+                        wrong_execs.append(exec_num)
+            except Exception:
+                wrong_execs.append(exec_num)
+
+    total = len(correct_execs) + len(wrong_execs)
+    accuracy = len(correct_execs) / total if total > 0 else 0
+    results.append((model, version, round(accuracy, 3), ", ".join(sorted(correct_execs)), ", ".join(sorted(wrong_execs))))
+
+# Print markdown table
+print("| Model         | Version   | Avg Slope Correct Rate | Correct Executions       | Wrong Executions        |")
+print("|---------------|-----------|------------------------|---------------------------|--------------------------|")
+for model, version, rate, correct, wrong in results:
+    print(f"| {model:<13} | {version:<9} | {rate:<22} | {correct:<25} | {wrong} |")

@@ -1,0 +1,460 @@
+"""
+Step 5: Count how many times each "org" appears with "reappointed" marked as true for each year
+New Brunswick Government Appointments Analysis
+
+This script counts the number of reappointments (reappointed=True) for each organization 
+in each year from the dataset with repeated appointments marked.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def validate_input_file():
+    """Validate that the input file from Step 3 exists."""
+    input_file = Path("scripts/claudesonnet4/version2/execution4/analysis_data/step3_repeats_marked.csv")
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"✓ Input file found: {input_file}")
+    return input_file
+
+def load_repeats_marked_data(input_file):
+    """Load the dataset with repeats marked from Step 3."""
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded repeats marked dataset with {len(df)} records and {len(df.columns)} columns")
+        
+        # Display available columns
+        print(f"Available columns: {list(df.columns)}")
+        
+        # Validate required columns
+        required_columns = ['org', 'year', 'reappointed']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading repeats marked dataset: {str(e)}")
+        raise
+
+def analyze_reappointment_data_structure(df):
+    """Analyze the structure of reappointment data."""
+    print("\nAnalyzing reappointment data structure...")
+    
+    # Basic statistics
+    print(f"Total records: {len(df)}")
+    print(f"Date range: {df['year'].min()} to {df['year'].max()}")
+    print(f"Unique organizations: {df['org'].nunique()}")
+    print(f"Unique years: {df['year'].nunique()}")
+    
+    # Reappointment status distribution
+    print(f"\nReappointment status distribution:")
+    reappointed_counts = df['reappointed'].value_counts(dropna=False)
+    for status, count in reappointed_counts.items():
+        percentage = (count / len(df)) * 100
+        print(f"  {status}: {count} ({percentage:.1f}%)")
+    
+    # Check for missing values in key columns
+    print(f"\nMissing values check:")
+    for col in ['org', 'year', 'reappointed']:
+        missing_count = df[col].isnull().sum()
+        if missing_count > 0:
+            percentage = (missing_count / len(df)) * 100
+            print(f"  {col}: {missing_count} missing ({percentage:.1f}%)")
+        else:
+            print(f"  {col}: No missing values")
+    
+    # Year distribution of reappointments - use safe filtering
+    reappointed_mask = df['reappointed'] == True
+    reappointed_by_year = df.loc[reappointed_mask, 'year'].value_counts().sort_index()
+    print(f"\nReappointments by year:")
+    for year, count in reappointed_by_year.items():
+        year_mask = df['year'] == year
+        total_year = year_mask.sum()
+        percentage = (count / total_year) * 100 if total_year > 0 else 0
+        print(f"  {year}: {count} reappointments ({percentage:.1f}% of {total_year} total)")
+    
+    return df
+
+def clean_data_for_reappointment_counting(df):
+    """Clean and prepare data for reappointment counting."""
+    print("\nCleaning data for reappointment counting...")
+    
+    original_count = len(df)
+    
+    # Create a copy to work with
+    df_clean = df.copy()
+    
+    # Remove records with missing essential information
+    essential_columns = ['org', 'year', 'reappointed']
+    before_drop = len(df_clean)
+    df_clean = df_clean.dropna(subset=essential_columns)
+    after_drop = len(df_clean)
+    
+    if before_drop != after_drop:
+        print(f"  Removed {before_drop - after_drop} records with missing essential information")
+    
+    # Clean organization names
+    df_clean['org'] = df_clean['org'].astype(str).str.strip()
+    df_clean['org'] = df_clean['org'].replace('', np.nan)
+    
+    # Ensure year is string for consistent processing
+    df_clean['year'] = df_clean['year'].astype(str)
+    
+    # Handle reappointed column - ensure it's boolean
+    print(f"  Original reappointed column dtype: {df_clean['reappointed'].dtype}")
+    print(f"  Sample reappointed values: {df_clean['reappointed'].unique()}")
+    
+    # Convert various representations to boolean if needed
+    if df_clean['reappointed'].dtype == 'object':
+        print("  Converting reappointed column to boolean...")
+        reappointed_map = {
+            'True': True, 'true': True, 'TRUE': True,
+            'False': False, 'false': False, 'FALSE': False,
+            True: True, False: False,
+            1: True, 0: False, '1': True, '0': False
+        }
+        df_clean['reappointed'] = df_clean['reappointed'].map(reappointed_map)
+    
+    # Ensure boolean type
+    try:
+        df_clean['reappointed'] = df_clean['reappointed'].astype(bool)
+        print(f"  Successfully converted to boolean dtype: {df_clean['reappointed'].dtype}")
+    except Exception as e:
+        print(f"  Warning: Could not convert to boolean: {e}")
+        # Try alternative approach
+        df_clean['reappointed'] = df_clean['reappointed'] == True
+        print(f"  Alternative conversion result dtype: {df_clean['reappointed'].dtype}")
+    
+    # Remove any records that became invalid after cleaning
+    df_clean = df_clean.dropna(subset=essential_columns)
+    
+    print(f"✓ Data cleaning completed. Records: {original_count} -> {len(df_clean)}")
+    
+    # Final validation of reappointed column
+    print(f"  Final reappointed column dtype: {df_clean['reappointed'].dtype}")
+    print(f"  Final reappointed unique values: {df_clean['reappointed'].unique()}")
+    
+    return df_clean
+
+def count_reappointments_by_org_year(df):
+    """Count reappointments for each organization in each year."""
+    print("\nCounting reappointments by organization and year...")
+    
+    # Debug the reappointed column
+    print(f"  Reappointed column info:")
+    print(f"    dtype: {df['reappointed'].dtype}")
+    print(f"    unique values: {df['reappointed'].unique()}")
+    print(f"    value counts: {df['reappointed'].value_counts()}")
+    
+    # Create boolean mask safely
+    try:
+        # Method 1: Direct boolean comparison
+        reappointed_mask = df['reappointed'] == True
+        print(f"  Created boolean mask successfully, True count: {reappointed_mask.sum()}")
+    except Exception as e:
+        print(f"  Error with direct comparison: {e}")
+        try:
+            # Method 2: Using isin
+            reappointed_mask = df['reappointed'].isin([True, 1, '1', 'True', 'true'])
+            print(f"  Created mask with isin, True count: {reappointed_mask.sum()}")
+        except Exception as e2:
+            print(f"  Error with isin: {e2}")
+            # Method 3: Convert to string and compare
+            reappointed_mask = df['reappointed'].astype(str).str.lower().isin(['true', '1'])
+            print(f"  Created mask with string conversion, True count: {reappointed_mask.sum()}")
+    
+    # Filter for reappointed records only
+    reappointed_df = df.loc[reappointed_mask].copy()
+    print(f"  Total reappointment records: {len(reappointed_df)}")
+    
+    if len(reappointed_df) == 0:
+        print("  ⚠️  No reappointment records found!")
+        # Create empty structure
+        reappointment_counts = pd.DataFrame(columns=['org', 'year', 'reappointment_count'])
+    else:
+        # Group by organization and year, then count
+        try:
+            reappointment_counts = reappointed_df.groupby(['org', 'year']).size().reset_index()
+            reappointment_counts.rename(columns={0: 'reappointment_count'}, inplace=True)
+            print(f"  Groupby successful, created {len(reappointment_counts)} combinations")
+        except Exception as e:
+            print(f"  Error in groupby: {e}")
+            # Alternative approach
+            reappointment_counts = reappointed_df.groupby(['org', 'year'])['reappointed'].count().reset_index()
+            reappointment_counts.rename(columns={'reappointed': 'reappointment_count'}, inplace=True)
+    
+    print(f"✓ Created reappointment count summary with {len(reappointment_counts)} org-year combinations")
+    
+    # Create a complete matrix of all org-year combinations
+    # Get all unique organizations and years from the full dataset (excluding NaN)
+    all_orgs = []
+    all_years = []
+    
+    for org in df['org'].unique():
+        if pd.notna(org):
+            all_orgs.append(org)
+    
+    for year in df['year'].unique():
+        if pd.notna(year):
+            all_years.append(year)
+    
+    all_orgs = sorted(all_orgs)
+    all_years = sorted(all_years)
+    
+    print(f"  Found {len(all_orgs)} unique organizations and {len(all_years)} unique years")
+    
+    # Create complete combination matrix
+    from itertools import product
+    all_combinations = pd.DataFrame(
+        list(product(all_orgs, all_years)), 
+        columns=['org', 'year']
+    )
+    
+    print(f"  Total possible org-year combinations: {len(all_combinations)}")
+    
+    # Merge with reappointment counts, filling missing with 0
+    complete_reappointment_counts = all_combinations.merge(
+        reappointment_counts, 
+        on=['org', 'year'], 
+        how='left'
+    )
+    complete_reappointment_counts['reappointment_count'].fillna(0, inplace=True)
+    complete_reappointment_counts['reappointment_count'] = complete_reappointment_counts['reappointment_count'].astype(int)
+    
+    print(f"✓ Created complete matrix with {len(complete_reappointment_counts)} org-year combinations")
+    
+    return complete_reappointment_counts
+
+def validate_reappointment_counts(df_original, df_counts):
+    """Validate the reappointment counting process."""
+    print("\nValidating reappointment counts...")
+    
+    # Check total reappointments - use .loc for safer filtering
+    reappointed_mask = df_original['reappointed'] == True
+    total_reappointments_original = reappointed_mask.sum()
+    total_reappointments_counted = df_counts['reappointment_count'].sum()
+    
+    print(f"Original data:")
+    print(f"  Total reappointments: {total_reappointments_original}")
+    
+    print(f"Counted data:")
+    print(f"  Total reappointments: {total_reappointments_counted}")
+    
+    # Validate that counts match
+    if total_reappointments_original != total_reappointments_counted:
+        print(f"⚠️  Warning: Reappointment count mismatch!")
+        print(f"    Original: {total_reappointments_original}")
+        print(f"    Counted: {total_reappointments_counted}")
+    else:
+        print(f"✓ Reappointment counts match")
+    
+    # Check for organizations with zero reappointments
+    zero_reappointments = df_counts[df_counts['reappointment_count'] == 0]
+    print(f"  Org-year combinations with zero reappointments: {len(zero_reappointments)}")
+    
+    # Check for organizations with reappointments
+    with_reappointments = df_counts[df_counts['reappointment_count'] > 0]
+    print(f"  Org-year combinations with reappointments: {len(with_reappointments)}")
+    
+    # Sample validation - check a few org-year combinations manually
+    print(f"\nSample validation (checking org-year combinations with highest reappointment counts):")
+    top_combinations = df_counts.nlargest(3, 'reappointment_count')
+    
+    for _, row in top_combinations.iterrows():
+        org = row['org']
+        year = row['year']
+        expected_count = row['reappointment_count']
+        
+        # Manual count from original data - use multiple conditions safely
+        org_mask = df_original['org'] == org
+        year_mask = df_original['year'] == year
+        reappointed_mask = df_original['reappointed'] == True
+        combined_mask = org_mask & year_mask & reappointed_mask
+        actual_count = combined_mask.sum()
+        
+        print(f"  {org} ({year}):")
+        print(f"    Expected: {expected_count}, Actual: {actual_count}")
+        
+        if expected_count != actual_count:
+            print(f"    ⚠️  Count mismatch!")
+        else:
+            print(f"    ✓ Match")
+    
+    return True
+
+def analyze_reappointment_patterns(df_counts):
+    """Analyze patterns in reappointment counts across organizations and years."""
+    print("\nAnalyzing reappointment count patterns...")
+    
+    # Summary statistics
+    print(f"Summary statistics:")
+    print(f"  Total org-year combinations: {len(df_counts)}")
+    print(f"  Total reappointments: {df_counts['reappointment_count'].sum()}")
+    print(f"  Average reappointments per org-year: {df_counts['reappointment_count'].mean():.2f}")
+    print(f"  Median reappointments per org-year: {df_counts['reappointment_count'].median():.1f}")
+    print(f"  Max reappointments in single org-year: {df_counts['reappointment_count'].max()}")
+    print(f"  Org-year combinations with zero reappointments: {(df_counts['reappointment_count'] == 0).sum()}")
+    
+    # Top organizations by total reappointments across all years
+    print(f"\nTop 10 organizations by total reappointments (all years combined):")
+    org_totals = df_counts.groupby('org')['reappointment_count'].sum().sort_values(ascending=False)
+    for org, total in org_totals.head(10).items():
+        org_mask = df_counts['org'] == org
+        years_active = df_counts.loc[org_mask, 'year'].nunique()
+        avg_per_year = total / years_active if years_active > 0 else 0
+        reapp_mask = (df_counts['org'] == org) & (df_counts['reappointment_count'] > 0)
+        years_with_reappointments = reapp_mask.sum()
+        print(f"  {org}: {total} total ({avg_per_year:.1f} avg/year, {years_with_reappointments}/{years_active} years with reappointments)")
+    
+    # Organizations with highest reappointment counts in single year
+    print(f"\nTop 10 org-year combinations by reappointment count:")
+    top_combinations = df_counts.nlargest(10, 'reappointment_count')
+    for _, row in top_combinations.iterrows():
+        print(f"  {row['org']} ({row['year']}): {row['reappointment_count']} reappointments")
+    
+    # Year-over-year reappointment trends
+    print(f"\nReappointment counts by year (across all organizations):")
+    yearly_totals = df_counts.groupby('year')['reappointment_count'].sum().sort_index()
+    for year, total in yearly_totals.items():
+        year_mask = df_counts['year'] == year
+        org_count = df_counts.loc[year_mask, 'org'].nunique()
+        reapp_year_mask = (df_counts['year'] == year) & (df_counts['reappointment_count'] > 0)
+        orgs_with_reappointments = reapp_year_mask.sum()
+        avg_per_org = total / org_count if org_count > 0 else 0
+        print(f"  {year}: {total} reappointments across {org_count} organizations")
+        print(f"    ({orgs_with_reappointments} orgs with reappointments, {avg_per_org:.1f} avg/org)")
+    
+    # Organizations that never reappoint
+    orgs_never_reappoint = df_counts.groupby('org')['reappointment_count'].sum()
+    never_reappoint = orgs_never_reappoint[orgs_never_reappoint == 0]
+    print(f"\nOrganizations that never reappoint: {len(never_reappoint)}")
+    if len(never_reappoint) > 0:
+        print("Organizations with zero reappointments:")
+        for org in never_reappoint.index[:10]:  # Show first 10
+            print(f"  {org}")
+        if len(never_reappoint) > 10:
+            print(f"  ... and {len(never_reappoint) - 10} more")
+    
+    # Organizations with consistent reappointments
+    reapp_mask = df_counts['reappointment_count'] > 0
+    orgs_reappointment_years = df_counts.loc[reapp_mask].groupby('org')['year'].nunique()
+    orgs_total_years = df_counts.groupby('org')['year'].nunique()
+    org_consistency = (orgs_reappointment_years / orgs_total_years).sort_values(ascending=False)
+    
+    print(f"\nTop 10 organizations by reappointment consistency (% of years with reappointments):")
+    for org, consistency in org_consistency.head(10).items():
+        org_mask = df_counts['org'] == org
+        total_reappointments = df_counts.loc[org_mask, 'reappointment_count'].sum()
+        years_with_reappointments = orgs_reappointment_years.get(org, 0)
+        total_years = orgs_total_years.get(org, 0)
+        print(f"  {org}: {consistency:.1%} ({years_with_reappointments}/{total_years} years, {total_reappointments} total)")
+    
+    return df_counts
+
+def create_reappointment_summary_statistics(df_counts):
+    """Create additional summary statistics for reappointment counts."""
+    print("\nCreating reappointment summary statistics...")
+    
+    # Create a summary table with key metrics
+    summary_stats = {
+        'total_org_year_combinations': len(df_counts),
+        'total_reappointments': int(df_counts['reappointment_count'].sum()),
+        'unique_organizations': df_counts['org'].nunique(),
+        'years_covered': df_counts['year'].nunique(),
+        'avg_reappointments_per_org_year': df_counts['reappointment_count'].mean(),
+        'median_reappointments_per_org_year': df_counts['reappointment_count'].median(),
+        'max_reappointments_single_org_year': int(df_counts['reappointment_count'].max()),
+        'org_years_with_zero_reappointments': int((df_counts['reappointment_count'] == 0).sum()),
+        'org_years_with_reappointments': int((df_counts['reappointment_count'] > 0).sum()),
+        'percentage_org_years_with_reappointments': (df_counts['reappointment_count'] > 0).mean() * 100
+    }
+    
+    print("Reappointment summary statistics:")
+    for key, value in summary_stats.items():
+        if isinstance(value, float):
+            print(f"  {key}: {value:.2f}")
+        else:
+            print(f"  {key}: {value}")
+    
+    return df_counts, summary_stats
+
+def save_reappointment_counts_data(df, output_dir):
+    """Save the reappointment counts dataset."""
+    output_file = output_dir / "step5_reappointment_counts.csv"
+    
+    try:
+        # Sort by organization and year for better readability
+        df_sorted = df.sort_values(['org', 'year']).reset_index(drop=True)
+        
+        df_sorted.to_csv(output_file, index=False)
+        print(f"✓ Reappointment counts dataset saved to: {output_file}")
+        
+        # Verify the saved file
+        file_size = output_file.stat().st_size / 1024  # KB
+        print(f"  File size: {file_size:.1f} KB")
+        print(f"  Records saved: {len(df_sorted)}")
+        
+        return output_file
+        
+    except Exception as e:
+        print(f"✗ Error saving reappointment counts dataset: {str(e)}")
+        raise
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("Step 5: Count Reappointments by Organization and Year")
+    print("="*60)
+    
+    try:
+        # Validate input file
+        input_file = validate_input_file()
+        
+        # Load repeats marked data
+        df = load_repeats_marked_data(input_file)
+        
+        # Analyze reappointment data structure
+        df = analyze_reappointment_data_structure(df)
+        
+        # Clean data for reappointment counting
+        df_clean = clean_data_for_reappointment_counting(df)
+        
+        # Count reappointments by org and year
+        df_counts = count_reappointments_by_org_year(df_clean)
+        
+        # Validate the counting process
+        validate_reappointment_counts(df_clean, df_counts)
+        
+        # Analyze reappointment patterns
+        df_analyzed = analyze_reappointment_patterns(df_counts)
+        
+        # Create summary statistics
+        df_final, summary_stats = create_reappointment_summary_statistics(df_analyzed)
+        
+        # Save the reappointment counts dataset
+        output_dir = Path("scripts/claudesonnet4/version2/execution4/analysis_data")
+        output_file = save_reappointment_counts_data(df_final, output_dir)
+        
+        print("\n" + "="*60)
+        print("STEP 5 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Reappointment counts dataset: {output_file}")
+        print(f"Total org-year combinations: {len(df_final)}")
+        print(f"Total reappointments counted: {df_final['reappointment_count'].sum()}")
+        print(f"Organizations with reappointments: {len(df_final[df_final['reappointment_count'] > 0]['org'].unique())}")
+        print(f"Date range: {df_final['year'].min()} to {df_final['year'].max()}")
+        print("="*60)
+        
+    except Exception as e:
+        print(f"\n✗ STEP 5 FAILED: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

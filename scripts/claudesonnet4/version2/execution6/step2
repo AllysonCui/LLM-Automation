@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+Extracts and retains key columns from the combined appointments dataset:
+"reappointed", "name", "position", "org", and "year".
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution6/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output directory ready: {output_dir}")
+    return output_dir
+
+def load_combined_data(input_file):
+    """Load the combined dataset from step 1."""
+    try:
+        logger.info(f"Loading combined dataset from: {input_file}")
+        
+        if not input_file.exists():
+            logger.error(f"Input file not found: {input_file}")
+            return None
+        
+        df = pd.read_csv(input_file, encoding='utf-8')
+        
+        if df.empty:
+            logger.error("Combined dataset is empty")
+            return None
+            
+        logger.info(f"Loaded combined dataset: {df.shape}")
+        logger.info(f"Available columns: {list(df.columns)}")
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading combined dataset: {str(e)}")
+        return None
+
+def identify_year_column(df):
+    """Identify the year column from available columns."""
+    possible_year_columns = ['data_year', 'year', 'posted_date', 'start_date']
+    
+    for col in possible_year_columns:
+        if col in df.columns:
+            logger.info(f"Found year column: {col}")
+            return col
+    
+    logger.warning("No year column found in standard locations")
+    return None
+
+def extract_year_from_date(date_str):
+    """Extract year from date string, handling various formats."""
+    if pd.isna(date_str):
+        return None
+    
+    try:
+        # Try to parse as datetime and extract year
+        date_obj = pd.to_datetime(date_str, errors='coerce')
+        if pd.notna(date_obj):
+            return date_obj.year
+        
+        # If direct parsing fails, try to extract 4-digit year
+        import re
+        year_match = re.search(r'\b(20\d{2})\b', str(date_str))
+        if year_match:
+            return int(year_match.group(1))
+            
+    except Exception as e:
+        logger.debug(f"Error parsing date '{date_str}': {str(e)}")
+    
+    return None
+
+def create_year_column(df):
+    """Create a standardized year column."""
+    logger.info("Creating standardized year column...")
+    
+    # First, try to use existing year column
+    year_col = identify_year_column(df)
+    
+    if year_col and year_col == 'data_year':
+        # Use data_year directly if available
+        df['year'] = df['data_year']
+        logger.info("Using 'data_year' column as year")
+        
+    elif year_col and year_col in ['year']:
+        # Year column already exists
+        logger.info("Using existing 'year' column")
+        
+    else:
+        # Try to extract year from date columns
+        logger.info("Attempting to extract year from date columns...")
+        
+        date_columns = ['posted_date', 'start_date', 'end_date']
+        df['year'] = None
+        
+        for date_col in date_columns:
+            if date_col in df.columns:
+                logger.info(f"Extracting years from {date_col}")
+                
+                # Apply year extraction
+                years = df[date_col].apply(extract_year_from_date)
+                
+                # Fill missing years
+                df['year'] = df['year'].fillna(years)
+                
+                # Check how many years we've extracted
+                non_null_years = df['year'].notna().sum()
+                logger.info(f"Extracted {non_null_years} years from {date_col}")
+                
+                if non_null_years > 0:
+                    break
+    
+    # Validate year values
+    if 'year' in df.columns:
+        year_counts = df['year'].value_counts().sort_index()
+        logger.info(f"Year distribution: {dict(year_counts)}")
+        
+        # Check for reasonable year range
+        min_year = df['year'].min()
+        max_year = df['year'].max()
+        
+        if pd.notna(min_year) and pd.notna(max_year):
+            if min_year < 2013 or max_year > 2024:
+                logger.warning(f"Year range outside expected bounds: {min_year}-{max_year}")
+    
+    return df
+
+def standardize_reappointed_column(df):
+    """Standardize the reappointed column to boolean values."""
+    logger.info("Standardizing reappointed column...")
+    
+    if 'reappointed' not in df.columns:
+        logger.error("'reappointed' column not found in dataset")
+        return df
+    
+    # Check current values
+    unique_values = df['reappointed'].value_counts(dropna=False)
+    logger.info(f"Current reappointed values: {dict(unique_values)}")
+    
+    # Convert to boolean
+    # Handle various representations of True/False
+    def convert_to_boolean(value):
+        if pd.isna(value):
+            return False  # Assume not reappointed if missing
+        
+        value_str = str(value).lower().strip()
+        
+        if value_str in ['true', '1', 'yes', 'y', 'reappointed']:
+            return True
+        elif value_str in ['false', '0', 'no', 'n', 'new', 'not reappointed']:
+            return False
+        else:
+            # Log unexpected values
+            logger.debug(f"Unexpected reappointed value: {value}")
+            return False
+    
+    df['reappointed'] = df['reappointed'].apply(convert_to_boolean)
+    
+    # Report conversion results
+    reappointed_counts = df['reappointed'].value_counts()
+    logger.info(f"Standardized reappointed values: {dict(reappointed_counts)}")
+    
+    return df
+
+def clean_text_columns(df):
+    """Clean and standardize text columns."""
+    logger.info("Cleaning text columns...")
+    
+    text_columns = ['name', 'position', 'org']
+    
+    for col in text_columns:
+        if col in df.columns:
+            original_null_count = df[col].isna().sum()
+            
+            # Strip whitespace and handle empty strings
+            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].replace('', np.nan)
+            df[col] = df[col].replace('nan', np.nan)
+            
+            # Report cleaning results
+            new_null_count = df[col].isna().sum()
+            logger.info(f"Column '{col}': {original_null_count} -> {new_null_count} null values after cleaning")
+    
+    return df
+
+def extract_key_columns():
+    """Main function to extract key columns from combined dataset."""
+    logger.info("Starting Step 2: Extracting key columns...")
+    
+    # Setup directories
+    output_dir = setup_directories()
+    
+    # Define input and output paths
+    input_file = output_dir / "step1_combined_appointments.csv"
+    output_file = output_dir / "step2_key_columns_data.csv"
+    
+    # Load combined data
+    df = load_combined_data(input_file)
+    if df is None:
+        logger.error("Failed to load combined dataset")
+        sys.exit(1)
+    
+    # Create standardized year column
+    df = create_year_column(df)
+    
+    # Standardize reappointed column
+    df = standardize_reappointed_column(df)
+    
+    # Clean text columns
+    df = clean_text_columns(df)
+    
+    # Define key columns to extract
+    key_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    # Check which key columns are available
+    available_columns = []
+    missing_columns = []
+    
+    for col in key_columns:
+        if col in df.columns:
+            available_columns.append(col)
+        else:
+            missing_columns.append(col)
+    
+    if missing_columns:
+        logger.error(f"Missing key columns: {missing_columns}")
+        sys.exit(1)
+    
+    logger.info(f"All key columns available: {available_columns}")
+    
+    # Extract key columns
+    key_data = df[key_columns].copy()
+    
+    # Data quality analysis
+    logger.info("Performing data quality analysis on key columns...")
+    
+    for col in key_columns:
+        null_count = key_data[col].isna().sum()
+        null_percentage = (null_count / len(key_data)) * 100
+        
+        if col == 'reappointed':
+            true_count = key_data[col].sum()
+            false_count = len(key_data) - true_count
+            logger.info(f"  {col}: {null_count} null ({null_percentage:.1f}%), {true_count} True, {false_count} False")
+        else:
+            logger.info(f"  {col}: {null_count} null values ({null_percentage:.1f}%)")
+    
+    # Remove rows with critical missing data
+    logger.info("Removing rows with critical missing data...")
+    
+    # We need at least name, org, and year for meaningful analysis
+    critical_columns = ['name', 'org', 'year']
+    
+    before_count = len(key_data)
+    key_data = key_data.dropna(subset=critical_columns)
+    after_count = len(key_data)
+    
+    removed_count = before_count - after_count
+    logger.info(f"Removed {removed_count} rows with missing critical data")
+    logger.info(f"Final dataset size: {after_count} rows")
+    
+    # Validate year range
+    year_range = key_data['year'].agg(['min', 'max'])
+    logger.info(f"Year range in final dataset: {year_range['min']:.0f} to {year_range['max']:.0f}")
+    
+    # Report organization distribution
+    org_counts = key_data['org'].value_counts()
+    logger.info(f"Top 10 organizations by appointment count:")
+    for org, count in org_counts.head(10).items():
+        logger.info(f"  {org}: {count} appointments")
+    
+    # Report reappointment statistics
+    reappointed_by_year = key_data.groupby('year')['reappointed'].agg(['count', 'sum', 'mean'])
+    logger.info("Reappointment statistics by year:")
+    for year, stats in reappointed_by_year.iterrows():
+        rate = stats['mean'] * 100
+        logger.info(f"  {year:.0f}: {stats['sum']:.0f}/{stats['count']:.0f} reappointed ({rate:.1f}%)")
+    
+    # Save key columns dataset
+    try:
+        key_data.to_csv(output_file, index=False, encoding='utf-8')
+        logger.info(f"Successfully saved key columns dataset to: {output_file}")
+        
+    except Exception as e:
+        logger.error(f"Error saving key columns dataset: {str(e)}")
+        sys.exit(1)
+    
+    # Summary statistics
+    logger.info("=== STEP 2 SUMMARY ===")
+    logger.info(f"Key columns extracted: {key_columns}")
+    logger.info(f"Final dataset shape: {key_data.shape}")
+    logger.info(f"Records with complete data: {len(key_data):,}")
+    logger.info(f"Total reappointments: {key_data['reappointed'].sum():,}")
+    logger.info(f"Overall reappointment rate: {key_data['reappointed'].mean()*100:.1f}%")
+    logger.info(f"Organizations covered: {key_data['org'].nunique()}")
+    logger.info(f"Output file: {output_file}")
+    logger.info("Step 2 completed successfully!")
+    
+    return key_data
+
+if __name__ == "__main__":
+    try:
+        key_data = extract_key_columns()
+        print("\n" + "="*50)
+        print("STEP 2: KEY COLUMNS EXTRACTION COMPLETE")
+        print("="*50)
+        print(f"Extracted {len(key_data):,} records with key columns")
+        print(f"Overall reappointment rate: {key_data['reappointed'].mean()*100:.1f}%")
+        print(f"Organizations: {key_data['org'].nunique()}")
+        print("Ready for Step 3: Repeat analysis")
+        
+    except KeyboardInterrupt:
+        logger.info("Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {str(e)}")
+        sys.exit(1)

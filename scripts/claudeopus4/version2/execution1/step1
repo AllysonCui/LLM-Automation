@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets
+This script combines appointment data from 2013-2024 into a single CSV file.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def combine_appointment_datasets():
+    """
+    Combines 12 years of appointment data (2013-2024) into a single CSV file.
+    """
+    
+    # Define paths
+    raw_data_path = Path("raw_data")
+    output_path = Path("scripts/claudeopus4/version2/execution1/analysis_data")
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory created/verified: {output_path}")
+    
+    # Initialize list to store all dataframes
+    all_dataframes = []
+    
+    # Define years to process
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    # Track statistics for validation
+    total_rows = 0
+    files_processed = 0
+    missing_files = []
+    
+    print("\n" + "="*60)
+    print("STEP 1: COMBINING APPOINTMENT DATASETS")
+    print("="*60 + "\n")
+    
+    # Process each year's file
+    for year in years:
+        filename = f"appointments_{year}.csv"
+        filepath = raw_data_path / filename
+        
+        try:
+            # Check if file exists
+            if not filepath.exists():
+                print(f"⚠️  Warning: {filename} not found in {raw_data_path}")
+                missing_files.append(filename)
+                continue
+            
+            # Read the CSV file
+            print(f"📄 Reading {filename}...", end="")
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Add year column for tracking
+            df['source_year'] = year
+            
+            # Print basic statistics for this file
+            rows = len(df)
+            cols = len(df.columns)
+            print(f" ✓ ({rows} rows, {cols} columns)")
+            
+            # Track column names for consistency checking
+            if files_processed == 0:
+                expected_columns = set(df.columns)
+                print(f"\nExpected columns from first file ({cols} total):")
+                for col in sorted(df.columns):
+                    print(f"  - {col}")
+                print()
+            else:
+                # Check for column consistency
+                current_columns = set(df.columns)
+                missing_cols = expected_columns - current_columns
+                extra_cols = current_columns - expected_columns
+                
+                if missing_cols:
+                    print(f"  ⚠️  Missing columns: {missing_cols}")
+                if extra_cols:
+                    print(f"  ⚠️  Extra columns: {extra_cols}")
+            
+            # Append to list
+            all_dataframes.append(df)
+            total_rows += rows
+            files_processed += 1
+            
+        except Exception as e:
+            print(f"\n❌ Error reading {filename}: {str(e)}")
+            continue
+    
+    # Check if we have any data to combine
+    if not all_dataframes:
+        print("\n❌ ERROR: No data files were successfully loaded!")
+        sys.exit(1)
+    
+    print(f"\n📊 Summary of files processed:")
+    print(f"  - Files successfully read: {files_processed}/{len(years)}")
+    print(f"  - Total rows before combining: {total_rows}")
+    if missing_files:
+        print(f"  - Missing files: {', '.join(missing_files)}")
+    
+    # Combine all dataframes
+    print("\n🔄 Combining all dataframes...")
+    combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
+    
+    # Validate combined data
+    print(f"\n✅ Combined dataset statistics:")
+    print(f"  - Total rows: {len(combined_df)}")
+    print(f"  - Total columns: {len(combined_df.columns)}")
+    print(f"  - Years covered: {combined_df['source_year'].min()} - {combined_df['source_year'].max()}")
+    
+    # Check for data integrity
+    print(f"\n🔍 Data integrity checks:")
+    
+    # Check for duplicate columns (from concatenation)
+    duplicate_cols = combined_df.columns[combined_df.columns.duplicated()].tolist()
+    if duplicate_cols:
+        print(f"  ⚠️  Warning: Duplicate columns found: {duplicate_cols}")
+    else:
+        print(f"  ✓ No duplicate columns")
+    
+    # Check for missing values summary
+    missing_summary = combined_df.isnull().sum()
+    cols_with_missing = missing_summary[missing_summary > 0]
+    if len(cols_with_missing) > 0:
+        print(f"  ℹ️  Columns with missing values:")
+        for col, count in cols_with_missing.items():
+            pct = (count / len(combined_df)) * 100
+            print(f"    - {col}: {count} ({pct:.1f}%)")
+    else:
+        print(f"  ✓ No missing values found")
+    
+    # Display column data types
+    print(f"\n📋 Column data types:")
+    for col, dtype in combined_df.dtypes.items():
+        print(f"  - {col}: {dtype}")
+    
+    # Save the combined dataset
+    output_file = output_path / "step1_combined_appointments.csv"
+    print(f"\n💾 Saving combined dataset to: {output_file}")
+    combined_df.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"✅ File saved successfully!")
+    
+    # Final summary
+    print(f"\n" + "="*60)
+    print(f"STEP 1 COMPLETED SUCCESSFULLY")
+    print(f"="*60)
+    print(f"Combined dataset saved with {len(combined_df)} total appointments")
+    print(f"from {files_processed} years of data.\n")
+    
+    return combined_df
+
+if __name__ == "__main__":
+    try:
+        # Run the combination process
+        combined_data = combine_appointment_datasets()
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

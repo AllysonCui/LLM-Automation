@@ -1,0 +1,562 @@
+"""
+Step 8: Compute the government-wide reappointment proportion for each year
+New Brunswick Government Appointments Analysis
+
+This script computes the overall government-wide reappointment proportion for each year
+by aggregating data across all organizations and creates visualizations to show trends.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import sys
+import warnings
+from scipy import stats
+
+# Suppress matplotlib warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+
+def validate_input_file():
+    """Validate that the input file from Step 6 exists."""
+    input_file = Path("scripts/claudesonnet4/version2/execution4/analysis_data/step6_reappointment_rates.csv")
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"✓ Input file found: {input_file}")
+    return input_file
+
+def load_reappointment_rates(input_file):
+    """Load the reappointment rates dataset from Step 6."""
+    try:
+        df = pd.read_csv(input_file)
+        print(f"✓ Loaded reappointment rates with {len(df)} records and {len(df.columns)} columns")
+        
+        # Display available columns
+        print(f"Available columns: {list(df.columns)}")
+        
+        # Validate required columns
+        required_columns = ['org', 'year', 'appointment_count', 'reappointment_count']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        return df
+        
+    except Exception as e:
+        print(f"✗ Error loading reappointment rates dataset: {str(e)}")
+        raise
+
+def analyze_input_data_structure(df):
+    """Analyze the structure of the input data for annual proportion calculation."""
+    print("\nAnalyzing input data structure...")
+    
+    # Basic statistics
+    print(f"Total org-year combinations: {len(df)}")
+    print(f"Date range: {df['year'].min()} to {df['year'].max()}")
+    print(f"Unique organizations: {df['org'].nunique()}")
+    print(f"Unique years: {df['year'].nunique()}")
+    
+    # Check for missing values
+    print(f"\nMissing values check:")
+    for col in ['org', 'year', 'appointment_count', 'reappointment_count']:
+        missing_count = df[col].isnull().sum()
+        if missing_count > 0:
+            percentage = (missing_count / len(df)) * 100
+            print(f"  {col}: {missing_count} missing ({percentage:.1f}%)")
+        else:
+            print(f"  {col}: No missing values")
+    
+    # Summary by year
+    print(f"\nData summary by year:")
+    yearly_summary = df.groupby('year').agg({
+        'org': 'nunique',
+        'appointment_count': 'sum',
+        'reappointment_count': 'sum'
+    }).rename(columns={'org': 'organizations'})
+    
+    for year, row in yearly_summary.iterrows():
+        proportion = (row['reappointment_count'] / row['appointment_count'] * 100) if row['appointment_count'] > 0 else 0
+        print(f"  {year}: {row['organizations']} orgs, {row['appointment_count']} appointments, "
+              f"{row['reappointment_count']} reappointments ({proportion:.1f}%)")
+    
+    return df
+
+def clean_data_for_annual_analysis(df):
+    """Clean and prepare data for annual proportion calculation."""
+    print("\nCleaning data for annual proportion analysis...")
+    
+    original_count = len(df)
+    
+    # Create a copy to work with
+    df_clean = df.copy()
+    
+    # Remove records with missing essential information
+    essential_columns = ['year', 'appointment_count', 'reappointment_count']
+    before_drop = len(df_clean)
+    df_clean = df_clean.dropna(subset=essential_columns)
+    after_drop = len(df_clean)
+    
+    if before_drop != after_drop:
+        print(f"  Removed {before_drop - after_drop} records with missing essential information")
+    
+    # Ensure numeric columns are properly typed
+    df_clean['appointment_count'] = pd.to_numeric(df_clean['appointment_count'], errors='coerce')
+    df_clean['reappointment_count'] = pd.to_numeric(df_clean['reappointment_count'], errors='coerce')
+    
+    # Remove any records that couldn't be converted to numeric
+    numeric_issues = df_clean[['appointment_count', 'reappointment_count']].isnull().any(axis=1).sum()
+    if numeric_issues > 0:
+        print(f"  Removed {numeric_issues} records with non-numeric appointment/reappointment counts")
+        df_clean = df_clean.dropna(subset=['appointment_count', 'reappointment_count'])
+    
+    # Ensure year is string for consistent processing
+    df_clean['year'] = df_clean['year'].astype(str)
+    
+    # Validate that counts are non-negative
+    negative_appointments = (df_clean['appointment_count'] < 0).sum()
+    negative_reappointments = (df_clean['reappointment_count'] < 0).sum()
+    
+    if negative_appointments > 0:
+        print(f"  Warning: {negative_appointments} records with negative appointment counts")
+        df_clean = df_clean[df_clean['appointment_count'] >= 0]
+    
+    if negative_reappointments > 0:
+        print(f"  Warning: {negative_reappointments} records with negative reappointment counts")
+        df_clean = df_clean[df_clean['reappointment_count'] >= 0]
+    
+    print(f"✓ Data cleaning completed. Records: {original_count} -> {len(df_clean)}")
+    
+    return df_clean
+
+def compute_annual_proportions(df):
+    """Compute government-wide reappointment proportions for each year."""
+    print("\nComputing government-wide annual reappointment proportions...")
+    
+    # Group by year and sum across all organizations
+    annual_totals = df.groupby('year').agg({
+        'appointment_count': 'sum',
+        'reappointment_count': 'sum',
+        'org': 'nunique'
+    }).rename(columns={'org': 'organizations_active'})
+    
+    # Calculate annual proportions
+    annual_totals['reappointment_proportion'] = np.where(
+        annual_totals['appointment_count'] > 0,
+        annual_totals['reappointment_count'] / annual_totals['appointment_count'],
+        0.0
+    )
+    
+    # Calculate as percentage for easier interpretation
+    annual_totals['reappointment_proportion_percent'] = annual_totals['reappointment_proportion'] * 100
+    
+    # Round to reasonable precision
+    annual_totals['reappointment_proportion'] = annual_totals['reappointment_proportion'].round(4)
+    annual_totals['reappointment_proportion_percent'] = annual_totals['reappointment_proportion_percent'].round(2)
+    
+    # Reset index to make year a column
+    annual_proportions = annual_totals.reset_index()
+    
+    print(f"✓ Computed annual proportions for {len(annual_proportions)} years")
+    
+    # Display the results
+    print(f"\nGovernment-wide annual reappointment proportions:")
+    for _, row in annual_proportions.iterrows():
+        print(f"  {row['year']}: {row['reappointment_proportion_percent']:.2f}% "
+              f"({row['reappointment_count']} reapp / {row['appointment_count']} emp, {row['organizations_active']} orgs)")
+    
+    return annual_proportions
+
+def analyze_annual_trends(df_annual):
+    """Analyze trends in annual reappointment proportions."""
+    print("\nAnalyzing trends in annual reappointment proportions...")
+    
+    # Basic statistics
+    print(f"Annual proportion statistics:")
+    print(f"  Mean proportion: {df_annual['reappointment_proportion_percent'].mean():.2f}%")
+    print(f"  Median proportion: {df_annual['reappointment_proportion_percent'].median():.2f}%")
+    print(f"  Min proportion: {df_annual['reappointment_proportion_percent'].min():.2f}% "
+          f"(Year: {df_annual.loc[df_annual['reappointment_proportion_percent'].idxmin(), 'year']})")
+    print(f"  Max proportion: {df_annual['reappointment_proportion_percent'].max():.2f}% "
+          f"(Year: {df_annual.loc[df_annual['reappointment_proportion_percent'].idxmax(), 'year']})")
+    print(f"  Standard deviation: {df_annual['reappointment_proportion_percent'].std():.2f}%")
+    
+    # Trend analysis
+    years_numeric = pd.to_numeric(df_annual['year'])
+    
+    # Calculate correlation with time
+    time_correlation = years_numeric.corr(df_annual['reappointment_proportion_percent'])
+    print(f"\nTrend analysis:")
+    print(f"  Correlation with time: {time_correlation:.3f}")
+    
+    if time_correlation > 0.3:
+        trend_direction = "increasing"
+    elif time_correlation < -0.3:
+        trend_direction = "decreasing"
+    else:
+        trend_direction = "stable"
+    
+    print(f"  Overall trend: {trend_direction}")
+    
+    # Linear regression for trend
+    slope, intercept, r_value, p_value, std_err = stats.linregress(years_numeric, df_annual['reappointment_proportion_percent'])
+    print(f"  Linear trend slope: {slope:.3f}% per year")
+    print(f"  R-squared: {r_value**2:.3f}")
+    print(f"  P-value: {p_value:.3f}")
+    
+    if p_value < 0.05:
+        significance = "statistically significant"
+    else:
+        significance = "not statistically significant"
+    print(f"  Trend significance: {significance}")
+    
+    # Year-over-year changes
+    print(f"\nYear-over-year changes:")
+    df_annual_sorted = df_annual.sort_values('year').reset_index(drop=True)
+    
+    for i in range(1, len(df_annual_sorted)):
+        current_year = df_annual_sorted.iloc[i]
+        previous_year = df_annual_sorted.iloc[i-1]
+        
+        change = current_year['reappointment_proportion_percent'] - previous_year['reappointment_proportion_percent']
+        change_direction = "↑" if change > 0 else "↓" if change < 0 else "→"
+        
+        print(f"  {previous_year['year']} → {current_year['year']}: {change:+.2f}% {change_direction}")
+    
+    # Identify periods of increase/decrease
+    print(f"\nPeriod analysis:")
+    increases = 0
+    decreases = 0
+    stable = 0
+    
+    for i in range(1, len(df_annual_sorted)):
+        change = df_annual_sorted.iloc[i]['reappointment_proportion_percent'] - df_annual_sorted.iloc[i-1]['reappointment_proportion_percent']
+        if change > 0.5:  # More than 0.5% increase
+            increases += 1
+        elif change < -0.5:  # More than 0.5% decrease
+            decreases += 1
+        else:
+            stable += 1
+    
+    total_transitions = increases + decreases + stable
+    print(f"  Periods of increase (>0.5%): {increases} ({increases/total_transitions*100:.1f}%)")
+    print(f"  Periods of decrease (>0.5%): {decreases} ({decreases/total_transitions*100:.1f}%)")
+    print(f"  Stable periods (±0.5%): {stable} ({stable/total_transitions*100:.1f}%)")
+    
+    return df_annual
+
+def create_annual_proportions_visualization(df_annual, output_dir):
+    """Create comprehensive visualization of annual reappointment proportions."""
+    print("\nCreating visualization of annual reappointment proportions...")
+    
+    try:
+        # Set up the plotting style
+        plt.style.use('default')
+        sns.set_palette("husl")
+        
+        # Create figure with subplots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle('New Brunswick Government: Annual Reappointment Proportions (2013-2024)', 
+                     fontsize=16, fontweight='bold', y=0.98)
+        
+        # Convert year to numeric for plotting
+        df_plot = df_annual.copy()
+        df_plot['year_num'] = pd.to_numeric(df_plot['year'])
+        
+        # Plot 1: Time series of annual proportions
+        ax1.plot(df_plot['year_num'], df_plot['reappointment_proportion_percent'], 
+                marker='o', linewidth=3, markersize=8, color='#2E86AB', label='Annual Proportion')
+        
+        # Add trend line
+        z = np.polyfit(df_plot['year_num'], df_plot['reappointment_proportion_percent'], 1)
+        p = np.poly1d(z)
+        ax1.plot(df_plot['year_num'], p(df_plot['year_num']), "--", alpha=0.8, color='red', linewidth=2, label='Trend Line')
+        
+        ax1.set_xlabel('Year', fontweight='bold')
+        ax1.set_ylabel('Government-wide Reappointment Proportion (%)', fontweight='bold')
+        ax1.set_title('Annual Reappointment Proportions Over Time', fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xticks(df_plot['year_num'])
+        ax1.set_xticklabels(df_plot['year'], rotation=45)
+        ax1.legend()
+        
+        # Add value labels on points
+        for _, row in df_plot.iterrows():
+            ax1.annotate(f"{row['reappointment_proportion_percent']:.1f}%", 
+                        (row['year_num'], row['reappointment_proportion_percent']),
+                        textcoords="offset points", xytext=(0,10), ha='center', fontsize=9)
+        
+        # Plot 2: Bar chart of annual proportions
+        colors = plt.cm.viridis(np.linspace(0, 1, len(df_plot)))
+        bars = ax2.bar(df_plot['year'], df_plot['reappointment_proportion_percent'], color=colors, alpha=0.8, edgecolor='black')
+        ax2.set_xlabel('Year', fontweight='bold')
+        ax2.set_ylabel('Reappointment Proportion (%)', fontweight='bold')
+        ax2.set_title('Annual Reappointment Proportions (Bar Chart)', fontweight='bold')
+        ax2.set_xticklabels(df_plot['year'], rotation=45)
+        
+        # Add value labels on bars
+        for bar, value in zip(bars, df_plot['reappointment_proportion_percent']):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
+                    f'{value:.1f}%', ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        # Plot 3: Total appointments and reappointments over time
+        ax3_twin = ax3.twinx()
+        
+        line1 = ax3.plot(df_plot['year_num'], df_plot['appointment_count'], 
+                        marker='s', linewidth=2, markersize=6, color='blue', label='Total Appointments')
+        line2 = ax3_twin.plot(df_plot['year_num'], df_plot['reappointment_count'], 
+                             marker='^', linewidth=2, markersize=6, color='orange', label='Total Reappointments')
+        
+        ax3.set_xlabel('Year', fontweight='bold')
+        ax3.set_ylabel('Total Appointments', fontweight='bold', color='blue')
+        ax3_twin.set_ylabel('Total Reappointments', fontweight='bold', color='orange')
+        ax3.set_title('Total Appointments vs Reappointments', fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+        ax3.set_xticks(df_plot['year_num'])
+        ax3.set_xticklabels(df_plot['year'], rotation=45)
+        
+        # Combine legends
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax3.legend(lines, labels, loc='upper left')
+        
+        # Plot 4: Year-over-year changes
+        df_changes = df_plot.sort_values('year_num').reset_index(drop=True)
+        changes = df_changes['reappointment_proportion_percent'].diff().dropna()
+        change_years = df_changes['year_num'][1:]
+        
+        colors_change = ['green' if x > 0 else 'red' if x < 0 else 'gray' for x in changes]
+        bars_change = ax4.bar(change_years, changes, color=colors_change, alpha=0.7, edgecolor='black')
+        ax4.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        ax4.set_xlabel('Year', fontweight='bold')
+        ax4.set_ylabel('Change in Proportion (% points)', fontweight='bold')
+        ax4.set_title('Year-over-Year Changes in Reappointment Proportion', fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        ax4.set_xticks(change_years)
+        ax4.set_xticklabels(df_changes['year'][1:], rotation=45)
+        
+        # Add value labels on change bars
+        for bar, value in zip(bars_change, changes):
+            if abs(value) > 0.1:  # Only label significant changes
+                ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + (0.1 if value > 0 else -0.3),
+                        f'{value:+.1f}', ha='center', va='bottom' if value > 0 else 'top', 
+                        fontweight='bold', fontsize=9)
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save the plot
+        output_file = output_dir / "step8_annual_reappointment_proportions.png"
+        plt.savefig(output_file, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"✓ Visualization saved to: {output_file}")
+        
+        return output_file
+        
+    except Exception as e:
+        print(f"✗ Error creating visualization: {str(e)}")
+        print("  Continuing without visualization...")
+        return None
+
+def create_trend_analysis_report(df_annual):
+    """Create a detailed trend analysis report."""
+    print("\nCreating trend analysis report...")
+    
+    report = []
+    report.append("="*80)
+    report.append("GOVERNMENT-WIDE ANNUAL REAPPOINTMENT PROPORTION ANALYSIS")
+    report.append("="*80)
+    report.append("")
+    
+    # Executive Summary
+    report.append("EXECUTIVE SUMMARY:")
+    report.append("-" * 20)
+    
+    mean_proportion = df_annual['reappointment_proportion_percent'].mean()
+    std_proportion = df_annual['reappointment_proportion_percent'].std()
+    
+    # Find highest and lowest years
+    max_year_idx = df_annual['reappointment_proportion_percent'].idxmax()
+    min_year_idx = df_annual['reappointment_proportion_percent'].idxmin()
+    
+    max_year_data = df_annual.loc[max_year_idx]
+    min_year_data = df_annual.loc[min_year_idx]
+    
+    report.append(f"• Average annual reappointment proportion: {mean_proportion:.2f}% ± {std_proportion:.2f}%")
+    report.append(f"• Highest proportion: {max_year_data['reappointment_proportion_percent']:.2f}% in {max_year_data['year']}")
+    report.append(f"• Lowest proportion: {min_year_data['reappointment_proportion_percent']:.2f}% in {min_year_data['year']}")
+    
+    # Trend analysis
+    years_numeric = pd.to_numeric(df_annual['year'])
+    correlation = years_numeric.corr(df_annual['reappointment_proportion_percent'])
+    slope, intercept, r_value, p_value, std_err = stats.linregress(years_numeric, df_annual['reappointment_proportion_percent'])
+    
+    if correlation > 0.3:
+        trend = "increasing"
+    elif correlation < -0.3:
+        trend = "decreasing"
+    else:
+        trend = "stable"
+    
+    report.append(f"• Overall trend: {trend} ({slope:+.3f}% per year)")
+    report.append(f"• Statistical significance: {'Yes' if p_value < 0.05 else 'No'} (p = {p_value:.3f})")
+    report.append("")
+    
+    # Year-by-year breakdown
+    report.append("YEAR-BY-YEAR BREAKDOWN:")
+    report.append("-" * 25)
+    
+    df_sorted = df_annual.sort_values('year')
+    for _, row in df_sorted.iterrows():
+        report.append(f"{row['year']}:")
+        report.append(f"  Proportion: {row['reappointment_proportion_percent']:.2f}%")
+        report.append(f"  Total appointments: {row['appointment_count']:,}")
+        report.append(f"  Total reappointments: {row['reappointment_count']:,}")
+        report.append(f"  Active organizations: {row['organizations_active']}")
+        report.append("")
+    
+    # Change analysis
+    report.append("YEAR-OVER-YEAR CHANGES:")
+    report.append("-" * 25)
+    
+    for i in range(1, len(df_sorted)):
+        current = df_sorted.iloc[i]
+        previous = df_sorted.iloc[i-1]
+        change = current['reappointment_proportion_percent'] - previous['reappointment_proportion_percent']
+        direction = "↑" if change > 0 else "↓" if change < 0 else "→"
+        
+        report.append(f"{previous['year']} → {current['year']}: {change:+.2f}% {direction}")
+    
+    report.append("")
+    
+    # Statistical analysis
+    report.append("STATISTICAL ANALYSIS:")
+    report.append("-" * 20)
+    
+    report.append(f"• Linear regression results:")
+    report.append(f"  - Slope: {slope:.4f}% per year")
+    report.append(f"  - Intercept: {intercept:.2f}%")
+    report.append(f"  - R-squared: {r_value**2:.3f}")
+    report.append(f"  - Standard error: {std_err:.4f}")
+    report.append("")
+    
+    report.append(f"• Variability analysis:")
+    report.append(f"  - Coefficient of variation: {(std_proportion/mean_proportion):.3f}")
+    report.append(f"  - Range: {df_annual['reappointment_proportion_percent'].max() - df_annual['reappointment_proportion_percent'].min():.2f}%")
+    report.append("")
+    
+    # Period analysis
+    increases = 0
+    decreases = 0
+    stable = 0
+    
+    for i in range(1, len(df_sorted)):
+        change = df_sorted.iloc[i]['reappointment_proportion_percent'] - df_sorted.iloc[i-1]['reappointment_proportion_percent']
+        if change > 0.5:
+            increases += 1
+        elif change < -0.5:
+            decreases += 1
+        else:
+            stable += 1
+    
+    total = increases + decreases + stable
+    report.append(f"• Period characterization:")
+    report.append(f"  - Increasing periods (>0.5%): {increases}/{total} ({increases/total*100:.1f}%)")
+    report.append(f"  - Decreasing periods (>0.5%): {decreases}/{total} ({decreases/total*100:.1f}%)")
+    report.append(f"  - Stable periods (±0.5%): {stable}/{total} ({stable/total*100:.1f}%)")
+    report.append("")
+    
+    report.append("="*80)
+    
+    return "\n".join(report)
+
+def save_annual_proportions_data(df, output_dir):
+    """Save the annual proportions dataset."""
+    output_file = output_dir / "step8_annual_proportions.csv"
+    
+    try:
+        # Sort by year for better readability
+        df_sorted = df.sort_values('year').reset_index(drop=True)
+        
+        df_sorted.to_csv(output_file, index=False)
+        print(f"✓ Annual proportions dataset saved to: {output_file}")
+        
+        # Verify the saved file
+        file_size = output_file.stat().st_size / 1024  # KB
+        print(f"  File size: {file_size:.1f} KB")
+        print(f"  Records saved: {len(df_sorted)}")
+        
+        return output_file
+        
+    except Exception as e:
+        print(f"✗ Error saving annual proportions dataset: {str(e)}")
+        raise
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("Step 8: Compute Government-wide Annual Reappointment Proportions")
+    print("="*60)
+    
+    try:
+        # Validate input file
+        input_file = validate_input_file()
+        
+        # Load reappointment rates data
+        df = load_reappointment_rates(input_file)
+        
+        # Analyze input data structure
+        df = analyze_input_data_structure(df)
+        
+        # Clean data for annual analysis
+        df_clean = clean_data_for_annual_analysis(df)
+        
+        # Compute annual proportions
+        df_annual = compute_annual_proportions(df_clean)
+        
+        # Analyze trends
+        df_analyzed = analyze_annual_trends(df_annual)
+        
+        # Create visualization
+        output_dir = Path("scripts/claudesonnet4/version2/execution4/analysis_data")
+        visualization_file = create_annual_proportions_visualization(df_analyzed, output_dir)
+        
+        # Create trend analysis report
+        analysis_report = create_trend_analysis_report(df_analyzed)
+        
+        # Save the annual proportions dataset
+        output_file = save_annual_proportions_data(df_analyzed, output_dir)
+        
+        # Save analysis report
+        report_file = output_dir / "step8_trend_analysis_report.txt"
+        with open(report_file, 'w') as f:
+            f.write(analysis_report)
+        print(f"✓ Trend analysis report saved to: {report_file}")
+        
+        print("\n" + "="*60)
+        print("STEP 8 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Annual proportions dataset: {output_file}")
+        if visualization_file:
+            print(f"Visualization: {visualization_file}")
+        print(f"Trend analysis report: {report_file}")
+        print(f"Years analyzed: {len(df_analyzed)}")
+        print(f"Average government-wide proportion: {df_analyzed['reappointment_proportion_percent'].mean():.2f}%")
+        
+        # Show trend summary
+        years_numeric = pd.to_numeric(df_analyzed['year'])
+        correlation = years_numeric.corr(df_analyzed['reappointment_proportion_percent'])
+        trend = "increasing" if correlation > 0.3 else "decreasing" if correlation < -0.3 else "stable"
+        print(f"Overall trend: {trend} (correlation: {correlation:.3f})")
+        print("="*60)
+        
+    except Exception as e:
+        print(f"\n✗ STEP 8 FAILED: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

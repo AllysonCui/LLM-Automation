@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count Appointments by Organization and Year
+Counts the total number of appointments for each "org" in each year.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over 
+the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    script_dir = Path(__file__).parent
+    output_dir = script_dir / "analysis_data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def load_step3_data(output_dir):
+    """Load the marked dataset from Step 3."""
+    input_file = output_dir / "step3_repeats_marked.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"Loading marked dataset from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except Exception as e:
+        print(f"ERROR loading {input_file}: {str(e)}")
+        raise
+
+def validate_input_data(df):
+    """Validate the input dataset before processing."""
+    print("\nValidating input dataset...")
+    
+    # Check basic structure
+    print(f"Input dataset shape: {df.shape}")
+    
+    # Check required columns
+    required_columns = ['org', 'year', 'name', 'position', 'reappointed']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        raise ValueError(f"Required columns missing: {missing_columns}")
+    
+    print("✓ All required columns present")
+    
+    # Check for null values in key columns
+    org_nulls = df['org'].isna().sum()
+    year_nulls = df['year'].isna().sum()
+    name_nulls = df['name'].isna().sum()
+    
+    print(f"  Null values - org: {org_nulls}, year: {year_nulls}, name: {name_nulls}")
+    
+    if org_nulls > 0 or year_nulls > 0:
+        print("  WARNING: Null values in key columns may affect counts")
+    
+    # Check year range
+    min_year = df['year'].min()
+    max_year = df['year'].max()
+    print(f"  Year range: {min_year} - {max_year}")
+    
+    # Check unique organizations
+    unique_orgs = df['org'].nunique()
+    print(f"  Unique organizations: {unique_orgs}")
+    
+    return True
+
+def clean_data_for_counting(df):
+    """Clean data to ensure accurate counting."""
+    print("\nCleaning data for counting...")
+    
+    df_clean = df.copy()
+    
+    # Handle null values in org and year columns
+    original_size = len(df_clean)
+    
+    # Remove rows with null org or year as they can't be counted properly
+    df_clean = df_clean.dropna(subset=['org', 'year'])
+    removed_rows = original_size - len(df_clean)
+    
+    if removed_rows > 0:
+        print(f"  Removed {removed_rows} rows with null org or year values")
+    
+    # Clean organization names for consistency
+    df_clean['org'] = df_clean['org'].astype(str).str.strip()
+    df_clean['org'] = df_clean['org'].str.replace(r'\s+', ' ', regex=True)
+    
+    # Ensure year is integer
+    df_clean['year'] = df_clean['year'].astype(int)
+    
+    # Clean name column for better counting (remove duplicates within same org/year)
+    df_clean['name'] = df_clean['name'].astype(str).str.strip()
+    df_clean['name'] = df_clean['name'].str.replace(r'\s+', ' ', regex=True)
+    
+    print(f"  Final dataset size: {len(df_clean)} rows")
+    
+    return df_clean
+
+def count_appointments_by_org_year(df):
+    """Count total appointments for each organization in each year."""
+    print("\nCounting appointments by organization and year...")
+    
+    # Group by org and year, then count unique appointments
+    # We use 'name' as the appointment identifier
+    appointment_counts = df.groupby(['org', 'year']).agg({
+        'name': 'nunique',  # Count unique names (appointments)
+        'reappointed': ['sum', 'count']  # Count reappointments and total appointments
+    }).reset_index()
+    
+    # Flatten column names
+    appointment_counts.columns = ['org', 'year', 'total_appointments', 'reappointments', 'total_appointments']
+    
+    # Calculate reappointment rate
+    appointment_counts['reappointment_rate'] = (
+        appointment_counts['reappointments'] / appointment_counts['total_appointments']
+    ).round(4)
+    
+    # Sort by organization and year
+    appointment_counts = appointment_counts.sort_values(['org', 'year'])
+    
+    print(f"  Generated counts for {len(appointment_counts)} org-year combinations")
+    print(f"  Organizations: {appointment_counts['org'].nunique()}")
+    print(f"  Years: {sorted(appointment_counts['year'].unique())}")
+    
+    return appointment_counts
+
+def analyze_appointment_counts(df_counts):
+    """Analyze the appointment count data."""
+    print("\nAnalyzing appointment counts...")
+    
+    # Overall statistics
+    total_org_year_combinations = len(df_counts)
+    total_unique_appointments = df_counts['total_appointments'].sum()
+    total_appointments = df_counts['total_appointments'].sum()
+    
+    print(f"  Total org-year combinations: {total_org_year_combinations}")
+    print(f"  Total unique appointment positions: {total_unique_appointments}")
+    print(f"  Total appointments: {total_appointments}")
+    
+    # Year-by-year summary
+    print(f"\nAppointment counts by year:")
+    yearly_summary = df_counts.groupby('year').agg({
+        'total_appointments': 'sum',
+        'total_appointments': 'sum',
+        'reappointments': 'sum',
+        'org': 'nunique'
+    }).round(2)
+    yearly_summary.columns = ['Appointments', 'Appointments', 'Reappointments', 'Organizations']
+    yearly_summary['Reappointment_Rate'] = (
+        yearly_summary['Reappointments'] / yearly_summary['Appointments'] * 100
+    ).round(1)
+    
+    for year in yearly_summary.index:
+        stats = yearly_summary.loc[year]
+        print(f"  {year}: {int(stats['Appointments'])} appointments, "
+              f"{int(stats['Appointments'])} appointments, "
+              f"{int(stats['Organizations'])} orgs, "
+              f"{stats['Reappointment_Rate']:.1f}% reappointment rate")
+    
+    # Top organizations by total appointments
+    print(f"\nTop 15 organizations by total appointments (across all years):")
+    org_totals = df_counts.groupby('org').agg({
+        'total_appointments': 'sum',
+        'total_appointments': 'sum',
+        'reappointments': 'sum'
+    }).round(2)
+    org_totals['reappointment_rate'] = (
+        org_totals['reappointments'] / org_totals['total_appointments'] * 100
+    ).round(1)
+    org_totals = org_totals.sort_values('total_appointments', ascending=False)
+    
+    for org in org_totals.head(15).index:
+        stats = org_totals.loc[org]
+        print(f"  {org}: {int(stats['total_appointments'])} appointments, "
+              f"{int(stats['total_appointments'])} appointments, "
+              f"{stats['reappointment_rate']:.1f}% reappointment rate")
+    
+    # Organizations with highest reappointment rates (minimum 10 appointments)
+    print(f"\nTop 10 organizations by reappointment rate (min 10 appointments):")
+    high_reappointment = org_totals[org_totals['total_appointments'] >= 10]
+    high_reappointment = high_reappointment.sort_values('reappointment_rate', ascending=False)
+    
+    for org in high_reappointment.head(10).index:
+        stats = high_reappointment.loc[org]
+        print(f"  {org}: {stats['reappointment_rate']:.1f}% "
+              f"({int(stats['reappointments'])}/{int(stats['total_appointments'])})")
+    
+    return yearly_summary, org_totals
+
+def create_pivot_tables(df_counts):
+    """Create pivot tables for easier analysis."""
+    print("\nCreating pivot tables...")
+    
+    # Appointment count pivot table (org x year)
+    appointment_pivot = df_counts.pivot_table(
+        index='org', 
+        columns='year', 
+        values='total_appointments', 
+        fill_value=0
+    )
+    
+    # Reappointment rate pivot table (org x year)
+    reappointment_pivot = df_counts.pivot_table(
+        index='org', 
+        columns='year', 
+        values='reappointment_rate', 
+        fill_value=0
+    )
+    
+    print(f"  Appointment count pivot: {appointment_pivot.shape}")
+    print(f"  Reappointment rate pivot: {reappointment_pivot.shape}")
+    
+    return appointment_pivot, reappointment_pivot
+
+def validate_counts(df_original, df_counts):
+    """Validate the counting results."""
+    print("\nValidating counting results...")
+    
+    # Check total appointments
+    original_total = len(df_original)
+    counted_total = df_counts['total_appointments'].sum()
+    
+    if original_total != counted_total:
+        print(f"  WARNING: Total appointments mismatch!")
+        print(f"    Original data: {original_total}")
+        print(f"    Counted total: {counted_total}")
+        print(f"    Difference: {abs(original_total - counted_total)}")
+    else:
+        print(f"  ✓ Total appointments match: {original_total}")
+    
+    # Check reappointments
+    original_reappointed = df_original['reappointed'].sum()
+    counted_reappointed = df_counts['reappointments'].sum()
+    
+    if original_reappointed != counted_reappointed:
+        print(f"  WARNING: Reappointments mismatch!")
+        print(f"    Original data: {original_reappointed}")
+        print(f"    Counted total: {counted_reappointed}")
+        print(f"    Difference: {abs(original_reappointed - counted_reappointed)}")
+    else:
+        print(f"  ✓ Reappointments match: {original_reappointed}")
+    
+    # Check for missing org-year combinations
+    original_combinations = set(zip(df_original['org'], df_original['year']))
+    counted_combinations = set(zip(df_counts['org'], df_counts['year']))
+    
+    missing_combinations = original_combinations - counted_combinations
+    if missing_combinations:
+        print(f"  WARNING: {len(missing_combinations)} org-year combinations missing from counts")
+        if len(missing_combinations) <= 5:
+            for org, year in missing_combinations:
+                print(f"    Missing: {org} - {year}")
+    else:
+        print(f"  ✓ All org-year combinations accounted for")
+    
+    return True
+
+def save_appointment_counts(df_counts, output_dir):
+    """Save the appointment counts dataset."""
+    output_file = output_dir / "step4_appointment_counts.csv"
+    
+    print(f"\nSaving appointment counts to: {output_file}")
+    
+    try:
+        df_counts.to_csv(output_file, index=False, encoding='utf-8')
+        
+        # Verify the saved file
+        if output_file.exists():
+            saved_df = pd.read_csv(output_file)
+            if len(saved_df) == len(df_counts):
+                print(f"✓ Successfully saved {len(saved_df)} org-year combinations")
+                print(f"  Columns: {list(saved_df.columns)}")
+                print(f"  File size: {output_file.stat().st_size / 1024:.1f} KB")
+            else:
+                print(f"ERROR: Saved file has {len(saved_df)} rows, expected {len(df_counts)}")
+        else:
+            print(f"ERROR: Failed to save file to {output_file}")
+            
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        raise
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("STEP 4: COUNT EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60)
+    print("New Brunswick Government Appointments Analysis")
+    print("Counting total appointments for each organization in each year")
+    print("="*60)
+    
+    try:
+        # Setup directories
+        output_dir = setup_directories()
+        print(f"Working directory: {output_dir}")
+        
+        # Load Step 3 data
+        df = load_step3_data(output_dir)
+        
+        # Validate input data
+        validate_input_data(df)
+        
+        # Clean data for counting
+        df_clean = clean_data_for_counting(df)
+        
+        # Count appointments by organization and year
+        df_counts = count_appointments_by_org_year(df_clean)
+        
+        # Analyze appointment counts
+        yearly_summary, org_totals = analyze_appointment_counts(df_counts)
+        
+        # Create pivot tables for analysis
+        appointment_pivot, reappointment_pivot = create_pivot_tables(df_counts)
+        
+        # Validate counting results
+        validate_counts(df_clean, df_counts)
+        
+        # Save appointment counts
+        save_appointment_counts(df_counts, output_dir)
+        
+        print("\n" + "="*60)
+        print("STEP 4 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Appointment counts by organization and year ready for Step 5")
+        print(f"Organization-year combinations: {len(df_counts)}")
+        print(f"Unique organizations: {df_counts['org'].nunique()}")
+        print(f"Years covered: {df_counts['year'].min()} - {df_counts['year'].max()}")
+        print(f"Total unique appointments: {df_counts['total_appointments'].sum()}")
+        
+    except Exception as e:
+        print(f"\nERROR in Step 4: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""
+Step 2: Extract Key Columns
+Extracts and retains only the key columns needed for reappointment analysis:
+"reappointed", "name", "position", "org", and "year"
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over 
+the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+import warnings
+
+# Suppress pandas warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+def setup_directories():
+    """Create necessary directories if they don't exist."""
+    script_dir = Path(__file__).parent
+    output_dir = script_dir / "analysis_data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+def load_step1_data(output_dir):
+    """Load the combined dataset from Step 1."""
+    input_file = output_dir / "step1_combined_appointments.csv"
+    
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    
+    print(f"Loading combined dataset from: {input_file}")
+    
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Loaded {len(df)} rows, {len(df.columns)} columns")
+        return df
+    except Exception as e:
+        print(f"ERROR loading {input_file}: {str(e)}")
+        raise
+
+def validate_input_data(df):
+    """Validate the input dataset before processing."""
+    print("\nValidating input dataset...")
+    
+    # Check basic structure
+    print(f"Input dataset shape: {df.shape}")
+    print(f"Columns available: {list(df.columns)}")
+    
+    # Define required columns
+    required_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        print(f"ERROR: Missing required columns: {missing_columns}")
+        print("Available columns:", list(df.columns))
+        raise ValueError(f"Required columns missing: {missing_columns}")
+    
+    print("✓ All required columns present")
+    
+    # Check for completely empty required columns
+    for col in required_columns:
+        null_count = df[col].isna().sum()
+        if null_count == len(df):
+            print(f"WARNING: Column '{col}' is completely empty!")
+        elif null_count > 0:
+            print(f"  {col}: {null_count} null values ({null_count/len(df)*100:.1f}%)")
+    
+    return True
+
+def extract_key_columns(df):
+    """Extract only the key columns needed for analysis."""
+    print("\nExtracting key columns...")
+    
+    # Define key columns in order
+    key_columns = ['reappointed', 'name', 'position', 'org', 'year']
+    
+    # Extract only these columns
+    df_key = df[key_columns].copy()
+    
+    print(f"Extracted {len(df_key)} rows with {len(key_columns)} key columns")
+    print(f"Key columns: {key_columns}")
+    
+    return df_key
+
+def clean_and_standardize_data(df):
+    """Clean and standardize the key columns."""
+    print("\nCleaning and standardizing data...")
+    
+    # Create a copy to avoid modifying original
+    df_clean = df.copy()
+    
+    # Clean name column
+    if 'name' in df_clean.columns:
+        # Remove leading/trailing whitespace
+        df_clean['name'] = df_clean['name'].astype(str).str.strip()
+        # Handle empty strings and 'nan' strings
+        df_clean['name'] = df_clean['name'].replace(['', 'nan', 'None'], pd.NA)
+        name_nulls = df_clean['name'].isna().sum()
+        print(f"  Name column: {name_nulls} null values after cleaning")
+    
+    # Clean position column
+    if 'position' in df_clean.columns:
+        df_clean['position'] = df_clean['position'].astype(str).str.strip()
+        df_clean['position'] = df_clean['position'].replace(['', 'nan', 'None'], pd.NA)
+        position_nulls = df_clean['position'].isna().sum()
+        print(f"  Position column: {position_nulls} null values after cleaning")
+    
+    # Clean org column
+    if 'org' in df_clean.columns:
+        df_clean['org'] = df_clean['org'].astype(str).str.strip()
+        df_clean['org'] = df_clean['org'].replace(['', 'nan', 'None'], pd.NA)
+        org_nulls = df_clean['org'].isna().sum()
+        print(f"  Organization column: {org_nulls} null values after cleaning")
+    
+    # Ensure reappointed is boolean
+    if 'reappointed' in df_clean.columns:
+        if df_clean['reappointed'].dtype != 'bool':
+            print("  Converting reappointed column to boolean...")
+            df_clean['reappointed'] = df_clean['reappointed'].astype(bool)
+        reappointed_count = df_clean['reappointed'].sum()
+        print(f"  Reappointed: {reappointed_count} True values ({reappointed_count/len(df_clean)*100:.1f}%)")
+    
+    # Ensure year is integer
+    if 'year' in df_clean.columns:
+        df_clean['year'] = pd.to_numeric(df_clean['year'], errors='coerce').astype('Int64')
+        year_nulls = df_clean['year'].isna().sum()
+        if year_nulls > 0:
+            print(f"  Year column: {year_nulls} null values after conversion")
+        year_range = f"{df_clean['year'].min()} - {df_clean['year'].max()}"
+        print(f"  Year range: {year_range}")
+    
+    return df_clean
+
+def analyze_key_columns_data(df):
+    """Analyze the extracted key columns data."""
+    print("\nAnalyzing key columns data...")
+    
+    # Basic statistics
+    print(f"Final dataset shape: {df.shape}")
+    print(f"Total records: {len(df)}")
+    
+    # Year distribution
+    if 'year' in df.columns:
+        print(f"\nRecords by year:")
+        year_counts = df['year'].value_counts().sort_index()
+        for year, count in year_counts.items():
+            print(f"  {year}: {count} records")
+    
+    # Reappointment statistics
+    if 'reappointed' in df.columns:
+        total_reappointed = df['reappointed'].sum()
+        reappointment_rate = total_reappointed / len(df) * 100
+        print(f"\nReappointment Summary:")
+        print(f"  Total reappointments: {total_reappointed}")
+        print(f"  Overall reappointment rate: {reappointment_rate:.1f}%")
+    
+    # Organization distribution (top 10)
+    if 'org' in df.columns:
+        print(f"\nTop 10 organizations by appointment count:")
+        org_counts = df['org'].value_counts().head(10)
+        for org, count in org_counts.items():
+            print(f"  {org}: {count} appointments")
+    
+    # Data completeness
+    print(f"\nData completeness:")
+    for col in df.columns:
+        null_count = df[col].isna().sum()
+        completeness = (len(df) - null_count) / len(df) * 100
+        print(f"  {col}: {completeness:.1f}% complete ({null_count} missing)")
+    
+    return True
+
+def identify_potential_issues(df):
+    """Identify potential data quality issues."""
+    print("\nIdentifying potential data quality issues...")
+    
+    issues_found = []
+    
+    # Check for records with missing critical information
+    critical_columns = ['name', 'position', 'org', 'year']
+    for col in critical_columns:
+        if col in df.columns:
+            missing_count = df[col].isna().sum()
+            if missing_count > 0:
+                issues_found.append(f"Missing {col}: {missing_count} records")
+    
+    # Check for duplicate records
+    if len(df.columns) >= 4:
+        duplicate_count = df.duplicated().sum()
+        if duplicate_count > 0:
+            issues_found.append(f"Duplicate records: {duplicate_count}")
+    
+    # Check for unusual year values
+    if 'year' in df.columns:
+        min_year = df['year'].min()
+        max_year = df['year'].max()
+        if min_year < 2013 or max_year > 2024:
+            issues_found.append(f"Years outside expected range (2013-2024): {min_year}-{max_year}")
+    
+    # Check for very short names or positions (potential data quality issues)
+    if 'name' in df.columns:
+        short_names = df['name'].astype(str).str.len() < 3
+        if short_names.sum() > 0:
+            issues_found.append(f"Very short names: {short_names.sum()} records")
+    
+    if issues_found:
+        print("  Issues identified:")
+        for issue in issues_found:
+            print(f"    - {issue}")
+    else:
+        print("  ✓ No major data quality issues identified")
+    
+    return issues_found
+
+def save_key_columns_data(df, output_dir):
+    """Save the key columns dataset."""
+    output_file = output_dir / "step2_key_columns_data.csv"
+    
+    print(f"\nSaving key columns dataset to: {output_file}")
+    
+    try:
+        df.to_csv(output_file, index=False, encoding='utf-8')
+        
+        # Verify the saved file
+        if output_file.exists():
+            saved_df = pd.read_csv(output_file)
+            if len(saved_df) == len(df) and len(saved_df.columns) == len(df.columns):
+                print(f"✓ Successfully saved {len(saved_df)} rows, {len(saved_df.columns)} columns")
+                print(f"  File size: {output_file.stat().st_size / 1024:.1f} KB")
+            else:
+                print(f"ERROR: Saved file dimensions don't match")
+                print(f"  Expected: {df.shape}, Got: {saved_df.shape}")
+        else:
+            print(f"ERROR: Failed to save file to {output_file}")
+            
+    except Exception as e:
+        print(f"ERROR saving file: {str(e)}")
+        raise
+
+def main():
+    """Main execution function."""
+    print("="*60)
+    print("STEP 2: EXTRACT KEY COLUMNS")
+    print("="*60)
+    print("New Brunswick Government Appointments Analysis")
+    print("Extracting key columns: reappointed, name, position, org, year")
+    print("="*60)
+    
+    try:
+        # Setup directories
+        output_dir = setup_directories()
+        print(f"Working directory: {output_dir}")
+        
+        # Load Step 1 data
+        df = load_step1_data(output_dir)
+        
+        # Validate input data
+        validate_input_data(df)
+        
+        # Extract key columns
+        df_key = extract_key_columns(df)
+        
+        # Clean and standardize data
+        df_clean = clean_and_standardize_data(df_key)
+        
+        # Analyze the extracted data
+        analyze_key_columns_data(df_clean)
+        
+        # Identify potential issues
+        identify_potential_issues(df_clean)
+        
+        # Save key columns data
+        save_key_columns_data(df_clean, output_dir)
+        
+        print("\n" + "="*60)
+        print("STEP 2 COMPLETED SUCCESSFULLY")
+        print("="*60)
+        print(f"Key columns dataset ready for Step 3")
+        print(f"Records: {len(df_clean)}")
+        print(f"Columns: {list(df_clean.columns)}")
+        print(f"Data reduction: {len(df.columns)} → {len(df_clean.columns)} columns")
+        
+    except Exception as e:
+        print(f"\nERROR in Step 2: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

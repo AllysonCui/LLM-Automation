@@ -1,0 +1,840 @@
+#!/usr/bin/env python3
+"""
+Step 9: Linear Regression Analysis of Reappointment Trends
+New Brunswick Government Appointments Analysis
+
+This script runs a comprehensive linear regression analysis on the annual 
+reappointment proportions to assess trend direction and statistical significance.
+
+Research Question: Which government branch in New Brunswick most frequently 
+reappoints past appointees, and is this trend increasing or declining over the past 12 years?
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import sys
+import warnings
+from scipy import stats
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_squared_error
+import statsmodels.api as sm
+from statsmodels.stats.diagnostic import het_white, normal_ad
+from statsmodels.stats.stattools import durbin_watson
+warnings.filterwarnings('ignore')
+
+# Set up plotting style
+plt.style.use('default')
+sns.set_palette("husl")
+
+def create_output_directories():
+    """Create necessary output directories if they don't exist."""
+    output_dir = Path("scripts/claudesonnet4/version2/execution1/analysis_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Created output directory: {output_dir}")
+    return output_dir
+
+def load_annual_proportions():
+    """
+    Load the annual proportions from step 8.
+    
+    Returns:
+        pd.DataFrame: Annual proportions dataset
+    """
+    input_paths = [
+        Path("scripts/claudesonnet4/version2/execution1/analysis_data/step8_annual_proportions.csv"),
+        Path("scripts/gpt4o/version2/execution4/analysis_data/step8_annual_proportions.csv"),
+        Path("step8_annual_proportions.csv")
+    ]
+    
+    for input_path in input_paths:
+        if input_path.exists():
+            try:
+                df = pd.read_csv(input_path, encoding='utf-8')
+                print(f"✓ Loaded annual proportions from: {input_path}")
+                print(f"   Dataset shape: {df.shape[0]:,} rows, {df.shape[1]} columns")
+                return df
+            except Exception as e:
+                print(f"❌ Error loading {input_path}: {e}")
+                continue
+    
+    print("❌ Error: Could not find step8_annual_proportions.csv")
+    print("   Please ensure Step 8 has been completed successfully")
+    sys.exit(1)
+
+def validate_regression_data(annual_proportions):
+    """
+    Validate the data for regression analysis.
+    
+    Args:
+        annual_proportions (pd.DataFrame): Annual proportions dataset
+    
+    Returns:
+        bool: True if validation passes
+    """
+    print(f"\n🔍 Validating data for regression analysis...")
+    
+    # Check required columns
+    required_columns = ['year', 'reappointment_proportion']
+    missing_columns = [col for col in required_columns if col not in annual_proportions.columns]
+    
+    if missing_columns:
+        print(f"❌ Error: Missing required columns: {missing_columns}")
+        print(f"   Available columns: {list(annual_proportions.columns)}")
+        return False
+    
+    print(f"✓ Required columns present")
+    
+    # Check for sufficient data points
+    if len(annual_proportions) < 3:
+        print(f"❌ Error: Insufficient data points for regression (need ≥3, have {len(annual_proportions)})")
+        return False
+    
+    print(f"✓ Sufficient data points for regression: {len(annual_proportions)}")
+    
+    # Check for null values
+    null_years = annual_proportions['year'].isna().sum()
+    null_proportions = annual_proportions['reappointment_proportion'].isna().sum()
+    
+    if null_years > 0:
+        print(f"❌ Error: {null_years} null values in year column")
+        return False
+    if null_proportions > 0:
+        print(f"❌ Error: {null_proportions} null values in reappointment_proportion column")
+        return False
+    
+    print(f"✓ No null values in key columns")
+    
+    # Check data types
+    if not pd.api.types.is_numeric_dtype(annual_proportions['year']):
+        print(f"❌ Error: year column is not numeric")
+        return False
+    if not pd.api.types.is_numeric_dtype(annual_proportions['reappointment_proportion']):
+        print(f"❌ Error: reappointment_proportion column is not numeric")
+        return False
+    
+    print(f"✓ Data types validated")
+    
+    # Check for duplicated years
+    duplicate_years = annual_proportions['year'].duplicated().sum()
+    if duplicate_years > 0:
+        print(f"⚠️  Warning: {duplicate_years} duplicate years found")
+    
+    # Summary statistics
+    print(f"\n📊 Regression Data Summary:")
+    print(f"   Years: {annual_proportions['year'].min():.0f} - {annual_proportions['year'].max():.0f}")
+    print(f"   Data points: {len(annual_proportions)}")
+    print(f"   Proportion range: {annual_proportions['reappointment_proportion'].min():.3f}% - {annual_proportions['reappointment_proportion'].max():.3f}%")
+    print(f"   Proportion mean: {annual_proportions['reappointment_proportion'].mean():.3f}%")
+    print(f"   Proportion std: {annual_proportions['reappointment_proportion'].std():.3f}%")
+    
+    return True
+
+def perform_basic_regression(annual_proportions):
+    """
+    Perform basic linear regression analysis.
+    
+    Args:
+        annual_proportions (pd.DataFrame): Annual proportions dataset
+    
+    Returns:
+        dict: Basic regression results
+    """
+    print(f"\n📊 Performing basic linear regression analysis...")
+    
+    # Prepare data
+    X = annual_proportions['year'].values.reshape(-1, 1)
+    y = annual_proportions['reappointment_proportion'].values
+    
+    # Fit regression model
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Make predictions
+    y_pred = model.predict(X)
+    
+    # Calculate metrics
+    r2 = r2_score(y, y_pred)
+    mse = mean_squared_error(y, y_pred)
+    rmse = np.sqrt(mse)
+    
+    # Calculate additional statistics using scipy
+    slope, intercept, r_value, p_value, std_err = stats.linregress(
+        annual_proportions['year'], annual_proportions['reappointment_proportion']
+    )
+    
+    # Confidence intervals for predictions
+    n = len(annual_proportions)
+    t_val = stats.t.ppf(0.975, n-2)  # 95% confidence interval
+    
+    results = {
+        'slope': slope,
+        'intercept': intercept,
+        'r_squared': r2,
+        'r_value': r_value,
+        'p_value': p_value,
+        'std_error': std_err,
+        'rmse': rmse,
+        'n_observations': n,
+        't_statistic': slope / std_err if std_err != 0 else np.inf,
+        'confidence_level': 0.95,
+        't_critical': t_val,
+        'model': model,
+        'predictions': y_pred
+    }
+    
+    print(f"✓ Basic regression completed")
+    print(f"   Slope: {slope:.4f}% per year")
+    print(f"   Intercept: {intercept:.4f}%")
+    print(f"   R-squared: {r2:.4f}")
+    print(f"   P-value: {p_value:.6f}")
+    print(f"   Standard Error: {std_err:.4f}")
+    
+    return results
+
+def perform_advanced_regression(annual_proportions):
+    """
+    Perform advanced regression analysis with diagnostic tests.
+    
+    Args:
+        annual_proportions (pd.DataFrame): Annual proportions dataset
+    
+    Returns:
+        dict: Advanced regression results with diagnostics
+    """
+    print(f"\n📊 Performing advanced regression analysis with diagnostics...")
+    
+    # Prepare data for statsmodels
+    X = annual_proportions['year'].values
+    y = annual_proportions['reappointment_proportion'].values
+    
+    # Add constant for intercept
+    X_with_const = sm.add_constant(X)
+    
+    # Fit OLS model
+    model = sm.OLS(y, X_with_const)
+    results = model.fit()
+    
+    # Extract key statistics
+    slope = results.params[1]
+    intercept = results.params[0]
+    slope_se = results.bse[1]
+    slope_pvalue = results.pvalues[1]
+    slope_tstat = results.tvalues[1]
+    
+    # Confidence intervals
+    conf_int = results.conf_int(alpha=0.05)  # 95% confidence interval
+    slope_ci_lower = conf_int[1, 0]  # Access by index, not iloc
+    slope_ci_upper = conf_int[1, 1]
+    
+    # Model diagnostics
+    residuals = results.resid
+    fitted_values = results.fittedvalues
+    
+    # Durbin-Watson test for autocorrelation
+    dw_statistic = durbin_watson(residuals)
+    
+    # Normality test (Anderson-Darling)
+    try:
+        ad_statistic, ad_pvalue = normal_ad(residuals)
+    except:
+        ad_statistic, ad_pvalue = np.nan, np.nan
+    
+    # Heteroscedasticity test (White's test)
+    try:
+        white_lm, white_pvalue, white_fvalue, white_fpvalue = het_white(residuals, X_with_const)
+    except:
+        white_lm, white_pvalue = np.nan, np.nan
+    
+    advanced_results = {
+        'model_summary': results,
+        'slope': slope,
+        'intercept': intercept,
+        'slope_se': slope_se,
+        'slope_pvalue': slope_pvalue,
+        'slope_tstat': slope_tstat,
+        'slope_ci_lower': slope_ci_lower,
+        'slope_ci_upper': slope_ci_upper,
+        'r_squared': results.rsquared,
+        'adj_r_squared': results.rsquared_adj,
+        'f_statistic': results.fvalue,
+        'f_pvalue': results.f_pvalue,
+        'aic': results.aic,
+        'bic': results.bic,
+        'residuals': residuals,
+        'fitted_values': fitted_values,
+        'durbin_watson': dw_statistic,
+        'anderson_darling_stat': ad_statistic,
+        'anderson_darling_pvalue': ad_pvalue,
+        'white_test_stat': white_lm,
+        'white_test_pvalue': white_pvalue,
+        'n_observations': len(annual_proportions)
+    }
+    
+    print(f"✓ Advanced regression completed")
+    print(f"   Adjusted R-squared: {results.rsquared_adj:.4f}")
+    print(f"   F-statistic: {results.fvalue:.4f} (p={results.f_pvalue:.6f})")
+    print(f"   AIC: {results.aic:.2f}")
+    print(f"   BIC: {results.bic:.2f}")
+    
+    return advanced_results
+
+def analyze_regression_results(basic_results, advanced_results, annual_proportions):
+    """
+    Analyze and interpret regression results.
+    
+    Args:
+        basic_results (dict): Basic regression results
+        advanced_results (dict): Advanced regression results
+        annual_proportions (pd.DataFrame): Original data
+    """
+    print(f"\n📈 Analyzing Regression Results:")
+    
+    slope = advanced_results['slope']
+    slope_pvalue = advanced_results['slope_pvalue']
+    r_squared = advanced_results['r_squared']
+    adj_r_squared = advanced_results['adj_r_squared']
+    
+    # Trend direction and significance
+    print(f"\n📊 Trend Analysis:")
+    
+    if slope > 0:
+        direction = "increasing"
+        direction_symbol = "↗️"
+    elif slope < 0:
+        direction = "decreasing"
+        direction_symbol = "↘️"
+    else:
+        direction = "stable"
+        direction_symbol = "→"
+    
+    print(f"   Trend Direction: {direction} {direction_symbol}")
+    print(f"   Rate of Change: {slope:.4f} percentage points per year")
+    
+    # Statistical significance
+    alpha = 0.05
+    if slope_pvalue < alpha:
+        significance = "statistically significant"
+        sig_symbol = "✅"
+    else:
+        significance = "not statistically significant"
+        sig_symbol = "❌"
+    
+    print(f"   Statistical Significance: {significance} {sig_symbol}")
+    print(f"   P-value: {slope_pvalue:.6f} (α = {alpha})")
+    
+    # Confidence interval interpretation
+    ci_lower = advanced_results['slope_ci_lower']
+    ci_upper = advanced_results['slope_ci_upper']
+    
+    print(f"   95% Confidence Interval: [{ci_lower:.4f}, {ci_upper:.4f}] pp/year")
+    
+    if ci_lower > 0:
+        ci_interpretation = "Confidently increasing"
+    elif ci_upper < 0:
+        ci_interpretation = "Confidently decreasing"
+    else:
+        ci_interpretation = "Uncertain direction (CI includes zero)"
+    
+    print(f"   CI Interpretation: {ci_interpretation}")
+    
+    # Model quality
+    print(f"\n📊 Model Quality Assessment:")
+    print(f"   R-squared: {r_squared:.4f} ({r_squared*100:.1f}% of variance explained)")
+    print(f"   Adjusted R-squared: {adj_r_squared:.4f}")
+    
+    if r_squared >= 0.7:
+        r2_interpretation = "Strong relationship"
+    elif r_squared >= 0.5:
+        r2_interpretation = "Moderate relationship"
+    elif r_squared >= 0.3:
+        r2_interpretation = "Weak relationship"
+    else:
+        r2_interpretation = "Very weak relationship"
+    
+    print(f"   R² Interpretation: {r2_interpretation}")
+    
+    # Practical significance
+    years_span = annual_proportions['year'].max() - annual_proportions['year'].min()
+    total_change = slope * years_span
+    
+    print(f"\n📊 Practical Significance:")
+    print(f"   Time Period: {years_span:.0f} years")
+    print(f"   Total Change: {total_change:.3f} percentage points")
+    print(f"   Average Annual Change: {slope:.4f} percentage points")
+    
+    # Magnitude assessment
+    baseline_proportion = annual_proportions['reappointment_proportion'].mean()
+    relative_change_per_year = (slope / baseline_proportion) * 100
+    
+    print(f"   Baseline Proportion: {baseline_proportion:.3f}%")
+    print(f"   Relative Change per Year: {relative_change_per_year:.2f}% of baseline")
+    
+    # Diagnostic tests interpretation
+    print(f"\n📊 Model Diagnostics:")
+    
+    # Durbin-Watson test
+    dw = advanced_results['durbin_watson']
+    if 1.5 <= dw <= 2.5:
+        dw_interpretation = "No significant autocorrelation"
+    elif dw < 1.5:
+        dw_interpretation = "Positive autocorrelation detected"
+    else:
+        dw_interpretation = "Negative autocorrelation detected"
+    
+    print(f"   Durbin-Watson: {dw:.3f} ({dw_interpretation})")
+    
+    # Normality test
+    ad_pvalue = advanced_results['anderson_darling_pvalue']
+    if not np.isnan(ad_pvalue):
+        if ad_pvalue > 0.05:
+            normality_interpretation = "Residuals appear normally distributed"
+        else:
+            normality_interpretation = "Residuals may not be normally distributed"
+        print(f"   Anderson-Darling p-value: {ad_pvalue:.4f} ({normality_interpretation})")
+    
+    # Heteroscedasticity test
+    white_pvalue = advanced_results['white_test_pvalue']
+    if not np.isnan(white_pvalue):
+        if white_pvalue > 0.05:
+            hetero_interpretation = "Homoscedasticity assumed (constant variance)"
+        else:
+            hetero_interpretation = "Heteroscedasticity detected (non-constant variance)"
+        print(f"   White's test p-value: {white_pvalue:.4f} ({hetero_interpretation})")
+    
+    # Future projections
+    print(f"\n📊 Future Projections (if trend continues):")
+    current_year = annual_proportions['year'].max()
+    current_proportion = annual_proportions[annual_proportions['year'] == current_year]['reappointment_proportion'].iloc[0]
+    
+    future_years = [2025, 2026, 2027, 2030]
+    for future_year in future_years:
+        years_ahead = future_year - current_year
+        projected_proportion = current_proportion + (slope * years_ahead)
+        
+        # Calculate confidence interval for projection
+        se_prediction = advanced_results['slope_se'] * years_ahead
+        t_critical = stats.t.ppf(0.975, advanced_results['n_observations'] - 2)
+        ci_width = t_critical * se_prediction
+        
+        print(f"   {future_year}: {projected_proportion:.3f}% ± {ci_width:.3f}%")
+
+def create_regression_visualization(annual_proportions, basic_results, advanced_results, output_dir):
+    """
+    Create comprehensive regression visualization.
+    
+    Args:
+        annual_proportions (pd.DataFrame): Original data
+        basic_results (dict): Basic regression results
+        advanced_results (dict): Advanced regression results
+        output_dir (Path): Output directory for saving plots
+    """
+    print(f"\n📊 Creating regression visualization...")
+    
+    # Set up the plot with subplots
+    fig = plt.figure(figsize=(16, 12))
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+    
+    # Main title
+    fig.suptitle('Linear Regression Analysis:\nNew Brunswick Government Reappointment Trend (2013-2024)', 
+                 fontsize=18, fontweight='bold', y=0.95)
+    
+    # Plot 1: Main regression plot
+    ax1 = fig.add_subplot(gs[0, :])
+    
+    years = annual_proportions['year'].values
+    proportions = annual_proportions['reappointment_proportion'].values
+    
+    # Scatter plot
+    ax1.scatter(years, proportions, s=100, alpha=0.8, color='navy', 
+               edgecolors='black', linewidth=1, zorder=5, label='Observed Data')
+    
+    # Regression line
+    y_pred = advanced_results['fitted_values']
+    ax1.plot(years, y_pred, linewidth=3, color='red', alpha=0.8, 
+             label=f'Regression Line (slope = {advanced_results["slope"]:.4f})')
+    
+    # Confidence interval
+    slope_se = advanced_results['slope_se']
+    t_critical = stats.t.ppf(0.975, advanced_results['n_observations'] - 2)
+    
+    # Calculate prediction intervals
+    years_extended = np.linspace(years.min() - 1, years.max() + 3, 100)
+    years_centered = years_extended - years.mean()
+    
+    # Standard error of prediction
+    se_pred = slope_se * np.sqrt(1 + 1/len(years) + 
+                                 years_centered**2 / np.sum((years - years.mean())**2))
+    
+    y_pred_extended = advanced_results['intercept'] + advanced_results['slope'] * years_extended
+    ci_width = t_critical * se_pred
+    
+    ax1.fill_between(years_extended, y_pred_extended - ci_width, y_pred_extended + ci_width,
+                    alpha=0.2, color='red', label='95% Prediction Interval')
+    
+    # Add data labels
+    for year, prop in zip(years, proportions):
+        ax1.annotate(f'{prop:.2f}%', (year, prop), textcoords="offset points", 
+                    xytext=(0, 10), ha='center', fontsize=10, fontweight='bold')
+    
+    # Statistical information
+    stats_text = (f'R² = {advanced_results["r_squared"]:.4f}\n'
+                 f'p-value = {advanced_results["slope_pvalue"]:.6f}\n'
+                 f'Slope = {advanced_results["slope"]:.4f} ± {advanced_results["slope_se"]:.4f}')
+    
+    ax1.text(0.05, 0.95, stats_text, transform=ax1.transAxes, fontsize=12,
+            verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", 
+            facecolor='white', alpha=0.8))
+    
+    ax1.set_title('Government-Wide Reappointment Proportion Trend', fontsize=16, fontweight='bold')
+    ax1.set_xlabel('Year', fontsize=14)
+    ax1.set_ylabel('Reappointment Proportion (%)', fontsize=14)
+    ax1.legend(fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Residuals vs Fitted
+    ax2 = fig.add_subplot(gs[1, 0])
+    
+    residuals = advanced_results['residuals']
+    fitted = advanced_results['fitted_values']
+    
+    ax2.scatter(fitted, residuals, alpha=0.8, color='blue', edgecolors='black', linewidth=0.5)
+    ax2.axhline(y=0, color='red', linestyle='--', linewidth=2)
+    
+    ax2.set_title('Residuals vs Fitted Values', fontsize=14, fontweight='bold')
+    ax2.set_xlabel('Fitted Values (%)', fontsize=12)
+    ax2.set_ylabel('Residuals (%)', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Q-Q plot for normality
+    ax3 = fig.add_subplot(gs[1, 1])
+    
+    from scipy import stats as scipy_stats
+    scipy_stats.probplot(residuals, dist="norm", plot=ax3)
+    ax3.set_title('Q-Q Plot (Normality Check)', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    
+    # Add regression line to Q-Q plot
+    line_x = np.array(ax3.get_xlim())
+    line_y = scipy_stats.linregress(scipy_stats.norm.ppf((np.arange(1, len(residuals)+1))/(len(residuals)+1)), 
+                                   np.sort(residuals))
+    ax3.plot(line_x, line_y.intercept + line_y.slope * line_x, 'r-', linewidth=2)
+    
+    # Save the plot
+    try:
+        output_file = output_dir / "step9_regression_analysis.png"
+        plt.savefig(output_file, dpi=300, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        print(f"✓ Regression visualization saved to: {output_file}")
+        
+        # Also save as PDF
+        pdf_file = output_dir / "step9_regression_analysis.pdf"
+        plt.savefig(pdf_file, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        print(f"✓ PDF version saved to: {pdf_file}")
+        
+    except Exception as e:
+        print(f"❌ Error saving regression visualization: {e}")
+    
+    # Show plot if in interactive environment
+    try:
+        plt.show()
+    except:
+        pass
+    
+    plt.close()
+
+def save_regression_results(basic_results, advanced_results, annual_proportions, output_dir):
+    """
+    Save detailed regression results to text file.
+    
+    Args:
+        basic_results (dict): Basic regression results
+        advanced_results (dict): Advanced regression results
+        annual_proportions (pd.DataFrame): Original data
+        output_dir (Path): Output directory
+    """
+    print(f"\n💾 Saving regression results...")
+    
+    try:
+        output_file = output_dir / "step9_regression_results.txt"
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("LINEAR REGRESSION ANALYSIS RESULTS\n")
+            f.write("New Brunswick Government Reappointment Trend Analysis\n")
+            f.write("=" * 80 + "\n\n")
+            
+            # Data summary
+            f.write("DATA SUMMARY:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Time Period: {annual_proportions['year'].min():.0f} - {annual_proportions['year'].max():.0f}\n")
+            f.write(f"Number of Observations: {len(annual_proportions)}\n")
+            f.write(f"Dependent Variable: Annual Reappointment Proportion (%)\n")
+            f.write(f"Independent Variable: Year\n\n")
+            
+            # Regression results
+            f.write("REGRESSION RESULTS:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Slope (β₁): {advanced_results['slope']:.6f} percentage points per year\n")
+            f.write(f"Intercept (β₀): {advanced_results['intercept']:.6f}%\n")
+            f.write(f"Standard Error of Slope: {advanced_results['slope_se']:.6f}\n")
+            f.write(f"T-statistic: {advanced_results['slope_tstat']:.4f}\n")
+            f.write(f"P-value: {advanced_results['slope_pvalue']:.8f}\n")
+            f.write(f"95% Confidence Interval: [{advanced_results['slope_ci_lower']:.6f}, {advanced_results['slope_ci_upper']:.6f}]\n\n")
+            
+            # Model fit
+            f.write("MODEL FIT:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"R-squared: {advanced_results['r_squared']:.6f}\n")
+            f.write(f"Adjusted R-squared: {advanced_results['adj_r_squared']:.6f}\n")
+            f.write(f"F-statistic: {advanced_results['f_statistic']:.4f}\n")
+            f.write(f"F-statistic p-value: {advanced_results['f_pvalue']:.8f}\n")
+            f.write(f"AIC: {advanced_results['aic']:.2f}\n")
+            f.write(f"BIC: {advanced_results['bic']:.2f}\n\n")
+            
+            # Diagnostic tests
+            f.write("DIAGNOSTIC TESTS:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Durbin-Watson Statistic: {advanced_results['durbin_watson']:.4f}\n")
+            if not np.isnan(advanced_results['anderson_darling_pvalue']):
+                f.write(f"Anderson-Darling Test p-value: {advanced_results['anderson_darling_pvalue']:.6f}\n")
+            if not np.isnan(advanced_results['white_test_pvalue']):
+                f.write(f"White's Test p-value: {advanced_results['white_test_pvalue']:.6f}\n")
+            f.write("\n")
+            
+            # Interpretation
+            f.write("INTERPRETATION:\n")
+            f.write("-" * 40 + "\n")
+            
+            slope = advanced_results['slope']
+            slope_pvalue = advanced_results['slope_pvalue']
+            
+            if slope > 0:
+                direction = "increasing"
+            elif slope < 0:
+                direction = "decreasing"
+            else:
+                direction = "stable"
+            
+            if slope_pvalue < 0.05:
+                significance = "statistically significant"
+            else:
+                significance = "not statistically significant"
+            
+            f.write(f"Trend Direction: {direction}\n")
+            f.write(f"Statistical Significance: {significance} (α = 0.05)\n")
+            f.write(f"Annual Rate of Change: {slope:.4f} percentage points per year\n")
+            
+            years_span = annual_proportions['year'].max() - annual_proportions['year'].min()
+            total_change = slope * years_span
+            f.write(f"Total Change over {years_span:.0f} years: {total_change:.3f} percentage points\n")
+            
+            baseline = annual_proportions['reappointment_proportion'].mean()
+            relative_change = (slope / baseline) * 100
+            f.write(f"Relative Annual Change: {relative_change:.2f}% of baseline proportion\n\n")
+            
+            # Detailed model summary
+            f.write("DETAILED MODEL SUMMARY:\n")
+            f.write("-" * 40 + "\n")
+            f.write(str(advanced_results['model_summary']))
+            f.write("\n\n")
+            
+            # Raw data
+            f.write("RAW DATA:\n")
+            f.write("-" * 40 + "\n")
+            for _, row in annual_proportions.iterrows():
+                f.write(f"{int(row['year'])}: {row['reappointment_proportion']:.3f}%\n")
+        
+        print(f"✓ Regression results saved to: {output_file}")
+        print(f"   File size: {output_file.stat().st_size / 1024:.1f} KB")
+        
+    except Exception as e:
+        print(f"❌ Error saving regression results: {e}")
+
+def perform_regression_analysis():
+    """
+    Main function to perform comprehensive regression analysis.
+    
+    Returns:
+        tuple: (basic_results, advanced_results)
+    """
+    print("=" * 60)
+    print("STEP 9: LINEAR REGRESSION ANALYSIS OF REAPPOINTMENT TRENDS")
+    print("=" * 60)
+    
+    # Create output directory
+    output_dir = create_output_directories()
+    
+    # Load annual proportions data
+    print(f"\n📁 Loading annual proportions data...")
+    annual_proportions = load_annual_proportions()
+    
+    # Validate data for regression
+    if not validate_regression_data(annual_proportions):
+        sys.exit(1)
+    
+    # Perform basic regression analysis
+    basic_results = perform_basic_regression(annual_proportions)
+    
+    # Perform advanced regression with diagnostics
+    advanced_results = perform_advanced_regression(annual_proportions)
+    
+    # Analyze and interpret results
+    analyze_regression_results(basic_results, advanced_results, annual_proportions)
+    
+    # Create visualization
+    create_regression_visualization(annual_proportions, basic_results, advanced_results, output_dir)
+    
+    # Save detailed results
+    save_regression_results(basic_results, advanced_results, annual_proportions, output_dir)
+    
+    return basic_results, advanced_results
+
+def generate_final_conclusions(basic_results, advanced_results, annual_proportions):
+    """
+    Generate final conclusions about the research question.
+    
+    Args:
+        basic_results (dict): Basic regression results
+        advanced_results (dict): Advanced regression results
+        annual_proportions (pd.DataFrame): Original data
+    """
+    print(f"\n🎯 FINAL CONCLUSIONS:")
+    print("=" * 60)
+    
+    slope = advanced_results['slope']
+    slope_pvalue = advanced_results['slope_pvalue']
+    r_squared = advanced_results['r_squared']
+    ci_lower = advanced_results['slope_ci_lower']
+    ci_upper = advanced_results['slope_ci_upper']
+    
+    # Main research question answer
+    print(f"\n📋 RESEARCH QUESTION ANSWER:")
+    print(f"   'Is the reappointment trend increasing or declining over the past 12 years?'")
+    print(f"   " + "-" * 70)
+    
+    if slope_pvalue < 0.05:
+        if slope > 0:
+            trend_answer = "INCREASING"
+            trend_symbol = "📈"
+            confidence = "with statistical confidence"
+        else:
+            trend_answer = "DECREASING"
+            trend_symbol = "📉"
+            confidence = "with statistical confidence"
+    else:
+        trend_answer = "NO SIGNIFICANT TREND"
+        trend_symbol = "📊"
+        confidence = "statistically"
+    
+    print(f"   {trend_symbol} The reappointment trend is {trend_answer}")
+    print(f"   Rate of change: {slope:.4f} percentage points per year")
+    print(f"   Statistical confidence: {confidence} (p = {slope_pvalue:.6f})")
+    print(f"   95% Confidence interval: [{ci_lower:.4f}, {ci_upper:.4f}] pp/year")
+    
+    # Practical implications
+    print(f"\n📋 PRACTICAL IMPLICATIONS:")
+    print(f"   " + "-" * 40)
+    
+    baseline_proportion = annual_proportions['reappointment_proportion'].mean()
+    years_span = annual_proportions['year'].max() - annual_proportions['year'].min()
+    total_change = slope * years_span
+    relative_change_total = (total_change / baseline_proportion) * 100
+    
+    print(f"   Baseline reappointment rate: {baseline_proportion:.2f}%")
+    print(f"   Total change over {years_span:.0f} years: {total_change:.3f} percentage points")
+    print(f"   Relative change: {relative_change_total:.1f}% of baseline rate")
+    
+    if abs(relative_change_total) > 20:
+        magnitude = "substantial"
+    elif abs(relative_change_total) > 10:
+        magnitude = "moderate"
+    elif abs(relative_change_total) > 5:
+        magnitude = "small"
+    else:
+        magnitude = "minimal"
+    
+    print(f"   Magnitude assessment: {magnitude} change")
+    
+    # Model reliability
+    print(f"\n📋 MODEL RELIABILITY:")
+    print(f"   " + "-" * 30)
+    print(f"   R-squared: {r_squared:.4f} ({r_squared*100:.1f}% variance explained)")
+    print(f"   Model fit: {'Strong' if r_squared > 0.7 else 'Moderate' if r_squared > 0.5 else 'Weak'}")
+    print(f"   Data points: {len(annual_proportions)} years")
+    
+    # Future outlook
+    if slope_pvalue < 0.05:
+        print(f"\n📋 FUTURE OUTLOOK:")
+        print(f"   " + "-" * 25)
+        current_year = annual_proportions['year'].max()
+        current_rate = annual_proportions[annual_proportions['year'] == current_year]['reappointment_proportion'].iloc[0]
+        
+        projection_2030 = current_rate + slope * (2030 - current_year)
+        
+        print(f"   Current rate ({int(current_year)}): {current_rate:.2f}%")
+        print(f"   Projected rate (2030): {projection_2030:.2f}%")
+        print(f"   Expected change by 2030: {projection_2030 - current_rate:+.2f} percentage points")
+        
+        if slope > 0:
+            print(f"   ⚠️  Trend suggests continued increase in reappointments")
+        else:
+            print(f"   ⚠️  Trend suggests continued decrease in reappointments")
+    else:
+        print(f"\n📋 FUTURE OUTLOOK:")
+        print(f"   " + "-" * 25)
+        print(f"   📊 No clear trend detected - rates likely to remain stable")
+        print(f"   📊 Current rate represents expected future baseline")
+
+def main():
+    """Main execution function."""
+    try:
+        # Perform comprehensive regression analysis
+        basic_results, advanced_results = perform_regression_analysis()
+        
+        # Load the data for final conclusions
+        annual_proportions = load_annual_proportions()
+        
+        # Generate final conclusions
+        generate_final_conclusions(basic_results, advanced_results, annual_proportions)
+        
+        # Summary statistics for completion message
+        slope = advanced_results['slope']
+        slope_pvalue = advanced_results['slope_pvalue']
+        r_squared = advanced_results['r_squared']
+        
+        # Determine significance and direction
+        if slope_pvalue < 0.05:
+            if slope > 0:
+                trend_result = "Statistically significant INCREASING trend"
+            else:
+                trend_result = "Statistically significant DECREASING trend"
+        else:
+            trend_result = "No statistically significant trend"
+        
+        print("\n" + "=" * 60)
+        print("STEP 9 COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+        print(f"✅ Regression analysis completed for {len(annual_proportions):,} data points")
+        print(f"✅ Result: {trend_result}")
+        print(f"✅ Slope: {slope:.4f} percentage points per year")
+        print(f"✅ P-value: {slope_pvalue:.6f}")
+        print(f"✅ R-squared: {r_squared:.4f}")
+        print(f"✅ Results saved to: step9_regression_results.txt")
+        print(f"✅ Visualization saved to: step9_regression_analysis.png")
+        print("\n" + "=" * 60)
+        print("🎯 ANALYSIS COMPLETE - RESEARCH QUESTION ANSWERED")
+        print("=" * 60)
+        
+    except KeyboardInterrupt:
+        print(f"\n❌ Process interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error in main execution: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

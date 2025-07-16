@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""
+Step 1: Combine the 12 raw datasets
+This script reads all appointment CSV files from 2013-2024 and combines them into a single dataset.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def main():
+    """Main function to combine all appointment datasets"""
+    
+    # Define paths
+    raw_data_path = Path("raw_data")
+    output_path = Path("scripts/claudeopus4/version2/execution3/analysis_data")
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory created/verified: {output_path}")
+    
+    # Define years to process
+    years = range(2013, 2025)  # 2013 to 2024 inclusive
+    
+    # List to store all dataframes
+    all_dfs = []
+    
+    # Track statistics for validation
+    total_rows = 0
+    files_processed = 0
+    missing_files = []
+    
+    print("\n=== Starting to combine appointment datasets ===")
+    print(f"Processing years: {min(years)} to {max(years)-1}")
+    
+    # Process each year's file
+    for year in years:
+        filename = f"appointments_{year}.csv"
+        filepath = raw_data_path / filename
+        
+        try:
+            # Check if file exists
+            if not filepath.exists():
+                print(f"⚠️  Warning: File not found - {filepath}")
+                missing_files.append(filename)
+                continue
+            
+            # Read the CSV file
+            print(f"\nProcessing {filename}...")
+            df = pd.read_csv(filepath, encoding='utf-8')
+            
+            # Add year column for tracking
+            df['source_year'] = year
+            
+            # Print basic statistics
+            print(f"  - Rows: {len(df)}")
+            print(f"  - Columns: {len(df.columns)}")
+            print(f"  - Column names: {', '.join(df.columns[:5])}..." if len(df.columns) > 5 else f"  - Column names: {', '.join(df.columns)}")
+            
+            # Check for 'reappointed' column
+            if 'reappointed' in df.columns:
+                reappointed_count = df['reappointed'].sum() if df['reappointed'].dtype == bool else (df['reappointed'] == True).sum()
+                print(f"  - Reappointments in this file: {reappointed_count}")
+            else:
+                print(f"  - ⚠️  No 'reappointed' column found")
+            
+            # Add to list
+            all_dfs.append(df)
+            total_rows += len(df)
+            files_processed += 1
+            
+        except Exception as e:
+            print(f"❌ Error processing {filename}: {str(e)}")
+            continue
+    
+    # Check if we have any data to combine
+    if not all_dfs:
+        print("\n❌ ERROR: No data files were successfully loaded!")
+        sys.exit(1)
+    
+    print(f"\n=== Combining {files_processed} files ===")
+    
+    # Combine all dataframes
+    try:
+        combined_df = pd.concat(all_dfs, ignore_index=True, sort=False)
+        print(f"✅ Successfully combined all datasets")
+        print(f"  - Total rows: {len(combined_df)}")
+        print(f"  - Total columns: {len(combined_df.columns)}")
+        
+        # Validate the combination
+        if len(combined_df) != total_rows:
+            print(f"⚠️  Warning: Row count mismatch. Expected {total_rows}, got {len(combined_df)}")
+        
+    except Exception as e:
+        print(f"❌ Error combining dataframes: {str(e)}")
+        sys.exit(1)
+    
+    # Print column information
+    print("\n=== Column Information ===")
+    print(f"Columns in combined dataset ({len(combined_df.columns)} total):")
+    for col in combined_df.columns:
+        non_null = combined_df[col].notna().sum()
+        print(f"  - {col}: {non_null} non-null values ({non_null/len(combined_df)*100:.1f}%)")
+    
+    # Check data types
+    print("\n=== Data Types ===")
+    for col, dtype in combined_df.dtypes.items():
+        print(f"  - {col}: {dtype}")
+    
+    # Handle the 'reappointed' column if it exists
+    if 'reappointed' in combined_df.columns:
+        print("\n=== Reappointed Column Analysis ===")
+        print(f"Data type: {combined_df['reappointed'].dtype}")
+        
+        # Convert to boolean if needed
+        if combined_df['reappointed'].dtype == 'object':
+            print("Converting 'reappointed' column to boolean...")
+            # Handle various text representations
+            combined_df['reappointed'] = combined_df['reappointed'].map({
+                'True': True, 'true': True, 'TRUE': True, '1': True, 1: True,
+                'False': False, 'false': False, 'FALSE': False, '0': False, 0: False,
+                'Yes': True, 'yes': True, 'YES': True,
+                'No': False, 'no': False, 'NO': False
+            })
+            
+            # Check for any unmapped values
+            unmapped = combined_df['reappointed'].isna().sum() - all_dfs[0]['reappointed'].isna().sum()
+            if unmapped > 0:
+                print(f"⚠️  Warning: {unmapped} values could not be converted to boolean")
+        
+        # Print reappointment statistics
+        total_reappointed = combined_df['reappointed'].sum()
+        print(f"Total reappointments across all years: {total_reappointed}")
+        print(f"Reappointment rate: {total_reappointed/len(combined_df)*100:.2f}%")
+    
+    # Save the combined dataset
+    output_file = output_path / "step1_combined_appointments.csv"
+    print(f"\n=== Saving combined dataset ===")
+    print(f"Output file: {output_file}")
+    
+    try:
+        combined_df.to_csv(output_file, index=False, encoding='utf-8')
+        print(f"✅ Successfully saved combined dataset")
+        print(f"  - File size: {output_file.stat().st_size / 1024 / 1024:.2f} MB")
+    except Exception as e:
+        print(f"❌ Error saving file: {str(e)}")
+        sys.exit(1)
+    
+    # Print summary
+    print("\n=== SUMMARY ===")
+    print(f"Files processed: {files_processed}/{len(years)}")
+    if missing_files:
+        print(f"Missing files: {', '.join(missing_files)}")
+    print(f"Total rows combined: {len(combined_df)}")
+    print(f"Total columns: {len(combined_df.columns)}")
+    print(f"Years covered: {combined_df['source_year'].min()} to {combined_df['source_year'].max()}")
+    
+    # Print sample of the data
+    print("\n=== Sample of Combined Data (first 5 rows) ===")
+    print(combined_df.head())
+    
+    print("\n✅ Step 1 completed successfully!")
+
+if __name__ == "__main__":
+    main()

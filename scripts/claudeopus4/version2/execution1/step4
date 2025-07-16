@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""
+Step 4: Count appointments by organization and year
+This script counts the total number of appointments (appointments) for each 
+organization in each year.
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+def count_appointments_by_org_year():
+    """
+    Counts the total number of appointments for each organization in each year.
+    """
+    
+    # Define paths
+    input_path = Path("scripts/claudeopus4/version2/execution1/analysis_data")
+    input_file = input_path / "step3_repeats_marked.csv"
+    output_file = input_path / "step4_appointment_counts.csv"
+    
+    print("\n" + "="*60)
+    print("STEP 4: COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("="*60 + "\n")
+    
+    # Check if input file exists
+    if not input_file.exists():
+        print(f"❌ ERROR: Input file not found: {input_file}")
+        print("Please run step3_mark_repeats.py first!")
+        sys.exit(1)
+    
+    # Read the dataset
+    print(f"📄 Reading dataset from: {input_file}")
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+        print(f"✓ Dataset loaded successfully ({len(df)} rows, {len(df.columns)} columns)")
+    except Exception as e:
+        print(f"❌ Error reading file: {str(e)}")
+        sys.exit(1)
+    
+    # Verify required columns exist
+    required_cols = ['org', 'year']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        print(f"❌ ERROR: Missing required columns: {missing_cols}")
+        sys.exit(1)
+    
+    # Display basic statistics
+    print(f"\n📊 Dataset overview:")
+    print(f"  - Total appointments: {len(df)}")
+    print(f"  - Unique organizations: {df['org'].nunique()}")
+    print(f"  - Years covered: {df['year'].min()} - {df['year'].max()}")
+    print(f"  - Missing org values: {df['org'].isnull().sum()}")
+    print(f"  - Missing year values: {df['year'].isnull().sum()}")
+    
+    # Handle missing values
+    if df['org'].isnull().sum() > 0:
+        print(f"\n⚠️  Warning: Found {df['org'].isnull().sum()} records with missing organization")
+        print(f"    These will be grouped under 'Unknown Organization'")
+        df['org'] = df['org'].fillna('Unknown Organization')
+    
+    # Clean organization names
+    print(f"\n🧹 Cleaning organization names...")
+    df['org_cleaned'] = df['org'].astype(str).str.strip()
+    
+    # Count appointments by organization and year
+    print(f"\n📈 Counting appointments by organization and year...")
+    appointment_counts = df.groupby(['year', 'org_cleaned']).size().reset_index(name='total_appointments')
+    
+    # Rename column for clarity
+    appointment_counts.rename(columns={'org_cleaned': 'org'}, inplace=True)
+    
+    # Sort by year and organization
+    appointment_counts = appointment_counts.sort_values(['year', 'org']).reset_index(drop=True)
+    
+    # Calculate summary statistics
+    print(f"\n📊 Summary statistics:")
+    print(f"  - Total org-year combinations: {len(appointment_counts)}")
+    print(f"  - Average appointments per org-year: {appointment_counts['total_appointments'].mean():.2f}")
+    print(f"  - Median appointments per org-year: {appointment_counts['total_appointments'].median():.0f}")
+    print(f"  - Max appointments in single org-year: {appointment_counts['total_appointments'].max()}")
+    print(f"  - Min appointments in single org-year: {appointment_counts['total_appointments'].min()}")
+    
+    # Find organizations with most appointments
+    print(f"\n🏆 Top 10 organizations by total appointments (across all years):")
+    org_totals = appointment_counts.groupby('org')['total_appointments'].sum().sort_values(ascending=False).head(10)
+    for org, total in org_totals.items():
+        print(f"  - {org}: {total} total appointments")
+    
+    # Find organizations with most appointments in a single year
+    print(f"\n📅 Top 10 single-year appointment counts:")
+    top_single_year = appointment_counts.nlargest(10, 'total_appointments')
+    for _, row in top_single_year.iterrows():
+        print(f"  - {row['org']} ({int(row['year'])}): {row['total_appointments']} appointments")
+    
+    # Analyze growth patterns
+    print(f"\n📈 Organizations with consistent presence (appeared in 10+ years):")
+    org_year_counts = appointment_counts.groupby('org')['year'].nunique()
+    consistent_orgs = org_year_counts[org_year_counts >= 10].index
+    
+    if len(consistent_orgs) > 0:
+        for org in consistent_orgs[:10]:  # Show first 10
+            years_active = org_year_counts[org]
+            total_appointments = org_totals.get(org, 0)
+            avg_per_year = total_appointments / years_active
+            print(f"  - {org}: {years_active} years, {total_appointments} total, {avg_per_year:.1f} avg/year")
+    else:
+        print("  No organizations found with 10+ years of data")
+    
+    # Yearly trends
+    print(f"\n📅 Total appointments by year:")
+    yearly_totals = appointment_counts.groupby('year')['total_appointments'].sum()
+    for year, total in yearly_totals.items():
+        print(f"  - {int(year)}: {total} appointments")
+    
+    # Add additional analysis columns
+    print(f"\n🔄 Adding analytical columns...")
+    
+    # Calculate year-over-year changes for each organization
+    appointment_counts['prev_year_appointments'] = appointment_counts.groupby('org')['total_appointments'].shift(1)
+    appointment_counts['yoy_change'] = appointment_counts['total_appointments'] - appointment_counts['prev_year_appointments']
+    appointment_counts['yoy_pct_change'] = (appointment_counts['yoy_change'] / appointment_counts['prev_year_appointments'] * 100).round(2)
+    
+    # Organizations with biggest growth/decline
+    print(f"\n📊 Biggest year-over-year changes:")
+    
+    # Biggest increases
+    biggest_increases = appointment_counts.dropna(subset=['yoy_change']).nlargest(5, 'yoy_change')
+    if len(biggest_increases) > 0:
+        print(f"\n  Biggest increases:")
+        for _, row in biggest_increases.iterrows():
+            print(f"    - {row['org']} ({int(row['year']-1)} → {int(row['year'])}): "
+                  f"+{int(row['yoy_change'])} appointments ({row['yoy_pct_change']:.1f}% increase)")
+    
+    # Biggest decreases
+    biggest_decreases = appointment_counts.dropna(subset=['yoy_change']).nsmallest(5, 'yoy_change')
+    if len(biggest_decreases) > 0:
+        print(f"\n  Biggest decreases:")
+        for _, row in biggest_decreases.iterrows():
+            print(f"    - {row['org']} ({int(row['year']-1)} → {int(row['year'])}): "
+                  f"{int(row['yoy_change'])} appointments ({row['yoy_pct_change']:.1f}% decrease)")
+    
+    # Create pivot table for better visualization
+    print(f"\n📊 Creating pivot table...")
+    pivot_table = appointment_counts.pivot(index='org', columns='year', values='total_appointments')
+    
+    # Show sample of pivot table
+    print(f"\n👀 Sample of organization-year matrix (first 5 orgs, all years):")
+    sample_orgs = pivot_table.head(5)
+    print(sample_orgs.to_string())
+    
+    # Statistics by organization size
+    print(f"\n📊 Distribution of organization sizes:")
+    size_bins = [0, 1, 5, 10, 20, 50, 100, float('inf')]
+    size_labels = ['1', '2-5', '6-10', '11-20', '21-50', '51-100', '100+']
+    appointment_counts['size_category'] = pd.cut(appointment_counts['total_appointments'], 
+                                              bins=size_bins, 
+                                              labels=size_labels,
+                                              right=True)
+    
+    size_distribution = appointment_counts['size_category'].value_counts().sort_index()
+    print(f"\n  Appointments per org-year:")
+    for category, count in size_distribution.items():
+        pct = (count / len(appointment_counts)) * 100
+        print(f"    - {category} appointments: {count} org-years ({pct:.1f}%)")
+    
+    # Remove temporary columns before saving
+    columns_to_save = ['year', 'org', 'total_appointments', 'yoy_change', 'yoy_pct_change']
+    appointment_counts_final = appointment_counts[columns_to_save].copy()
+    
+    # Save the appointment counts
+    print(f"\n💾 Saving appointment counts to: {output_file}")
+    appointment_counts_final.to_csv(output_file, index=False, encoding='utf-8')
+    print(f"✅ File saved successfully!")
+    
+    # Save pivot table as additional output
+    pivot_file = input_path / "step4_appointment_counts_pivot.csv"
+    print(f"\n💾 Saving pivot table to: {pivot_file}")
+    pivot_table.to_csv(pivot_file, encoding='utf-8')
+    print(f"✅ Pivot table saved successfully!")
+    
+    # Final summary
+    print(f"\n" + "="*60)
+    print(f"STEP 4 COMPLETED SUCCESSFULLY")
+    print(f"="*60)
+    print(f"Appointment counts by organization and year have been calculated.")
+    print(f"Main output: {output_file}")
+    print(f"Pivot table: {pivot_file}\n")
+    
+    return appointment_counts_final, pivot_table
+
+if __name__ == "__main__":
+    try:
+        # Run the counting process
+        counts_data, pivot_data = count_appointments_by_org_year()
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Process interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n❌ Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
