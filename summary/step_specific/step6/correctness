@@ -1,0 +1,154 @@
+import os
+import pandas as pd
+
+# Canonical columns to check
+expected_columns = ["org", "year", "reappointment_rate"]
+
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown", "missing", "unknown_org", "unknown organization"]:
+            return "nan"
+        return normalized
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).lower()
+
+def normalize_columns(df):
+    rename_dict = {
+        "organization": "org",
+        "source_year": "year",
+        "appointment_count": "total_appointments",
+        "data_year": "year"
+    }
+    return df.rename(columns={col: rename_dict[col] for col in rename_dict if col in df.columns})
+
+def clean_rate(value):
+    try:
+        if pd.isna(value) or str(value).strip() == "":
+            return 0.0
+        val = float(value)
+        if 0 <= val <= 1:
+            return round(val, 6)
+        elif 0 < val <= 100:
+            return round(val / 100.0, 6)
+    except:
+        return 0.0
+    return 0.0
+
+# Load correct answer
+try:
+    answer1 = pd.read_csv("summary/step_specific/step6/correct_answer/answer1.csv")
+    answer1 = normalize_columns(answer1)
+except Exception as e:
+    print(f"❌ Failed to load answer1: {e}")
+    exit(1)
+
+# Load skip list
+skip_step6_path = "summary/step_specific/step6/executions_to_skip.csv"
+skip_step6_set = set()
+if os.path.exists(skip_step6_path):
+    try:
+        skip_df = pd.read_csv(skip_step6_path)
+        skip_step6_set = set(skip_df["execution"].astype(str))
+        print(f"🔁 Skipping {len(skip_step6_set)} executions listed in step6 skip file")
+    except Exception as e:
+        print(f"⚠️ Failed to load step6 skip list: {e}")
+
+# Expected executions
+expected_branches = [
+    ("gpt4o", "version1"), ("gpt4o", "version2"), ("gpt4o", "version3"),
+    ("claudeopus4", "version1"), ("claudeopus4", "version2"), ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"), ("claudesonnet4", "version2"), ("claudesonnet4", "version3")
+]
+expected_executions = {
+    f"scripts/{model}/{version}/execution{n}"
+    for model, version in expected_branches for n in range(1, 11)
+}
+
+found_executions = set()
+current_step_failures = []
+root_dir = "scripts"
+
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path): continue
+
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path): continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"): continue
+
+            execution_dir = f"{model}/{version}/{folder}"
+            if execution_dir in skip_step6_set:
+                print(f"⏩ Skipping {execution_dir}")
+                continue
+
+            found_executions.add(f"scripts/{execution_dir}")
+            step7_file = os.path.join(version_path, folder, "analysis_data", "steo6_reappointment_rates.csv")
+            if not os.path.exists(step7_file): continue
+
+            try:
+                df = pd.read_csv(step7_file)
+                df = normalize_columns(df)
+
+                if len(df) != 528:
+                    continue
+
+                # Normalize both answer and df
+                df_sub = df[expected_columns].copy()
+                expected_sub = answer1[expected_columns].copy()
+
+                for col in ["org", "year"]:
+                    df_sub[col] = df_sub[col].map(normalize_cell)
+                    expected_sub[col] = expected_sub[col].map(normalize_cell)
+
+                df_sub["reappointment_rate"] = df_sub["reappointment_rate"].map(clean_rate)
+                expected_sub["reappointment_rate"] = expected_sub["reappointment_rate"].map(clean_rate)
+
+                df_sub = df_sub[df_sub["org"] != "nan"]
+                expected_sub = expected_sub[expected_sub["org"] != "nan"]
+
+                df_set = set(map(tuple, df_sub.values.tolist()))
+                expected_set = set(map(tuple, expected_sub.values.tolist()))
+
+                if df_set != expected_set:
+                    print(f"{step7_file}: ❌ Mismatch in reappointment_rate rows")
+                    current_step_failures.append(execution_dir)
+
+                    extra_rows = df_set - expected_set
+                    missing_rows = expected_set - df_set
+
+                    for i, row in enumerate(sorted(extra_rows)):
+                        print(f"   ✖ Unexpected row: {row}")
+                        if i >= 2: break
+
+                    for i, row in enumerate(sorted(missing_rows)):
+                        print(f"   ✔️ Expected row not found: {row}")
+                        if i >= 2: break
+
+            except Exception as e:
+                print(f"{step7_file}: ❌ Failed to read/compare ({e})")
+                current_step_failures.append(execution_dir)
+
+# Report missing executions
+missing = expected_executions - found_executions - {f"scripts/{e}" for e in skip_step6_set}
+if missing:
+    print(f"\nMissing {len(missing)} executions (excluding skipped):")
+    for m in sorted(missing):
+        print(f"  {m}/analysis_data/steo6_reappointment_rates.csv")
+else:
+    print(f"\n✓ All expected executions were found or skipped")
+
+# Save step7 skip list
+all_skips_step7 = sorted(set(current_step_failures).union(skip_step6_set))
+output_dir = "summary/step_specific/step7"
+os.makedirs(output_dir, exist_ok=True)
+skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+
+pd.DataFrame({"execution": all_skips_step7}).to_csv(skip_path, index=False)
+print(f"\n🚫 Saved {len(all_skips_step7)} total skipped executions to: {skip_path}")

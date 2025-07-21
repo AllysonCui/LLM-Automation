@@ -1,0 +1,46 @@
+import pandas as pd
+from pathlib import Path
+
+# Define file paths
+input_path = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
+output_dir = Path("summary/step_specific/step7/correct_answer")
+answer1_path = output_dir / "answer1.csv"
+
+# Create output directory if it doesn't exist
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Normalize string values for case-insensitive comparison
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"nan", "unknown", "missing", ""}:
+            return "nan"
+        return normalized
+    return str(value).lower()
+
+# Convert max_rate safely
+def clean_max_rate(value):
+    try:
+        if pd.isna(value) or str(value).strip().lower() in {"", "nan", "missing", "unknown"}:
+            return 0.0
+        val = float(value)
+        return val
+    except:
+        return 0.0
+
+# Read CSV
+df = pd.read_csv(input_path)
+
+# Apply cleaning to 'max_rate' column if present
+if "max_rate" in df.columns:
+    df["max_rate"] = df["max_rate"].apply(clean_max_rate)
+
+# Sort by normalized 'org'
+df["sort_key"] = df["top_org"].map(normalize_cell)
+df = df.sort_values(by="sort_key").drop(columns="sort_key").reset_index(drop=True)
+
+# Save to output
+df.to_csv(answer1_path, index=False)
+print(f"✅ Saved cleaned and sorted answer1 to: {answer1_path}")

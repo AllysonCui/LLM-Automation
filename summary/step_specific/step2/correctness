@@ -1,46 +1,76 @@
 import os
 import pandas as pd
 
-def normalize_and_standardize(df):
-    """Standardize relevant columns for fair comparison."""
-    df = df.rename(columns={
-        "organization": "org",
-        "source_year": "year"
-    })
+# Columns to compare
+key_columns = ["reappointed", "name", "position", "org", "year"]
 
-    df = df[["reappointed", "name", "position", "org", "year"]].copy()
+# Normalize string values for case-insensitive comparison
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "nan" or normalized == "unknown":
+            return "nan"
+        return normalized
+    return str(value).lower()
 
-    # Strip and title-case string columns
-    for col in ["name", "position", "org"]:
-        df[col] = df[col].fillna("").astype(str).str.strip().str.title()
+# Sort order priority
+sort_priority = ["name", "position", "org", "reappointed", "year"]
 
-    df["reappointed"] = df["reappointed"].astype(bool)
-    df["year"] = df["year"].astype(int)
+def create_sort_key(df):
+    normalized_df = df[sort_priority].applymap(normalize_cell)
+    return normalized_df.apply(lambda row: tuple(row), axis=1)
 
-    return df
+def safe_rename_columns(df):
+    rename_dict = {}
+    if "organization" in df.columns:
+        rename_dict["organization"] = "org"
+    if "source_year" in df.columns:
+        rename_dict["source_year"] = "year"
+    if "data_year" in df.columns:
+        rename_dict["data_year"] = "year"
+    return df.rename(columns=rename_dict)
 
-def is_visibly_missing(org_val):
-    """Return True if org value is visibly missing or placeholder."""
-    return str(org_val).strip().lower() in ["", "nan", "unknown"]
+# Load correct answer
+correct_path = "summary/step_specific/step2/correct_answer/answer1.csv"
+try:
+    correct_df = pd.read_csv(correct_path)
+    correct_df = safe_rename_columns(correct_df)
+    correct_df = correct_df[key_columns].copy()
+except Exception as e:
+    print(f"Failed to read correct answer file: {e}")
+    exit(1)
 
-def drop_rows_with_missing_org(df):
-    """Remove rows with visibly missing org values."""
-    return df[~df["org"].apply(is_visibly_missing)]
+# Normalize and sort correct answer
+sort_key = create_sort_key(correct_df)
+correct_df = correct_df.iloc[sort_key.argsort()].reset_index(drop=True)
+normalized_correct_df = correct_df[key_columns].applymap(normalize_cell)
 
-# Load and normalize full correct dataset
-correct_path = "scripts/human/version1/analysis_data/step2_key_columns_data.csv"
-correct_df = pd.read_csv(correct_path)
-correct_df = normalize_and_standardize(correct_df)
-filtered_correct_df = drop_rows_with_missing_org(correct_df)
+# Prepare expected executions
+expected_branches = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudeopus4", "version2"),
+    ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"),
+    ("claudesonnet4", "version2"),
+    ("claudesonnet4", "version3")
+]
 
-# Root directory of all outputs
+expected_executions = {
+    f"scripts/{model}/{version}/execution{n}"
+    for model, version in expected_branches
+    for n in range(1, 11)
+}
+
+found_executions = set()
+skip_executions = []
+
 root_dir = "scripts"
 
-# Counters for summary
-total_executions = 0
-correct_executions = 0
-
-# Traverse and compare
 for model in os.listdir(root_dir):
     model_path = os.path.join(root_dir, model)
     if not os.path.isdir(model_path):
@@ -55,48 +85,63 @@ for model in os.listdir(root_dir):
             if not folder.startswith("execution"):
                 continue
 
-            exec_path = os.path.join(version_path, folder)
-            test_file = os.path.join(exec_path, "analysis_data", "step2_key_columns_data.csv")
+            execution_dir = f"{model}/{version}/{folder}"
+            found_executions.add(f"scripts/{execution_dir}")
+            step2_file = os.path.join(version_path, folder, "analysis_data", "step2_key_columns_data.csv")
 
-            if not os.path.exists(test_file):
+            if not os.path.exists(step2_file):
                 continue
 
-            total_executions += 1
-
             try:
-                test_df = pd.read_csv(test_file)
-                test_df = normalize_and_standardize(test_df)
-                num_rows = len(test_df)
+                df = pd.read_csv(step2_file)
+                df = safe_rename_columns(df)
 
-                # Choose reference
-                if num_rows == 3718:
-                    reference_df = correct_df
-                    label = "full correct answer"
-                else:
-                    print(f"{test_file}: ⚠️ Unexpected row count ({num_rows})")
+                if not all(col in df.columns for col in key_columns):
+                    print(f"{step2_file}: Missing columns")
                     continue
 
-                # Check if all rows in reference are contained in test_df
-                merged = reference_df.merge(test_df.drop_duplicates(), how="left", indicator=True)
-                missing_rows = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+                df = df[key_columns].copy()
+                sort_key = create_sort_key(df)
+                df = df.iloc[sort_key.argsort()].reset_index(drop=True)
+                normalized_df = df[key_columns].applymap(normalize_cell)
 
-                if not missing_rows.empty:
-                    visibly_missing = missing_rows["org"].apply(is_visibly_missing)
-                    if visibly_missing.all():
-                        print(f"{test_file}: ✅ All valid rows present (missing rows only had empty/unknown orgs)")
-                        correct_executions += 1
-                    else:
-                        print(f"{test_file}: ❌ {len(missing_rows)} missing rows from {label}")
-                        print(missing_rows[~visibly_missing].head(5))
-                else:
-                    print(f"{test_file}: ✅ All rows from {label} are present in tested dataset")
-                    correct_executions += 1
+                if len(df) != len(correct_df):
+                    print(f"{step2_file}: Row count mismatch ({len(df)} vs {len(correct_df)})")
+                    skip_executions.append(execution_dir)
+                    continue
+
+                mismatches = (normalized_df != normalized_correct_df)
+                if mismatches.any().any():
+                    print(f"{step2_file}: Value mismatch found")
+                    skip_executions.append(execution_dir)
+
+                    mismatch_count = 0
+                    for idx in mismatches.index:
+                        for col in key_columns:
+                            if mismatches.at[idx, col]:
+                                print(f"  Row {idx}, Column '{col}': found = '{df.at[idx, col]}', expected = '{correct_df.at[idx, col]}'")
+                                mismatch_count += 1
+                                if mismatch_count >= 5:
+                                    break
+                        if mismatch_count >= 5:
+                            break
 
             except Exception as e:
-                print(f"{test_file}: ❌ Failed to process ({e})")
+                print(f"{step2_file}: Failed to read/compare ({e})")
 
-# Summarize results
-print("\n=== SUMMARY ===")
-print(f"Total Executions Checked: {total_executions}")
-print(f"Executions with All Correct Rows: {correct_executions}")
-print(f"Executions with Errors: {total_executions - correct_executions}")
+# Report missing executions
+missing = expected_executions - found_executions
+if missing:
+    print(f"\nMissing {len(missing)} executions:")
+    for m in sorted(missing):
+        print(f"  {m}/analysis_data/step2_key_columns_data.csv")
+else:
+    print(f"\n✓ All {len(expected_executions)} expected executions were found")
+
+# Save to CSV (only execution paths, no /scripts/ prefix or file suffix)
+output_dir = "summary/step_specific/step3"
+os.makedirs(output_dir, exist_ok=True)
+skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+
+pd.DataFrame({"execution": skip_executions}).to_csv(skip_path, index=False)
+print(f"\n🚫 Saved {len(skip_executions)} problematic executions to: {skip_path}")

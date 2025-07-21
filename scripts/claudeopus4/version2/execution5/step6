@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Step 6: Calculate reappointment rates for each organization-year pair
-This script calculates the reappointment rate as reappointments divided by total employees.
+This script calculates the reappointment rate as reappointments divided by total appointments.
 """
 
 import pandas as pd
@@ -12,17 +12,17 @@ from datetime import datetime
 
 # Define paths
 INPUT_DIR = Path("scripts/claudeopus4/version2/execution5/analysis_data")
-EMPLOYEE_COUNTS_FILE = INPUT_DIR / "step4_employee_counts.csv"
+APPOINTMENT_COUNTS_FILE = INPUT_DIR / "step4_appointment_counts.csv"
 REAPPOINTMENT_COUNTS_FILE = INPUT_DIR / "step5_reappointment_counts.csv"
 OUTPUT_FILE = INPUT_DIR / "step6_reappointment_rates.csv"
 
 def load_input_data():
-    """Load employee counts and reappointment counts from previous steps"""
+    """Load appointment counts and reappointment counts from previous steps"""
     print("Loading input data...")
     
-    # Load employee counts from step 4
-    if not EMPLOYEE_COUNTS_FILE.exists():
-        print(f"✗ ERROR: Appointment counts file not found: {EMPLOYEE_COUNTS_FILE}")
+    # Load appointment counts from step 4
+    if not APPOINTMENT_COUNTS_FILE.exists():
+        print(f"✗ ERROR: Appointment counts file not found: {APPOINTMENT_COUNTS_FILE}")
         print("  Please run step 4 first.")
         sys.exit(1)
     
@@ -33,37 +33,37 @@ def load_input_data():
         sys.exit(1)
     
     try:
-        # Load employee counts
-        employee_counts = pd.read_csv(EMPLOYEE_COUNTS_FILE, encoding='utf-8')
-        print(f"✓ Loaded employee counts: {len(employee_counts):,} org-year combinations")
+        # Load appointment counts
+        appointment_counts = pd.read_csv(APPOINTMENT_COUNTS_FILE, encoding='utf-8')
+        print(f"✓ Loaded appointment counts: {len(appointment_counts):,} org-year combinations")
         
         # Load reappointment counts
         reappointment_counts = pd.read_csv(REAPPOINTMENT_COUNTS_FILE, encoding='utf-8')
         print(f"✓ Loaded reappointment counts: {len(reappointment_counts):,} org-year combinations")
         
-        return employee_counts, reappointment_counts
+        return appointment_counts, reappointment_counts
         
     except Exception as e:
         print(f"✗ ERROR loading files: {str(e)}")
         sys.exit(1)
 
-def validate_data_consistency(employee_counts, reappointment_counts):
+def validate_data_consistency(appointment_counts, reappointment_counts):
     """Validate consistency between the two datasets"""
     print("\nValidating data consistency...")
     
     # Check column availability
-    print("\nAppointment counts columns:", list(employee_counts.columns))
+    print("\nAppointment counts columns:", list(appointment_counts.columns))
     print("Reappointment counts columns:", list(reappointment_counts.columns))
     
     # Check if we have the necessary columns
-    required_emp_cols = ['org', 'year', 'total_appointments', 'unique_employees']
+    required_emp_cols = ['org', 'year', 'total_appointments', 'unique_appointments']
     required_reapp_cols = ['org', 'year', 'reappointment_count']
     
-    missing_emp_cols = set(required_emp_cols) - set(employee_counts.columns)
+    missing_emp_cols = set(required_emp_cols) - set(appointment_counts.columns)
     missing_reapp_cols = set(required_reapp_cols) - set(reappointment_counts.columns)
     
     if missing_emp_cols:
-        print(f"✗ ERROR: Missing columns in employee counts: {missing_emp_cols}")
+        print(f"✗ ERROR: Missing columns in appointment counts: {missing_emp_cols}")
         sys.exit(1)
     
     if missing_reapp_cols:
@@ -71,30 +71,30 @@ def validate_data_consistency(employee_counts, reappointment_counts):
         sys.exit(1)
     
     # Check org-year combinations
-    emp_combos = set(zip(employee_counts['org'], employee_counts['year']))
+    emp_combos = set(zip(appointment_counts['org'], appointment_counts['year']))
     reapp_combos = set(zip(reappointment_counts['org'], reappointment_counts['year']))
     
     only_in_emp = emp_combos - reapp_combos
     only_in_reapp = reapp_combos - emp_combos
     
     print(f"\nOrg-year combinations:")
-    print(f"  • In employee counts: {len(emp_combos):,}")
+    print(f"  • In appointment counts: {len(emp_combos):,}")
     print(f"  • In reappointment counts: {len(reapp_combos):,}")
     print(f"  • Common combinations: {len(emp_combos & reapp_combos):,}")
     
     if only_in_emp:
-        print(f"  ⚠ {len(only_in_emp)} combinations only in employee counts")
+        print(f"  ⚠ {len(only_in_emp)} combinations only in appointment counts")
     if only_in_reapp:
         print(f"  ⚠ {len(only_in_reapp)} combinations only in reappointment counts")
     
     return True
 
-def calculate_reappointment_rates(employee_counts, reappointment_counts):
+def calculate_reappointment_rates(appointment_counts, reappointment_counts):
     """Calculate reappointment rates for each org-year pair"""
     print("\nCalculating reappointment rates...")
     
     # Merge the datasets on org and year
-    merged_data = employee_counts.merge(
+    merged_data = appointment_counts.merge(
         reappointment_counts[['org', 'year', 'reappointment_count']], 
         on=['org', 'year'], 
         how='outer',
@@ -118,9 +118,9 @@ def calculate_reappointment_rates(employee_counts, reappointment_counts):
         merged_data['reappointment_count'] / merged_data['total_appointments'] * 100
     ).round(2)
     
-    # Rate 2: Reappointments / Unique Appointments (how many times on average each employee is reappointed)
-    merged_data['rate_per_unique_employee'] = (
-        merged_data['reappointment_count'] / merged_data['unique_employees']
+    # Rate 2: Reappointments / Unique Appointments (how many times on average each appointment is reappointed)
+    merged_data['rate_per_unique_appointment'] = (
+        merged_data['reappointment_count'] / merged_data['unique_appointments']
     ).round(3)
     
     # Rate 3: Reappointments / New Appointments (ratio of reappointments to new appointments)
@@ -129,17 +129,17 @@ def calculate_reappointment_rates(employee_counts, reappointment_counts):
     ).round(3)
     
     # Handle division by zero and infinity
-    merged_data['rate_per_unique_employee'] = merged_data['rate_per_unique_employee'].replace([np.inf, -np.inf], np.nan)
+    merged_data['rate_per_unique_appointment'] = merged_data['rate_per_unique_appointment'].replace([np.inf, -np.inf], np.nan)
     merged_data['reappointment_to_new_ratio'] = merged_data['reappointment_to_new_ratio'].replace([np.inf, -np.inf], np.nan)
     
     # Select and order columns for output
     output_columns = [
         'org', 'year', 
-        'total_appointments', 'unique_employees', 'new_appointments', 'reappointment_count',
-        'rate_per_total_appointments', 'rate_per_unique_employee', 'reappointment_to_new_ratio'
+        'total_appointments', 'unique_appointments', 'new_appointments', 'reappointment_count',
+        'rate_per_total_appointments', 'rate_per_unique_appointment', 'reappointment_to_new_ratio'
     ]
     
-    # Filter to only rows that were in both datasets or left_only (from employee counts)
+    # Filter to only rows that were in both datasets or left_only (from appointment counts)
     result = merged_data[merged_data['_merge'] != 'right_only'][output_columns].copy()
     
     # Sort by organization and year
@@ -167,12 +167,12 @@ def analyze_rate_distributions(rate_data):
     print(f"  • Min: {rate_stats['min']:.2f}%")
     print(f"  • Max: {rate_stats['max']:.2f}%")
     
-    # Rate per unique employee
-    employee_rate_stats = rate_data['rate_per_unique_employee'].describe()
+    # Rate per unique appointment
+    appointment_rate_stats = rate_data['rate_per_unique_appointment'].describe()
     print("\nRate per Unique Appointment:")
-    print(f"  • Mean: {employee_rate_stats['mean']:.3f}")
-    print(f"  • Median: {employee_rate_stats['50%']:.3f}")
-    print(f"  • Max: {employee_rate_stats['max']:.3f}")
+    print(f"  • Mean: {appointment_rate_stats['mean']:.3f}")
+    print(f"  • Median: {appointment_rate_stats['50%']:.3f}")
+    print(f"  • Max: {appointment_rate_stats['max']:.3f}")
     
     # Distribution buckets
     print("\nReappointment Rate Distribution (% of total appointments):")
@@ -323,13 +323,13 @@ def main():
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Load input data
-    employee_counts, reappointment_counts = load_input_data()
+    appointment_counts, reappointment_counts = load_input_data()
     
     # Validate data consistency
-    validate_data_consistency(employee_counts, reappointment_counts)
+    validate_data_consistency(appointment_counts, reappointment_counts)
     
     # Calculate reappointment rates
-    reappointment_rates = calculate_reappointment_rates(employee_counts, reappointment_counts)
+    reappointment_rates = calculate_reappointment_rates(appointment_counts, reappointment_counts)
     
     # Perform analyses
     analyze_rate_distributions(reappointment_rates)

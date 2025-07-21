@@ -1,0 +1,174 @@
+import os
+import pandas as pd
+
+# Canonical column definitions
+answer1_columns = ["org", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024"]
+answer3_columns = ["org", "year", "total_reappointments"]
+
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown", "missing", "unknown_org", "unknown organization"]:
+            return "nan"
+        return normalized
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).lower()
+
+def normalize_columns(df):
+    rename_dict = {
+        "organization": "org",
+        "source_year": "year",  # Tolerated alternative
+        "reappointment_count": "total_reappointments",  # Tolerated alternative
+        "data_year": "year"
+    }
+    return df.rename(columns={col: rename_dict[col] for col in rename_dict if col in df.columns})
+
+# Load correct answers
+try:
+    answer1 = pd.read_csv("summary/step_specific/step5/correct_answer/answer1.csv")
+    answer1 = normalize_columns(answer1)
+
+    answer3 = pd.read_csv("summary/step_specific/step5/correct_answer/answer3.csv")
+    answer3 = normalize_columns(answer3)
+except Exception as e:
+    print(f"❌ Failed to load answer1 or answer3: {e}")
+    exit(1)
+
+# Load step5 skip list
+skip_step5_path = "summary/step_specific/step5/executions_to_skip.csv"
+skip_step5_set = set()
+if os.path.exists(skip_step5_path):
+    try:
+        skip_df = pd.read_csv(skip_step5_path)
+        skip_step5_set = set(skip_df["execution"].astype(str))
+        print(f"🔁 Skipping {len(skip_step5_set)} executions listed in step5 skip file")
+    except Exception as e:
+        print(f"⚠️ Failed to load step5 skip list: {e}")
+
+# Prepare expected executions
+expected_branches = [
+    ("gpt4o", "version1"), ("gpt4o", "version2"), ("gpt4o", "version3"),
+    ("claudeopus4", "version1"), ("claudeopus4", "version2"), ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"), ("claudesonnet4", "version2"), ("claudesonnet4", "version3")
+]
+expected_executions = {
+    f"scripts/{model}/{version}/execution{n}"
+    for model, version in expected_branches for n in range(1, 11)
+}
+
+found_executions = set()
+current_step_failures = []
+
+root_dir = "scripts"
+
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path): continue
+
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path): continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"): continue
+
+            execution_dir = f"{model}/{version}/{folder}"
+            if execution_dir in skip_step5_set:
+                print(f"⏩ Skipping {execution_dir} (previously failed in step 3)")
+                continue
+
+            found_executions.add(f"scripts/{execution_dir}")
+            step5_file = os.path.join(version_path, folder, "analysis_data", "step5_reappointment_counts.csv")
+            if not os.path.exists(step5_file): continue
+
+            try:
+                df = pd.read_csv(step5_file)
+                df = normalize_columns(df)
+                row_count = len(df)
+
+                # Determine which answer to compare with
+                if row_count == 44:
+                    expected_df = answer1
+                    expected_columns = answer1_columns
+                elif row_count == 210:
+                    expected_df = answer3
+                    expected_columns = answer3_columns
+                else:
+                    continue
+
+                if not all(col in df.columns for col in expected_columns):
+                    print(f"{step5_file}: Missing expected columns")
+                    current_step_failures.append(execution_dir)
+                    continue
+
+                # Normalize values
+                df_norm = df[expected_columns].applymap(normalize_cell)
+                expected_norm = expected_df[expected_columns].applymap(normalize_cell)
+
+                # Drop irrelevant 'org' rows
+                df_norm = df_norm[df_norm["org"] != "nan"]
+                expected_norm = expected_norm[expected_norm["org"] != "nan"]
+
+                # Separate NaN-containing rows
+                df_nan = df_norm[df_norm.apply(lambda row: 'nan' in row.values, axis=1)]
+                df_clean = df_norm.drop(df_nan.index)
+
+                expected_nan = expected_norm[expected_norm.apply(lambda row: 'nan' in row.values, axis=1)]
+                expected_clean = expected_norm.drop(expected_nan.index)
+
+                # Compare clean rows
+                df_clean_set = set(map(tuple, df_clean.values.tolist()))
+                expected_clean_set = set(map(tuple, expected_clean.values.tolist()))
+
+                if df_clean_set != expected_clean_set:
+                    print(f"{step5_file}: ❌ Value mismatch in non-nan rows")
+                    current_step_failures.append(execution_dir)
+                    extra_rows = df_clean_set - expected_clean_set
+                    missing_rows = expected_clean_set - df_clean_set
+
+                    for i, row in enumerate(sorted(extra_rows)):
+                        print(f"   ✖ Unexpected row: {row}")
+                        if i >= 2:  # show at most 3 from each side
+                            break
+
+                    for i, row in enumerate(sorted(missing_rows)):
+                        print(f"   ✔️ Expected row not found: {row}")
+                        if i >= 2:
+                            break
+
+                    continue
+
+                # Compare nan-containing rows
+                df_nan_set = set(map(tuple, df_nan.values.tolist()))
+                expected_nan_set = set(map(tuple, expected_nan.values.tolist()))
+                if df_nan_set != expected_nan_set:
+                    print(f"{step5_file}: ⚠️ Mismatch in rows containing 'nan'")
+                    current_step_failures.append(execution_dir)
+                    for i, row in enumerate(df_nan_set.symmetric_difference(expected_nan_set)):
+                        print(f"   ⚠️ Row: {row}")
+                        if i >= 4:
+                            break
+
+            except Exception as e:
+                print(f"{step5_file}: ❌ Failed to read/compare ({e})")
+
+# Report missing executions
+missing = expected_executions - found_executions - {f"scripts/{e}" for e in skip_step5_set}
+if missing:
+    print(f"\nMissing {len(missing)} executions (excluding skipped):")
+    for m in sorted(missing):
+        print(f"  {m}/analysis_data/step5_reappointment_counts.csv")
+else:
+    print(f"\n✓ All expected executions were found or skipped")
+
+# Save step6 skip list
+all_skips_step6 = sorted(set(current_step_failures).union(skip_step5_set))
+output_dir = "summary/step_specific/step6"
+os.makedirs(output_dir, exist_ok=True)
+skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+
+pd.DataFrame({"execution": all_skips_step6}).to_csv(skip_path, index=False)
+print(f"\n🚫 Saved {len(all_skips_step6)} total skipped executions to: {skip_path}")

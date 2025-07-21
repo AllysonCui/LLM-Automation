@@ -1,0 +1,151 @@
+import os
+import pandas as pd
+
+# Columns to compare
+key_columns = ["reappointed", "name", "position", "org", "year"]
+
+# Normalize string values for case-insensitive comparison
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"  # Convert NaN to "nan" string for consistent comparison
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        # Handle "Nan" vs "nan" case sensitivity issue
+        if normalized == "nan":
+            return "nan"
+        return normalized
+    return str(value).lower()  # Convert non-string values to lowercase string
+
+# Define the sort order explicitly
+sort_priority = ["name", "position", "org", "reappointed", "year"]
+
+# Create a sort key with correct column priority
+def create_sort_key(df):
+    normalized_df = df[sort_priority].applymap(normalize_cell)
+    return normalized_df.apply(lambda row: tuple(row), axis=1)
+
+# Function to rename columns safely
+def safe_rename_columns(df):
+    rename_dict = {}
+    if "organization" in df.columns:
+        rename_dict["organization"] = "org"
+    if "source_year" in df.columns:
+        rename_dict["source_year"] = "year"
+    if "data_year" in df.columns:
+        rename_dict["data_year"] = "year"
+    return df.rename(columns=rename_dict)
+
+# Load and prepare correct answer
+correct_path = "summary/step_specific/step1/correct_answer/answer1.csv"
+try:
+    correct_df = pd.read_csv(correct_path)
+    correct_df = safe_rename_columns(correct_df)
+    correct_df = correct_df[key_columns].copy()
+except Exception as e:
+    print(f"Failed to read correct answer file: {e}")
+    exit(1)
+
+# Sort correct answer
+sort_key = create_sort_key(correct_df)
+sorted_indices = sort_key.argsort()
+correct_df = correct_df.iloc[sorted_indices].reset_index(drop=True)
+
+# Create normalized version for comparison
+normalized_correct_df = correct_df[key_columns].applymap(normalize_cell)
+
+# Define expected executions
+expected_branches = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudeopus4", "version2"),
+    ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"),
+    ("claudesonnet4", "version2"),
+    ("claudesonnet4", "version3")
+]
+
+# Track which executions we find
+found_executions = set()
+expected_executions = set()
+
+# Generate all expected execution paths
+for model, version in expected_branches:
+    for execution_num in range(1, 11):  # execution1 to execution10
+        expected_executions.add(f"scripts/{model}/{version}/execution{execution_num}")
+
+# Define root directory
+root_dir = "scripts"
+
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path):
+        continue
+
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path):
+            continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"):
+                continue
+
+            exec_path = os.path.join(version_path, folder)
+            execution_key = f"scripts/{model}/{version}/{folder}"
+            found_executions.add(execution_key)
+            step1_file = os.path.join(exec_path, "analysis_data", "step1_combined_appointments.csv")
+
+            if os.path.exists(step1_file):
+                try:
+                    df = pd.read_csv(step1_file)
+                    df = safe_rename_columns(df)
+
+                    if not all(col in df.columns for col in key_columns):
+                        missing_cols = [col for col in key_columns if col not in df.columns]
+                        available_cols = list(df.columns)
+                        print(f"{step1_file}: Missing required columns: {missing_cols}")
+                        print(f"  Available columns: {available_cols}")
+                        continue
+
+                    df = df[key_columns].copy()
+                    
+                    # Sort the dataframe using the same method
+                    sort_key = create_sort_key(df)
+                    sorted_indices = sort_key.argsort()
+                    df = df.iloc[sorted_indices].reset_index(drop=True)
+                    
+                    # Create normalized version for comparison
+                    normalized_df = df[key_columns].applymap(normalize_cell)
+
+                    if len(df) != len(correct_df):
+                        print(f"{step1_file}: Row count mismatch ({len(df)} vs {len(correct_df)})")
+                        continue
+
+                    # Compare normalized dataframes
+                    mismatches = (normalized_df != normalized_correct_df)
+                    if mismatches.any().any():
+                        print(f"{step1_file}: Value mismatch found")
+                        mismatch_count = 0
+                        for idx in mismatches.index:
+                            for col in key_columns:
+                                if mismatches.at[idx, col]:
+                                    print(f"  Row {idx}, Column '{col}': found = '{df.at[idx, col]}', expected = '{correct_df.at[idx, col]}'")
+                                    mismatch_count += 1
+                                    if mismatch_count >= 5:
+                                        break
+                            if mismatch_count >= 5:
+                                break
+                        
+                except Exception as e:
+                    print(f"{step1_file}: Failed to read/compare CSV ({e})")
+
+# Report missing executions
+missing_executions = expected_executions - found_executions
+if missing_executions:
+    print(f"\nMissing {len(missing_executions)} executions:")
+    for missing in sorted(missing_executions):
+        print(f"  {missing}/analysis_data/step1_combined_appointments.csv")
+else:
+    print(f"\n✓ All {len(expected_executions)} expected executions were found")

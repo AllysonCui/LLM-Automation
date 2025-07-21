@@ -2,65 +2,116 @@ import os
 import pandas as pd
 from pathlib import Path
 
-def extract_rounded_floats(df):
-    """Extract all float values in [0,1] rounded to 4 digits."""
-    float_vals = df.select_dtypes(include=['float']).values.flatten()
-    return sorted(set(round(val, 4) for val in float_vals if 0 <= val <= 1))
+def extract_column_floats(series):
+    """Extract float values in [0,1] from a column, rounded to 4 digits."""
+    return sorted(set(round(val, 4) for val in series if isinstance(val, float) and 0 <= val <= 1))
 
-# Load correct answer
-correct_path = Path("scripts/human/version1/analysis_data/step8_annual_proportions.csv")
-correct_df = pd.read_csv(correct_path)
-correct_vals = extract_rounded_floats(correct_df)
+def try_match(test_vals, correct_vals):
+    """Check if all correct values are in test_vals."""
+    return all(val in test_vals for val in correct_vals)
 
-# Root directory of all outputs
+# === Load correct values ===
+correct_path = Path("summary/step_specific/step8/correct_answer/answer1.csv")
+try:
+    correct_df = pd.read_csv(correct_path)
+    correct_vals = extract_column_floats(correct_df["reappointment_proportion"])
+except Exception as e:
+    print(f"❌ Failed to load correct answer: {e}")
+    exit(1)
+
+# === Load step8 skip list ===
+skip_step8_path = "summary/step_specific/step8/executions_to_skip.csv"
+skip_step8_set = set()
+if os.path.exists(skip_step8_path):
+    try:
+        skip_df = pd.read_csv(skip_step8_path)
+        skip_step8_set = set(skip_df["execution"].astype(str))
+    except Exception as e:
+        print(f"⚠️ Failed to load step8 skip list: {e}")
+
+# === Prepare ===
 root_dir = "scripts"
+checked_executions = []
+failures_step9 = []
+total_checked = 0
+total_correct = 0
 
-# Counters
-total_executions = 0
-correct_executions = 0
+# Expected structure
+expected_branches = [
+    ("gpt4o", "version1"), ("gpt4o", "version2"), ("gpt4o", "version3"),
+    ("claudeopus4", "version1"), ("claudeopus4", "version2"), ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"), ("claudesonnet4", "version2"), ("claudesonnet4", "version3"),
+]
+expected_executions = {
+    f"scripts/{model}/{version}/execution{i}"
+    for model, version in expected_branches for i in range(1, 11)
+}
 
-# Traverse structure
+# === Traverse ===
 for model in os.listdir(root_dir):
     model_path = os.path.join(root_dir, model)
-    if not os.path.isdir(model_path):
-        continue
+    if not os.path.isdir(model_path): continue
 
     for version in os.listdir(model_path):
         version_path = os.path.join(model_path, version)
-        if not os.path.isdir(version_path):
-            continue
+        if not os.path.isdir(version_path): continue
 
         for folder in os.listdir(version_path):
-            if not folder.startswith("execution"):
-                continue
+            if not folder.startswith("execution"): continue
 
-            exec_path = os.path.join(version_path, folder)
-            test_file = os.path.join(exec_path, "analysis_data", "step8_annual_proportions.csv")
+            rel_execution = f"{model}/{version}/{folder}"
+            full_execution = f"scripts/{rel_execution}"
 
+            if rel_execution in skip_step8_set:
+                continue  # Do not print skipped ones
+
+            test_file = os.path.join(version_path, folder, "analysis_data", "step8_annual_proportions.csv")
             if not os.path.exists(test_file):
                 continue
 
-            total_executions += 1
+            total_checked += 1
+            checked_executions.append(rel_execution)
 
             try:
                 test_df = pd.read_csv(test_file)
-                test_vals = extract_rounded_floats(test_df)
 
-                # Check if all correct values are in the test values
-                missing = [val for val in correct_vals if val not in test_vals]
+                match_found = False
+                for col in test_df.select_dtypes(include=["float"]).columns:
+                    raw_vals = test_df[col]
 
-                if not missing:
-                    print(f"{test_file}: ✅ All values matched")
-                    correct_executions += 1
+                    # First check: original values rounded
+                    rounded_vals = sorted(set(round(v, 4) for v in raw_vals if isinstance(v, float) and 0 <= v <= 1))
+                    if try_match(rounded_vals, correct_vals):
+                        match_found = True
+                        break
+
+                    # Second check: divide [0,100] values by 100
+                    divided_vals = sorted(set(round(v / 100, 4) for v in raw_vals if isinstance(v, float) and 0 <= v <= 100))
+                    if try_match(divided_vals, correct_vals):
+                        match_found = True
+                        break
+
+                if match_found:
+                    print(f"{test_file}: ✅ All values matched (raw or scaled)")
+                    total_correct += 1
                 else:
-                    print(f"{test_file}: ❌ {len(missing)} values missing")
-                    print(f"Missing (sample): {missing[:5]}")
+                    print(f"{test_file}: ❌ No column contained all correct values")
+                    failures_step9.append(rel_execution)
 
             except Exception as e:
                 print(f"{test_file}: ❌ Failed to process ({e})")
+                failures_step9.append(rel_execution)
 
-# Summary
+# === Save combined skip list for step9 ===
+combined_skip_set = sorted(set(skip_step8_set).union(failures_step9))
+output_dir = "summary/step_specific/step9"
+os.makedirs(output_dir, exist_ok=True)
+step9_skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+pd.DataFrame({"execution": combined_skip_set}).to_csv(step9_skip_path, index=False)
+
+# === Final summary ===
 print("\n=== SUMMARY ===")
-print(f"Total Executions Checked: {total_executions}")
-print(f"Executions with All Correct Values: {correct_executions}")
-print(f"Executions with Errors: {total_executions - correct_executions}")
+print(f"Executions Actually Checked: {total_checked}")
+print(f"Executions with All Correct Values: {total_correct}")
+print(f"Executions with Errors in Step 9: {len(failures_step9)}")
+print(f"Combined Skips Saved to: {step9_skip_path}")

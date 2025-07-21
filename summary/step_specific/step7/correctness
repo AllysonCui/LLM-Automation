@@ -1,57 +1,154 @@
 import os
 import pandas as pd
-from pathlib import Path
+
+# Canonical columns to check
+expected_columns = ["top_org", "year", "max_rate"]
+
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown", "missing", "unknown_org", "unknown organization"]:
+            return "nan"
+        return normalized
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).lower()
+
+def normalize_columns(df):
+    rename_dict = {
+        "top_organization": "top_org",
+        "source_year": "year",
+        "appointment_count": "total_appointments",
+        "data_year": "year"
+    }
+    return df.rename(columns={col: rename_dict[col] for col in rename_dict if col in df.columns})
+
+def clean_rate(value):
+    try:
+        if pd.isna(value) or str(value).strip() == "":
+            return 0.0
+        val = float(value)
+        if 0 <= val <= 1:
+            return round(val, 6)
+        elif 0 < val <= 100:
+            return round(val / 100.0, 6)
+    except:
+        return 0.0
+    return 0.0
 
 # Load correct answer
-correct_path = Path("scripts/human/version1/analysis_data/step7_yearly_max_rates.csv")
-correct_answer = pd.read_csv(correct_path)
+try:
+    answer1 = pd.read_csv("summary/step_specific/step7/correct_answer/answer1.csv")
+    answer1 = normalize_columns(answer1)
+except Exception as e:
+    print(f"❌ Failed to load answer1: {e}")
+    exit(1)
 
-# Extract and round the correct float values to 4 decimal places
-correct_col = correct_answer.select_dtypes(include=['float']).iloc[:, 0].round(4).tolist()
+# Load skip list
+skip_step7_path = "summary/step_specific/step7/executions_to_skip.csv"
+skip_step7_set = set()
+if os.path.exists(skip_step7_path):
+    try:
+        skip_df = pd.read_csv(skip_step7_path)
+        skip_step7_set = set(skip_df["execution"].astype(str))
+        print(f"🔁 Skipping {len(skip_step7_set)} executions listed in step7 skip file")
+    except Exception as e:
+        print(f"⚠️ Failed to load step7 skip list: {e}")
 
-# Define base paths and result collection
-base_paths = [
-    ("gpt4o", "version1"),
-    ("gpt4o", "version2"),
-    ("gpt4o", "version3"),
-    ("claudeopus4", "version1"),
-    ("claudeopus4", "version2"),
-    ("claudeopus4", "version3"),
-    ("claudesonnet4", "version1"),
-    ("claudesonnet4", "version2"),
-    ("claudesonnet4", "version3")
+# Expected executions
+expected_branches = [
+    ("gpt4o", "version1"), ("gpt4o", "version2"), ("gpt4o", "version3"),
+    ("claudeopus4", "version1"), ("claudeopus4", "version2"), ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"), ("claudesonnet4", "version2"), ("claudesonnet4", "version3")
 ]
+expected_executions = {
+    f"scripts/{model}/{version}/execution{n}"
+    for model, version in expected_branches for n in range(1, 11)
+}
 
-results = []
+found_executions = set()
+current_step_failures = []
+root_dir = "scripts"
 
-# Traverse each model and version
-for model, version in base_paths:
-    base_dir = Path(f"scripts/{model}/{version}")
-    total = 0
-    correct = 0
-    wrong_execs = []
+for model in os.listdir(root_dir):
+    model_path = os.path.join(root_dir, model)
+    if not os.path.isdir(model_path): continue
 
-    for subdir in base_dir.glob("execution*/analysis_data"):
-        exec_num = subdir.parts[-2].replace("execution", "")
-        file_path = subdir / "step7_yearly_max_rates.csv"
-        if file_path.exists():
+    for version in os.listdir(model_path):
+        version_path = os.path.join(model_path, version)
+        if not os.path.isdir(version_path): continue
+
+        for folder in os.listdir(version_path):
+            if not folder.startswith("execution"): continue
+
+            execution_dir = f"{model}/{version}/{folder}"
+            if execution_dir in skip_step7_set:
+                print(f"⏩ Skipping {execution_dir}")
+                continue
+
+            found_executions.add(f"scripts/{execution_dir}")
+            step7_file = os.path.join(version_path, folder, "analysis_data", "step7_yearly_max_rates.csv")
+            if not os.path.exists(step7_file): continue
+
             try:
-                df = pd.read_csv(file_path)
-                float_col = df.select_dtypes(include=['float']).iloc[:, 0].round(4).tolist()
-                # Compare as multisets
-                if sorted(float_col) == sorted(correct_col):
-                    correct += 1
-                else:
-                    wrong_execs.append(exec_num)
-                total += 1
-            except Exception:
-                wrong_execs.append(exec_num)
+                df = pd.read_csv(step7_file)
+                df = normalize_columns(df)
 
-    accuracy = correct / total if total > 0 else 0
-    results.append((model, version, round(accuracy, 3), ", ".join(sorted(wrong_execs))))
+                if len(df) != 528:
+                    continue
 
-# Output markdown table
-print("| Model         | Version   | Avg Correct Rate | Wrong Executions        |")
-print("|---------------|-----------|------------------|--------------------------|")
-for model, version, rate, wrong in results:
-    print(f"| {model:<13} | {version:<9} | {rate:<16} | {wrong} |")
+                # Normalize both answer and df
+                df_sub = df[expected_columns].copy()
+                expected_sub = answer1[expected_columns].copy()
+
+                for col in ["top_org", "year"]:
+                    df_sub[col] = df_sub[col].map(normalize_cell)
+                    expected_sub[col] = expected_sub[col].map(normalize_cell)
+
+                df_sub["max_rate"] = df_sub["max_rate"].map(clean_rate)
+                expected_sub["max_rate"] = expected_sub["max_rate"].map(clean_rate)
+
+                df_sub = df_sub[df_sub["top_org"] != "nan"]
+                expected_sub = expected_sub[expected_sub["top_org"] != "nan"]
+
+                df_set = set(map(tuple, df_sub.values.tolist()))
+                expected_set = set(map(tuple, expected_sub.values.tolist()))
+
+                if df_set != expected_set:
+                    print(f"{step7_file}: ❌ Mismatch in max_rate rows")
+                    current_step_failures.append(execution_dir)
+
+                    extra_rows = df_set - expected_set
+                    missing_rows = expected_set - df_set
+
+                    for i, row in enumerate(sorted(extra_rows)):
+                        print(f"   ✖ Unexpected row: {row}")
+                        if i >= 2: break
+
+                    for i, row in enumerate(sorted(missing_rows)):
+                        print(f"   ✔️ Expected row not found: {row}")
+                        if i >= 2: break
+
+            except Exception as e:
+                print(f"{step7_file}: ❌ Failed to read/compare ({e})")
+                current_step_failures.append(execution_dir)
+
+# Report missing executions
+missing = expected_executions - found_executions - {f"scripts/{e}" for e in skip_step7_set}
+if missing:
+    print(f"\nMissing {len(missing)} executions (excluding skipped):")
+    for m in sorted(missing):
+        print(f"  {m}/analysis_data/step7_yearly_max_rates.csv")
+else:
+    print(f"\n✓ All expected executions were found or skipped")
+
+# Save step8 skip list
+all_skips_step8 = sorted(set(current_step_failures).union(skip_step7_set))
+output_dir = "summary/step_specific/step8"
+os.makedirs(output_dir, exist_ok=True)
+skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+
+pd.DataFrame({"execution": all_skips_step8}).to_csv(skip_path, index=False)
+print(f"\n🚫 Saved {len(all_skips_step8)} total skipped executions to: {skip_path}")

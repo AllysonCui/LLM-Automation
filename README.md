@@ -84,3 +84,5 @@ LLMs answer the question by generating scripts in numerical order, all scripts e
       * `step2/` 
         * `length` - Examine how many different types of results are there in terms of the number of rows they have
         * `correctness` - Examine whether the result is correct given its length
+      * ... 
+      * `step9/` 

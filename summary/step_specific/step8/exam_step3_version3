@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+
+import re
+from pathlib import Path
+
+base_paths = [
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version3"),
+    ("claudesonnet4", "version3")
+]
+
+root_dir = Path("scripts")
+target_filename = "step3_repeats_marked.csv"
+
+def extract_block(content: str, step_start: str, step_end: str) -> str | None:
+    lines = content.splitlines()
+    start_indices = [i for i, line in enumerate(lines) if step_start in line]
+    end_indices = [i for i, line in enumerate(lines) if step_end in line]
+
+    if not start_indices or not end_indices:
+        return None
+
+    start = start_indices[-1]
+    end = next((i for i in end_indices if i > start), None)
+    if end is None:
+        return None
+
+    return "\n".join(lines[start + 1:end])
+
+def extract_dataframe_from_line(line: str) -> str | None:
+    if ".to_csv" in line:
+        match = re.search(r'(\w+)\.to_csv', line)
+        if match:
+            return match.group(1)
+    elif target_filename in line:
+        match = re.search(r'\(([^()]+)\)', line)
+        if match:
+            args = match.group(1).split(',')
+            for arg in args:
+                arg = arg.strip()
+                if not (arg.startswith('"') or arg.startswith("'") or arg.isdigit()):
+                    return arg
+    return None
+
+print("| Model         | Version   | Execution    | Step3 DF         | Used in Step8? |")
+print("|---------------|-----------|--------------|------------------|----------------|")
+
+for model, version in base_paths:
+    base_dir = root_dir / model / version
+    for subdir in sorted(base_dir.glob("execution*")):
+        script_files = [f for f in subdir.glob("*") if f.is_file() and f.suffix == ""]
+        for script_path in script_files:
+            try:
+                content = script_path.read_text(encoding="utf-8", errors="ignore")
+
+                step3_block = extract_block(content, "Step 3", "Step 4")
+                if not step3_block:
+                    continue
+
+                step3_df = None
+                for line in step3_block.splitlines():
+                    step3_df = extract_dataframe_from_line(line)
+                    if step3_df:
+                        break  # Stop after first match
+
+                if not step3_df:
+                    continue
+
+                step8_block = extract_block(content, "Step 8", "Step 9")
+                if not step8_block:
+                    continue
+
+                used_in_step8 = step3_df in step8_block
+
+                print(f"| {model:<13} | {version:<9} | {subdir.name:<12} | {step3_df:<16} | {'✅' if used_in_step8 else '❌':<14} |")
+
+            except Exception:
+                continue

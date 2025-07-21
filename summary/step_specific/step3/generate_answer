@@ -1,0 +1,39 @@
+import pandas as pd
+from pathlib import Path
+
+# Define sort priority
+sort_priority = ["name", "position", "org", "reappointed", "year"]
+
+# Define file paths
+input_path = Path("scripts/human/version1/analysis_data/step3_repeats_marked.csv")
+output_path = Path("summary/step_specific/step3/correct_answer/answer1.csv")
+
+# Create output directory if it doesn't exist
+output_path.parent.mkdir(parents=True, exist_ok=True)
+
+# Normalize string values for case-insensitive comparison
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"nan", "unknown"}:
+            return "nan"
+        return normalized
+    return str(value).lower()
+
+# Create a sort key with correct column priority
+def create_sort_key(df):
+    normalized_df = df[sort_priority].applymap(normalize_cell)
+    return normalized_df.apply(lambda row: tuple(row), axis=1)
+
+# Read and prepare the input CSV
+df = pd.read_csv(input_path)
+
+# Sort using the normalized sort key
+sort_key = create_sort_key(df)
+sorted_indices = sort_key.argsort()
+sorted_df = df.iloc[sorted_indices].reset_index(drop=True)
+
+# Write to output path
+sorted_df.to_csv(output_path, index=False)

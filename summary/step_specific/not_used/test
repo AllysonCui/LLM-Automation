@@ -1,0 +1,53 @@
+import pandas as pd
+
+# File to read and write
+input_file = "summary/step_specific/step2/correct_answer/answer1.csv"
+output_file = "summary/step_specific/test/correct_sorted.csv"
+
+# Columns to compare and sort by
+key_columns = ["reappointed", "name", "position", "org", "year"]
+
+# Normalization function
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown"]:
+            return "nan"
+        return normalized
+    return str(value).lower()
+
+# Safe column renaming
+def safe_rename_columns(df):
+    rename_dict = {}
+    if "organization" in df.columns:
+        rename_dict["organization"] = "org"
+    if "source_year" in df.columns:
+        rename_dict["source_year"] = "year"
+    if "data_year" in df.columns:
+        rename_dict["data_year"] = "year"
+    return df.rename(columns=rename_dict)
+
+# Read and process file
+try:
+    df = pd.read_csv(input_file)
+    df = safe_rename_columns(df)
+
+    if not all(col in df.columns for col in key_columns):
+        raise ValueError(f"Missing required columns in {input_file}")
+
+    df = df[key_columns].copy()
+    
+    # Create sort key
+    sort_key = df[key_columns].applymap(normalize_cell)
+    sort_tuples = sort_key.apply(lambda row: tuple(row), axis=1)
+    sorted_indices = sort_tuples.argsort()
+
+    sorted_df = df.iloc[sorted_indices].reset_index(drop=True)
+
+    # Save to output
+    sorted_df.to_csv(output_file, index=False)
+    print(f"✅ Sorted file saved to: {output_file}")
+except Exception as e:
+    print(f"❌ Error processing file: {e}")

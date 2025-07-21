@@ -2,7 +2,7 @@
 """
 Step 6: Calculate reappointment rates
 This script calculates the reappointment rate as reappointments divided by 
-total employees for each org-year pair, with detailed analysis and validation.
+total appointments for each org-year pair, with detailed analysis and validation.
 """
 
 import pandas as pd
@@ -40,7 +40,7 @@ def calculate_reappointment_rates():
         sys.exit(1)
     
     # Verify required columns exist
-    required_cols = ['year', 'org', 'total_employees', 'reappointments']
+    required_cols = ['year', 'org', 'total_appointments', 'reappointments']
     missing_cols = [col for col in required_cols if col not in df.columns]
     
     if missing_cols:
@@ -53,7 +53,7 @@ def calculate_reappointment_rates():
         print(f"   Verifying and enhancing the calculations...")
     else:
         print(f"\n📊 Calculating reappointment rates...")
-        df['reappointment_rate'] = (df['reappointments'] / df['total_employees'] * 100).round(2)
+        df['reappointment_rate'] = (df['reappointments'] / df['total_appointments'] * 100).round(2)
     
     # Add validation flags
     print(f"\n🔍 Adding data validation flags...")
@@ -67,19 +67,19 @@ def calculate_reappointment_rates():
         print(f"\n⚠️  Warning: Found {len(invalid_rates)} records with rate > 100%")
         df.loc[df['reappointment_rate'] > 100, 'rate_validation'] = 'Rate > 100%'
         for _, row in invalid_rates.iterrows():
-            print(f"   - {row['org']} ({int(row['year'])}): {row['reappointments']}/{row['total_employees']} = {row['reappointment_rate']}%")
+            print(f"   - {row['org']} ({int(row['year'])}): {row['reappointments']}/{row['total_appointments']} = {row['reappointment_rate']}%")
     
-    # Check for organizations with only 1 employee and 100% rate
-    single_employee = df[(df['total_employees'] == 1) & (df['reappointment_rate'] == 100)]
-    if len(single_employee) > 0:
-        print(f"\n⚠️  Found {len(single_employee)} org-years with single employee and 100% rate")
-        df.loc[(df['total_employees'] == 1) & (df['reappointment_rate'] == 100), 'rate_validation'] = 'Single Appointment'
+    # Check for organizations with only 1 appointment and 100% rate
+    single_appointment = df[(df['total_appointments'] == 1) & (df['reappointment_rate'] == 100)]
+    if len(single_appointment) > 0:
+        print(f"\n⚠️  Found {len(single_appointment)} org-years with single appointment and 100% rate")
+        df.loc[(df['total_appointments'] == 1) & (df['reappointment_rate'] == 100), 'rate_validation'] = 'Single Appointment'
     
     # Calculate additional metrics
     print(f"\n📈 Calculating additional metrics...")
     
-    # Categorize by employee count
-    df['size_category'] = pd.cut(df['total_employees'], 
+    # Categorize by appointment count
+    df['size_category'] = pd.cut(df['total_appointments'], 
                                  bins=[0, 5, 10, 25, 50, 100, float('inf')],
                                  labels=['1-5', '6-10', '11-25', '26-50', '51-100', '100+'])
     
@@ -87,13 +87,13 @@ def calculate_reappointment_rates():
     print(f"\n📊 Calculating organization-level statistics...")
     org_stats = df.groupby('org').agg({
         'reappointments': 'sum',
-        'total_employees': 'sum',
+        'total_appointments': 'sum',
         'year': ['min', 'max', 'count']
     }).round(2)
     
-    org_stats.columns = ['total_reappointments', 'total_employees', 'first_year', 'last_year', 'years_active']
-    org_stats['overall_rate'] = (org_stats['total_reappointments'] / org_stats['total_employees'] * 100).round(2)
-    org_stats['avg_employees_per_year'] = (org_stats['total_employees'] / org_stats['years_active']).round(2)
+    org_stats.columns = ['total_reappointments', 'total_appointments', 'first_year', 'last_year', 'years_active']
+    org_stats['overall_rate'] = (org_stats['total_reappointments'] / org_stats['total_appointments'] * 100).round(2)
+    org_stats['avg_appointments_per_year'] = (org_stats['total_appointments'] / org_stats['years_active']).round(2)
     
     # Calculate rate statistics by organization size
     print(f"\n📊 Reappointment rates by organization size:")
@@ -135,25 +135,25 @@ def calculate_reappointment_rates():
     print(f"\n📊 Reappointment rates by government branch:")
     branch_stats = df.groupby('branch_category').agg({
         'reappointments': 'sum',
-        'total_employees': 'sum',
+        'total_appointments': 'sum',
         'org': 'nunique'
     })
-    branch_stats['branch_rate'] = (branch_stats['reappointments'] / branch_stats['total_employees'] * 100).round(2)
+    branch_stats['branch_rate'] = (branch_stats['reappointments'] / branch_stats['total_appointments'] * 100).round(2)
     branch_stats = branch_stats.sort_values('branch_rate', ascending=False)
     
     print(f"\n{'Branch':<20} {'Organizations':<15} {'Appointments':<12} {'Reappointments':<15} {'Rate':<10}")
     print("-" * 85)
     for branch, row in branch_stats.iterrows():
-        print(f"{branch:<20} {row['org']:>13.0f} {row['total_employees']:>11.0f} "
+        print(f"{branch:<20} {row['org']:>13.0f} {row['total_appointments']:>11.0f} "
               f"{row['reappointments']:>14.0f} {row['branch_rate']:>8.2f}%")
     
     # Time series analysis by branch
     print(f"\n📈 Branch reappointment trends over time:")
     branch_yearly = df.groupby(['year', 'branch_category']).agg({
         'reappointments': 'sum',
-        'total_employees': 'sum'
+        'total_appointments': 'sum'
     })
-    branch_yearly['yearly_rate'] = (branch_yearly['reappointments'] / branch_yearly['total_employees'] * 100).round(2)
+    branch_yearly['yearly_rate'] = (branch_yearly['reappointments'] / branch_yearly['total_appointments'] * 100).round(2)
     
     # Show trends for top 3 branches
     top_branches = branch_stats.head(3).index
@@ -178,22 +178,22 @@ def calculate_reappointment_rates():
     # Organizations with extreme rates
     print(f"\n🎯 Organizations with extreme reappointment rates:")
     
-    # Highest rates (minimum 10 employees total)
-    high_rate_orgs = org_stats[org_stats['total_employees'] >= 10].nlargest(5, 'overall_rate')
-    print(f"\n  Highest rates (min 10 employees):")
+    # Highest rates (minimum 10 appointments total)
+    high_rate_orgs = org_stats[org_stats['total_appointments'] >= 10].nlargest(5, 'overall_rate')
+    print(f"\n  Highest rates (min 10 appointments):")
     for org, row in high_rate_orgs.iterrows():
         print(f"    - {org}: {row['overall_rate']:.2f}% "
-              f"({int(row['total_reappointments'])}/{int(row['total_employees'])})")
+              f"({int(row['total_reappointments'])}/{int(row['total_appointments'])})")
     
-    # Lowest rates (minimum 10 employees total)
-    low_rate_orgs = org_stats[org_stats['total_employees'] >= 10].nsmallest(5, 'overall_rate')
-    print(f"\n  Lowest rates (min 10 employees):")
+    # Lowest rates (minimum 10 appointments total)
+    low_rate_orgs = org_stats[org_stats['total_appointments'] >= 10].nsmallest(5, 'overall_rate')
+    print(f"\n  Lowest rates (min 10 appointments):")
     for org, row in low_rate_orgs.iterrows():
         print(f"    - {org}: {row['overall_rate']:.2f}% "
-              f"({int(row['total_reappointments'])}/{int(row['total_employees'])})")
+              f"({int(row['total_reappointments'])}/{int(row['total_appointments'])})")
     
     # Prepare final output
-    output_columns = ['year', 'org', 'total_employees', 'reappointments', 
+    output_columns = ['year', 'org', 'total_appointments', 'reappointments', 
                      'reappointment_rate', 'size_category', 'branch_category', 'rate_validation']
     final_output = df[output_columns].copy()
     

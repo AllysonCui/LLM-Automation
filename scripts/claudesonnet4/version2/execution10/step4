@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Step 4: Count appointments by organization and year
+Step 4: Count total appointments by organization and year
 Research Question: Which government branch in New Brunswick most frequently reappoints 
 past appointees, and is this trend increasing or declining over the past 12 years?
 
@@ -41,12 +41,21 @@ def load_repeats_marked_data(file_path):
         print(f"  - Available columns: {list(df.columns)}")
         
         # Validate required columns are present
-        required_columns = ['name', 'position', 'org', 'year', 'reappointed']
+        required_columns = ['org', 'year']
         missing_columns = [col for col in required_columns if col not in df.columns]
         
         if missing_columns:
             print(f"ERROR: Missing required columns: {missing_columns}")
             return None
+        
+        # Convert year to numeric if needed
+        df['year'] = pd.to_numeric(df['year'], errors='coerce')
+        
+        # Check for any invalid years
+        invalid_years = df['year'].isna().sum()
+        if invalid_years > 0:
+            print(f"WARNING: Found {invalid_years} invalid year values, removing...")
+            df = df[df['year'].notna()]
         
         return df
         
@@ -55,231 +64,250 @@ def load_repeats_marked_data(file_path):
         return None
 
 def analyze_data_structure(df):
-    """Analyze the structure of the data for appointment counting."""
+    """Analyze the structure of the data before counting."""
     print("\n" + "=" * 50)
     print("DATA STRUCTURE ANALYSIS")
     print("=" * 50)
     
     # Basic statistics
     total_records = len(df)
-    unique_people = df['name'].nunique()
-    unique_orgs = df['org'].nunique()
     year_range = f"{df['year'].min():.0f} - {df['year'].max():.0f}"
+    unique_orgs = df['org'].nunique()
+    unique_years = df['year'].nunique()
     
-    print(f"Dataset overview:")
-    print(f"  - Total appointment records: {total_records:,}")
-    print(f"  - Unique individuals: {unique_people:,}")
-    print(f"  - Unique organizations: {unique_orgs:,}")
-    print(f"  - Year range: {year_range}")
+    print(f"Total records: {total_records:,}")
+    print(f"Year range: {year_range}")
+    print(f"Unique organizations: {unique_orgs:,}")
+    print(f"Unique years: {unique_years:,}")
     
-    # Check for potential duplicates that might affect counting
-    # Same person, same org, same year (but potentially different positions)
-    duplicate_check = df.groupby(['name', 'org', 'year']).size()
-    duplicates = duplicate_check[duplicate_check > 1]
+    # Check for missing values
+    missing_org = df['org'].isna().sum()
+    missing_year = df['year'].isna().sum()
     
-    if len(duplicates) > 0:
-        print(f"\nPotential counting considerations:")
-        print(f"  - Found {len(duplicates)} cases where same person appears multiple times")
-        print(f"    in same organization in same year (possibly different positions)")
-        
-        # Show examples
-        print("  - Sample cases:")
-        for (name, org, year), count in duplicates.head(5).items():
-            positions = df[(df['name'] == name) & (df['org'] == org) & (df['year'] == year)]['position'].unique()
-            print(f"    {name} in {org} ({year:.0f}): {count} appointments")
-            print(f"      Positions: {', '.join(positions[:3])}{'...' if len(positions) > 3 else ''}")
+    if missing_org > 0 or missing_year > 0:
+        print(f"\nMissing values:")
+        print(f"  - Missing organizations: {missing_org:,}")
+        print(f"  - Missing years: {missing_year:,}")
     
-    # Year distribution
+    # Show year distribution
     print(f"\nAppointments by year:")
     year_counts = df['year'].value_counts().sort_index()
     for year, count in year_counts.items():
-        print(f"  {year:.0f}: {count:,} appointments")
+        print(f"  {year:.0f}: {count:,}")
+    
+    # Show top organizations by total appointments
+    print(f"\nTop 10 organizations by total appointments:")
+    org_counts = df['org'].value_counts().head(10)
+    for org, count in org_counts.items():
+        print(f"  {org}: {count:,}")
     
     return df
 
 def count_appointments_by_org_year(df):
-    """Count unique appointments per organization per year."""
+    """Count total appointments for each organization in each year."""
     print("\n" + "=" * 50)
-    print("COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("COUNTING APPOINTMENTS BY ORGANIZATION AND YEAR")
     print("=" * 50)
     
-    # Method 1: Count unique individuals per org per year
-    # This counts each person only once per organization per year, regardless of multiple positions
-    appointment_counts = df.groupby(['org', 'year'])['name'].nunique().reset_index()
-    appointment_counts.columns = ['org', 'year', 'appointment_count']
-    
-    print(f"Appointment counting methodology:")
-    print(f"  - Counting unique individuals per organization per year")
-    print(f"  - Each person counted once per org per year (regardless of multiple positions)")
-    print(f"  - Result: {len(appointment_counts)} org-year combinations")
-    
-    # Sort by organization and year for readability
-    appointment_counts = appointment_counts.sort_values(['org', 'year'])
-    
-    # Add total appointments per org per year for context
+    # Group by organization and year, count total appointments
     appointment_counts = df.groupby(['org', 'year']).size().reset_index(name='total_appointments')
-    appointment_counts = appointment_counts.merge(appointment_counts, on=['org', 'year'], how='left')
     
-    # Calculate appointments per appointment ratio
-    appointment_counts['appointments_per_appointment'] = (
-        appointment_counts['total_appointments'] / appointment_counts['appointment_count']
-    ).round(2)
+    print(f"Organization-year combinations: {len(appointment_counts):,}")
     
-    print(f"\nSample of appointment counts:")
-    print(appointment_counts.head(10).to_string(index=False))
+    # Summary statistics
+    total_combinations = len(appointment_counts)
+    min_appointments = appointment_counts['total_appointments'].min()
+    max_appointments = appointment_counts['total_appointments'].max()
+    mean_appointments = appointment_counts['total_appointments'].mean()
+    median_appointments = appointment_counts['total_appointments'].median()
+    
+    print(f"\nAppointment count statistics:")
+    print(f"  - Minimum appointments per org-year: {min_appointments}")
+    print(f"  - Maximum appointments per org-year: {max_appointments}")
+    print(f"  - Mean appointments per org-year: {mean_appointments:.1f}")
+    print(f"  - Median appointments per org-year: {median_appointments:.1f}")
+    
+    # Distribution of appointment counts
+    count_distribution = appointment_counts['total_appointments'].value_counts().sort_index()
+    
+    print(f"\nDistribution of appointment counts:")
+    for count, frequency in count_distribution.head(10).items():
+        percentage = (frequency / total_combinations) * 100
+        print(f"  {count} appointment(s): {frequency:,} org-year combinations ({percentage:.1f}%)")
+    
+    if len(count_distribution) > 10:
+        remaining = len(count_distribution) - 10
+        print(f"  ... and {remaining} more count levels")
     
     return appointment_counts
 
-def analyze_appointment_count_patterns(appointment_counts):
-    """Analyze patterns in appointment counts across organizations and years."""
+def analyze_organizational_patterns(appointment_counts):
+    """Analyze patterns in organizational appointments over time."""
     print("\n" + "=" * 50)
-    print("EMPLOYEE COUNT PATTERN ANALYSIS")
+    print("ORGANIZATIONAL APPOINTMENT PATTERNS")
     print("=" * 50)
     
-    # Summary statistics
-    total_org_years = len(appointment_counts)
-    avg_appointments_per_org_year = appointment_counts['appointment_count'].mean()
-    median_appointments_per_org_year = appointment_counts['appointment_count'].median()
+    # Calculate total appointments per organization across all years
+    org_totals = appointment_counts.groupby('org')['total_appointments'].agg([
+        'sum', 'mean', 'std', 'min', 'max', 'count'
+    ]).round(2)
+    org_totals.columns = ['total_all_years', 'mean_per_year', 'std_per_year', 
+                         'min_year', 'max_year', 'years_active']
     
-    print(f"Summary statistics:")
-    print(f"  - Total org-year combinations: {total_org_years:,}")
-    print(f"  - Average appointments per org per year: {avg_appointments_per_org_year:.1f}")
-    print(f"  - Median appointments per org per year: {median_appointments_per_org_year:.1f}")
+    # Sort by total appointments
+    org_totals = org_totals.sort_values('total_all_years', ascending=False)
     
-    # Distribution of appointment counts
-    print(f"\nDistribution of appointment counts:")
-    count_distribution = appointment_counts['appointment_count'].value_counts().sort_index()
-    
-    # Show distribution in ranges for better readability
-    ranges = [(1, 1), (2, 5), (6, 10), (11, 20), (21, 50), (51, 100), (101, float('inf'))]
-    for low, high in ranges:
-        if high == float('inf'):
-            mask = appointment_counts['appointment_count'] >= low
-            range_label = f"{low}+"
-        else:
-            mask = (appointment_counts['appointment_count'] >= low) & (appointment_counts['appointment_count'] <= high)
-            range_label = f"{low}-{high}" if low != high else f"{low}"
-        
-        count = mask.sum()
-        percentage = (count / total_org_years) * 100
-        print(f"  {range_label} appointments: {count:,} org-years ({percentage:.1f}%)")
-    
-    # Top organizations by average appointment count
-    org_avg_appointments = appointment_counts.groupby('org').agg({
-        'appointment_count': ['mean', 'median', 'sum', 'count'],
-        'total_appointments': 'sum'
-    }).round(2)
-    
-    # Flatten column names
-    org_avg_appointments.columns = ['avg_appointments', 'median_appointments', 'total_appointments', 'years_active', 'total_appointments']
-    org_avg_appointments = org_avg_appointments.sort_values('avg_appointments', ascending=False)
-    
-    print(f"\nTop 10 organizations by average appointment count per year:")
-    for org, row in org_avg_appointments.head(10).iterrows():
+    print(f"Top 15 organizations by total appointments (2013-2024):")
+    for org, row in org_totals.head(15).iterrows():
         print(f"  {org}")
-        print(f"    Avg: {row['avg_appointments']:.1f}, Median: {row['median_appointments']:.1f}, Total: {row['total_appointments']:.0f}")
-        print(f"    Years active: {row['years_active']:.0f}, Total appointments: {row['total_appointments']:.0f}")
+        print(f"    Total: {row['total_all_years']:.0f}, Avg/year: {row['mean_per_year']:.1f}, "
+              f"Active years: {row['years_active']:.0f}")
     
-    # Organizations with most total appointments across all years
-    print(f"\nTop 10 organizations by total appointments across all years:")
-    for org, row in org_avg_appointments.sort_values('total_appointments', ascending=False).head(10).iterrows():
-        print(f"  {org}: {row['total_appointments']:.0f} total appointments")
+    # Organizations with highest annual activity
+    print(f"\nOrganizations with highest single-year appointment counts:")
+    highest_annual = appointment_counts.nlargest(10, 'total_appointments')
+    for idx, row in highest_annual.iterrows():
+        print(f"  {row['org']} ({row['year']:.0f}): {row['total_appointments']} appointments")
     
-    # Year-over-year trends
-    yearly_totals = appointment_counts.groupby('year').agg({
-        'appointment_count': ['sum', 'mean', 'count'],
-        'total_appointments': 'sum'
-    }).round(2)
+    # Organizations active in all years
+    all_years = appointment_counts['year'].unique()
+    consistently_active = org_totals[org_totals['years_active'] == len(all_years)]
     
-    yearly_totals.columns = ['total_appointments', 'avg_appointments_per_org', 'active_orgs', 'total_appointments']
+    print(f"\nOrganizations active in all {len(all_years)} years ({len(consistently_active)} total):")
+    if len(consistently_active) > 0:
+        for org, row in consistently_active.head(10).iterrows():
+            print(f"  {org}: {row['total_all_years']:.0f} total appointments")
     
-    print(f"\nYear-over-year appointment trends:")
-    for year, row in yearly_totals.iterrows():
-        print(f"  {year:.0f}: {row['total_appointments']:.0f} appointments across {row['active_orgs']:.0f} orgs")
-        print(f"        Avg per org: {row['avg_appointments_per_org']:.1f}, Total appointments: {row['total_appointments']:.0f}")
-    
-    return org_avg_appointments, yearly_totals
+    return org_totals
 
-def validate_appointment_counts(df, appointment_counts):
-    """Validate the appointment counting results."""
+def analyze_temporal_trends(appointment_counts):
+    """Analyze temporal trends in appointments."""
     print("\n" + "=" * 50)
-    print("VALIDATION OF EMPLOYEE COUNTS")
+    print("TEMPORAL TRENDS ANALYSIS")
     print("=" * 50)
     
-    # Check 1: Total unique individuals in dataset
-    total_unique_individuals = df['name'].nunique()
-    print(f"Validation checks:")
-    print(f"  - Total unique individuals in dataset: {total_unique_individuals:,}")
+    # Year-over-year totals
+    yearly_totals = appointment_counts.groupby('year')['total_appointments'].agg([
+        'sum', 'mean', 'count'
+    ]).round(2)
+    yearly_totals.columns = ['total_appointments', 'avg_per_org', 'active_orgs']
     
-    # Check 2: Sum of appointment counts should be >= unique individuals
-    # (because same person can work in multiple orgs or years)
-    sum_appointment_counts = appointment_counts['appointment_count'].sum()
-    print(f"  - Sum of all appointment counts: {sum_appointment_counts:,}")
+    print("Annual appointment summary:")
+    for year, row in yearly_totals.iterrows():
+        print(f"  {year:.0f}: {row['total_appointments']:.0f} total, "
+              f"{row['avg_per_org']:.1f} avg/org, {row['active_orgs']:.0f} active orgs")
     
-    # Check 3: Verify some specific cases
-    print(f"\nSpot checks:")
+    # Calculate year-over-year growth
+    yearly_totals['yoy_growth'] = yearly_totals['total_appointments'].pct_change() * 100
+    yearly_totals['yoy_growth_orgs'] = yearly_totals['active_orgs'].pct_change() * 100
     
-    # Find an organization with data in multiple years
-    org_with_multiple_years = appointment_counts.groupby('org')['year'].count()
-    sample_org = org_with_multiple_years[org_with_multiple_years > 1].index[0]
+    print(f"\nYear-over-year growth rates:")
+    for year, row in yearly_totals.iterrows():
+        if not pd.isna(row['yoy_growth']):
+            print(f"  {year:.0f}: {row['yoy_growth']:+.1f}% appointments, "
+                  f"{row['yoy_growth_orgs']:+.1f}% active orgs")
     
-    sample_org_data = appointment_counts[appointment_counts['org'] == sample_org].sort_values('year')
-    print(f"  - Sample organization: {sample_org}")
-    for _, row in sample_org_data.iterrows():
-        print(f"    {row['year']:.0f}: {row['appointment_count']:.0f} appointments, {row['total_appointments']:.0f} appointments")
+    # Identify trends
+    first_year_total = yearly_totals['total_appointments'].iloc[0]
+    last_year_total = yearly_totals['total_appointments'].iloc[-1]
+    overall_growth = ((last_year_total - first_year_total) / first_year_total) * 100
     
-    # Manually verify the first row
-    first_row = appointment_counts.iloc[0]
-    manual_count = df[(df['org'] == first_row['org']) & (df['year'] == first_row['year'])]['name'].nunique()
-    print(f"\nManual verification of first row:")
-    print(f"  - {first_row['org']} in {first_row['year']:.0f}")
-    print(f"  - Computed count: {first_row['appointment_count']}")
-    print(f"  - Manual count: {manual_count}")
-    print(f"  - Match: {'✓' if first_row['appointment_count'] == manual_count else '✗'}")
+    print(f"\nOverall trend (2013-2024):")
+    print(f"  - 2013 total: {first_year_total:.0f}")
+    print(f"  - 2024 total: {last_year_total:.0f}")
+    print(f"  - Overall growth: {overall_growth:+.1f}%")
+    
+    return yearly_totals
+
+def create_pivot_table(appointment_counts):
+    """Create a pivot table for easy analysis."""
+    print("\n" + "=" * 50)
+    print("CREATING PIVOT TABLE")
+    print("=" * 50)
+    
+    # Create pivot table with organizations as rows and years as columns
+    pivot_table = appointment_counts.pivot(index='org', columns='year', values='total_appointments')
+    
+    # Fill NaN values with 0 (organizations not active in certain years)
+    pivot_table = pivot_table.fillna(0).astype(int)
+    
+    print(f"Pivot table dimensions: {pivot_table.shape[0]} organizations × {pivot_table.shape[1]} years")
+    
+    # Add summary columns
+    pivot_table['Total'] = pivot_table.sum(axis=1)
+    pivot_table['Mean'] = pivot_table.iloc[:, :-1].mean(axis=1).round(1)
+    pivot_table['Active_Years'] = (pivot_table.iloc[:, :-2] > 0).sum(axis=1)
+    
+    # Sort by total appointments
+    pivot_table = pivot_table.sort_values('Total', ascending=False)
+    
+    # Display top organizations
+    print(f"\nTop 10 organizations (full appointment matrix):")
+    top_orgs = pivot_table.head(10)
+    
+    # Create a readable display
+    year_columns = [col for col in pivot_table.columns if isinstance(col, (int, float)) and col >= 2013]
+    
+    print(f"{'Organization':<40} ", end="")
+    for year in sorted(year_columns):
+        print(f"{year:.0f}".rjust(5), end=" ")
+    print(f"{'Total'.rjust(6)} {'Mean'.rjust(6)} {'Years'.rjust(6)}")
+    print("-" * (40 + len(year_columns) * 6 + 18))
+    
+    for org, row in top_orgs.iterrows():
+        org_display = org[:37] + "..." if len(org) > 40 else org
+        print(f"{org_display:<40} ", end="")
+        for year in sorted(year_columns):
+            count = row[year] if year in row.index else 0
+            if count > 0:
+                print(f"{count:4.0f}".rjust(5), end=" ")
+            else:
+                print("    -", end=" ")
+        print(f"{row['Total']:5.0f} {row['Mean']:5.1f} {row['Active_Years']:5.0f}")
+    
+    return pivot_table
+
+def validate_counts(df, appointment_counts):
+    """Validate that our counts match the original data."""
+    print("\n" + "=" * 50)
+    print("VALIDATION CHECKS")
+    print("=" * 50)
+    
+    # Check total count matches
+    original_total = len(df)
+    counted_total = appointment_counts['total_appointments'].sum()
+    
+    print(f"Validation results:")
+    print(f"  - Original dataset records: {original_total:,}")
+    print(f"  - Sum of counted appointments: {counted_total:,}")
+    print(f"  - Counts match: {original_total == counted_total}")
+    
+    if original_total != counted_total:
+        print("  WARNING: Count mismatch detected!")
+        return False
+    
+    # Spot check: verify a few specific org-year combinations
+    print(f"\nSpot checks (sampling 3 org-year combinations):")
+    sample_combinations = appointment_counts.sample(min(3, len(appointment_counts)))
+    
+    for idx, row in sample_combinations.iterrows():
+        org = row['org']
+        year = row['year']
+        expected_count = row['total_appointments']
+        
+        # Count manually from original data
+        actual_count = len(df[(df['org'] == org) & (df['year'] == year)])
+        
+        match = expected_count == actual_count
+        print(f"  - {org} ({year:.0f}): Expected {expected_count}, Actual {actual_count} ✓" if match 
+              else f"  - {org} ({year:.0f}): Expected {expected_count}, Actual {actual_count} ✗")
     
     return True
-
-def generate_summary_statistics(appointment_counts):
-    """Generate final summary statistics."""
-    print("\n" + "=" * 60)
-    print("EMPLOYEE COUNT SUMMARY STATISTICS")
-    print("=" * 60)
-    
-    # Overall statistics
-    total_org_year_combinations = len(appointment_counts)
-    total_organizations = appointment_counts['org'].nunique()
-    total_years = appointment_counts['year'].nunique()
-    
-    print(f"Dataset summary:")
-    print(f"  - Total org-year combinations: {total_org_year_combinations:,}")
-    print(f"  - Unique organizations: {total_organizations:,}")
-    print(f"  - Years covered: {total_years:,}")
-    
-    # Appointment count statistics
-    appointment_stats = appointment_counts['appointment_count'].describe()
-    print(f"\nAppointment count statistics:")
-    print(f"  - Mean: {appointment_stats['mean']:.1f}")
-    print(f"  - Median: {appointment_stats['50%']:.1f}")
-    print(f"  - Min: {appointment_stats['min']:.0f}")
-    print(f"  - Max: {appointment_stats['max']:.0f}")
-    print(f"  - Std Dev: {appointment_stats['std']:.1f}")
-    
-    # Appointments per appointment statistics
-    app_per_emp_stats = appointment_counts['appointments_per_appointment'].describe()
-    print(f"\nAppointments per appointment statistics:")
-    print(f"  - Mean: {app_per_emp_stats['mean']:.2f}")
-    print(f"  - Median: {app_per_emp_stats['50%']:.2f}")
-    print(f"  - Min: {app_per_emp_stats['min']:.2f}")
-    print(f"  - Max: {app_per_emp_stats['max']:.2f}")
-    
-    # Year range
-    year_range = f"{appointment_counts['year'].min():.0f} - {appointment_counts['year'].max():.0f}"
-    print(f"\nYear range: {year_range}")
 
 def count_appointments_main():
     """Main function to count appointments by organization and year."""
     print("=" * 60)
-    print("STEP 4: COUNTING EMPLOYEES BY ORGANIZATION AND YEAR")
+    print("STEP 4: COUNTING APPOINTMENTS BY ORGANIZATION AND YEAR")
     print("=" * 60)
     
     # Setup directories
@@ -287,7 +315,7 @@ def count_appointments_main():
     
     # Define input and output files
     input_file = analysis_dir / "step3_repeats_marked.csv"
-    output_file = analysis_dir / "step4_appointment_counts.csv"
+    output_file = analysis_dir / "step4_employee_counts.csv"
     
     # Validate input file exists
     if not validate_input_file(input_file):
@@ -306,38 +334,57 @@ def count_appointments_main():
     # Count appointments by organization and year
     appointment_counts = count_appointments_by_org_year(df)
     
-    # Analyze appointment count patterns
-    org_analysis, yearly_analysis = analyze_appointment_count_patterns(appointment_counts)
+    # Analyze organizational patterns
+    org_totals = analyze_organizational_patterns(appointment_counts)
     
-    # Validate the counting results
-    validate_appointment_counts(df, appointment_counts)
+    # Analyze temporal trends
+    yearly_totals = analyze_temporal_trends(appointment_counts)
     
-    # Generate summary statistics
-    generate_summary_statistics(appointment_counts)
+    # Create pivot table for comprehensive view
+    pivot_table = create_pivot_table(appointment_counts)
     
-    # Save the appointment counts dataset
+    # Validate our counts
+    validation_passed = validate_counts(df, appointment_counts)
+    
+    if not validation_passed:
+        print("ERROR: Validation failed. Please check the counting logic.")
+        return False
+    
+    # Save the appointment counts
     try:
         appointment_counts.to_csv(output_file, index=False)
+        
+        # Save additional analysis files
+        org_totals.to_csv(analysis_dir / "step4_organizational_totals.csv")
+        yearly_totals.to_csv(analysis_dir / "step4_yearly_trends.csv")
+        pivot_table.to_csv(analysis_dir / "step4_appointment_matrix.csv")
         
         print(f"\n" + "=" * 60)
         print("STEP 4 COMPLETED SUCCESSFULLY")
         print("=" * 60)
-        print(f"Output file: {output_file}")
-        print(f"Records created: {len(appointment_counts):,}")
+        print(f"Main output file: {output_file}")
+        print(f"Records: {len(appointment_counts):,} org-year combinations")
         print(f"Columns: {list(appointment_counts.columns)}")
         
-        # Save additional analysis files
-        org_analysis.to_csv(analysis_dir / "step4_org_analysis.csv")
-        yearly_analysis.to_csv(analysis_dir / "step4_yearly_analysis.csv")
-        
         print(f"\nAdditional analysis files saved:")
-        print(f"  - step4_org_analysis.csv (organization-level statistics)")
-        print(f"  - step4_yearly_analysis.csv (year-over-year trends)")
+        print(f"  - step4_organizational_totals.csv (summary by organization)")
+        print(f"  - step4_yearly_trends.csv (annual trends)")
+        print(f"  - step4_appointment_matrix.csv (pivot table format)")
+        
+        # Summary statistics
+        total_appointments = appointment_counts['total_appointments'].sum()
+        unique_orgs = appointment_counts['org'].nunique()
+        unique_years = appointment_counts['year'].nunique()
+        
+        print(f"\nSummary statistics:")
+        print(f"  - Total appointments counted: {total_appointments:,}")
+        print(f"  - Unique organizations: {unique_orgs:,}")
+        print(f"  - Years covered: {unique_years} ({appointment_counts['year'].min():.0f}-{appointment_counts['year'].max():.0f})")
         
         return True
         
     except Exception as e:
-        print(f"ERROR saving appointment counts dataset: {str(e)}")
+        print(f"ERROR saving appointment counts: {str(e)}")
         return False
 
 if __name__ == "__main__":

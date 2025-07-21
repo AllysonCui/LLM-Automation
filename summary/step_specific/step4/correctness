@@ -1,6 +1,162 @@
-save scripts/human/version1/analysis_data/step4_employee_counts.csv as the correct wide answer.
-convert it to long form, it should have 210 rows.
-If the number of rows is 43 or 203, mark them wrong.
-If the number of rows is 44, compare it to the correct wide answer.
-If the number of rows is 45, remove the line with string 'total' not case-sensitive, compare it to the correct answer.
-If the number of rows is 210, compare it to the correct long answer.
+import os
+import pandas as pd
+
+# Canonical column definitions
+answer1_columns = ["org", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024"]
+answer3_columns = ["org", "year", "total_appointments"]
+
+# Define model/version pairs
+base_paths = [
+    ("gpt4o", "version1"), ("gpt4o", "version2"), ("gpt4o", "version3"),
+    ("claudeopus4", "version1"), ("claudeopus4", "version2"), ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"), ("claudesonnet4", "version2"), ("claudesonnet4", "version3")
+]
+
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown", "missing", "unknown_org", "unknown organization"]:
+            return "nan"
+        return normalized
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).lower()
+
+def normalize_columns(df):
+    rename_dict = {
+        "organization": "org",
+        "source_year": "year",
+        "appointment_count": "total_appointments",
+        "data_year": "year"
+    }
+    return df.rename(columns={col: rename_dict[col] for col in rename_dict if col in df.columns})
+
+# Load correct answers
+try:
+    answer1 = pd.read_csv("summary/step_specific/step4/correct_answer/answer1.csv")
+    answer1 = normalize_columns(answer1)
+    answer3 = pd.read_csv("summary/step_specific/step4/correct_answer/answer3.csv")
+    answer3 = normalize_columns(answer3)
+except Exception as e:
+    print(f"❌ Failed to load answer1 or answer3: {e}")
+    exit(1)
+
+# Load Step 4 skip list
+skip_step4_path = "summary/step_specific/step4/executions_to_skip.csv"
+skip_step4_set = set()
+if os.path.exists(skip_step4_path):
+    try:
+        skip_df = pd.read_csv(skip_step4_path)
+        skip_step4_set = set(skip_df["execution"].astype(str))
+    except Exception as e:
+        print(f"⚠️ Failed to load step4 skip list: {e}")
+
+# Initialize
+root_dir = "scripts"
+checked_executions = []
+failures = []
+found_executions = set()
+
+for model, version in base_paths:
+    for i in range(1, 11):
+        rel_exec = f"{model}/{version}/execution{i}"
+        full_exec = f"scripts/{rel_exec}"
+        found_executions.add(rel_exec)
+
+        if rel_exec in skip_step4_set:
+            continue  # skip silently
+
+        file_path = os.path.join(root_dir, model, version, f"execution{i}", "analysis_data", "step4_appointment_counts.csv")
+        if not os.path.exists(file_path):
+            continue
+
+        try:
+            df = pd.read_csv(file_path)
+            df = normalize_columns(df)
+            row_count = len(df)
+
+            if row_count == 44:
+                expected_df = answer1
+                expected_cols = answer1_columns
+            elif row_count == 210:
+                expected_df = answer3
+                expected_cols = answer3_columns
+            else:
+                print(f"{file_path}: ⚠️ Unexpected row count ({row_count}) — skipped")
+                failures.append(rel_exec)
+                continue
+
+            if not all(col in df.columns for col in expected_cols):
+                print(f"{file_path}: ❌ Missing expected columns")
+                failures.append(rel_exec)
+                continue
+
+            df_norm = df[expected_cols].applymap(normalize_cell)
+            expected_norm = expected_df[expected_cols].applymap(normalize_cell)
+
+            df_norm = df_norm[df_norm["org"] != "nan"]
+            expected_norm = expected_norm[expected_norm["org"] != "nan"]
+
+            df_nan = df_norm[df_norm.apply(lambda row: "nan" in row.values, axis=1)]
+            df_clean = df_norm.drop(df_nan.index)
+            expected_nan = expected_norm[expected_norm.apply(lambda row: "nan" in row.values, axis=1)]
+            expected_clean = expected_norm.drop(expected_nan.index)
+
+            df_clean_set = set(map(tuple, df_clean.values.tolist()))
+            expected_clean_set = set(map(tuple, expected_clean.values.tolist()))
+
+            passed = True
+            if df_clean_set != expected_clean_set:
+                print(f"{file_path}: ❌ Value mismatch in clean rows")
+                failures.append(rel_exec)
+                passed = False
+
+            df_nan_set = set(map(tuple, df_nan.values.tolist()))
+            expected_nan_set = set(map(tuple, expected_nan.values.tolist()))
+            if df_nan_set != expected_nan_set:
+                print(f"{file_path}: ⚠️ Mismatch in rows containing 'nan'")
+                failures.append(rel_exec)
+                passed = False
+
+            if passed:
+                print(f"{file_path}: ✅ All rows matched")
+
+            checked_executions.append(rel_exec)
+
+        except Exception as e:
+            print(f"{file_path}: ❌ Failed to process ({e})")
+            failures.append(rel_exec)
+
+# Save step5 skip list
+combined_skips = sorted(set(failures).union(skip_step4_set))
+output_dir = "summary/step_specific/step5"
+os.makedirs(output_dir, exist_ok=True)
+skip_path = os.path.join(output_dir, "executions_to_skip.csv")
+pd.DataFrame({"execution": combined_skips}).to_csv(skip_path, index=False)
+
+# Final summary
+print("\n=== SUMMARY ===")
+print(f"Executions Actually Checked: {len(checked_executions)}")
+print(f"Executions with All Correct Rows: {len(checked_executions) - len(set(failures))}")
+print(f"Executions with Errors in Step 4: {len(set(failures))}")
+print(f"Combined Skips Saved to: {skip_path}")
+
+# Consistency check
+all_expected = {
+    f"{model}/{version}/execution{n}"
+    for model, version in base_paths
+    for n in range(1, 11)
+}
+checked_set = set(checked_executions)
+skipped_set = skip_step4_set
+processed_set = checked_set.union(skipped_set)
+unprocessed = all_expected - processed_set
+
+if unprocessed:
+    print(f"\n❗ WARNING: {len(unprocessed)} executions were neither checked nor skipped:")
+    for e in sorted(unprocessed):
+        print(f"  scripts/{e}/analysis_data/step4_appointment_counts.csv")
+else:
+    print("\n✅ All 90 executions were either checked or skipped")

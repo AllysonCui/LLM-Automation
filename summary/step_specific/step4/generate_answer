@@ -1,0 +1,45 @@
+import pandas as pd
+from pathlib import Path
+
+# Define file paths
+input_path = Path("scripts/human/version1/analysis_data/step4_appointment_counts.csv")
+output_dir = Path("summary/step_specific/step4/correct_answer")
+answer1_path = output_dir / "answer1.csv"
+answer2_path = output_dir / "answer2.csv"
+
+# Create output directory if it doesn't exist
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Normalize string values for case-insensitive comparison
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"nan", "unknown"}:
+            return "nan"
+        return normalized
+    return str(value).lower()
+
+# Create a sort key with correct column priority
+def create_sort_key(df, sort_priority):
+    normalized_df = df[sort_priority].applymap(normalize_cell)
+    return normalized_df.apply(lambda row: tuple(row), axis=1)
+
+# Step 1: Read and sort wide-form CSV
+df = pd.read_csv(input_path)
+sort_priority = ["org"]
+sort_key = create_sort_key(df, sort_priority)
+sorted_df = df.iloc[sort_key.argsort()].reset_index(drop=True)
+sorted_df.to_csv(answer1_path, index=False)
+
+# Step 2: Convert to long-form and save
+long_df = pd.melt(sorted_df, id_vars=["org"], var_name="year", value_name="total_appointments")
+long_df["year"] = long_df["year"].astype(str)
+long_df = long_df.sort_values(by=["org", "year"]).reset_index(drop=True)
+long_df.to_csv(answer2_path, index=False)
+
+# Step 3: Remove rows with total_appointments == 0 and save
+filtered_df = long_df[long_df["total_appointments"] != 0].reset_index(drop=True)
+answer3_path = output_dir / "answer3.csv"
+filtered_df.to_csv(answer3_path, index=False)

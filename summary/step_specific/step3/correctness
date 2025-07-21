@@ -1,67 +1,85 @@
 import os
 import pandas as pd
-import re
-import matplotlib.pyplot as plt
-from collections import Counter
 
-def normalize_text_column(series: pd.Series) -> pd.Series:
-    """Robust normalization: lowercase, strip, remove extra spaces, fix 'and'."""
-    return (
-        series.fillna("")
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .str.replace(r"\s*,\s*", ", ", regex=True)  # Standardize comma spacing
-        .str.replace(r"\s{2,}", " ", regex=True)    # Remove extra spacing
-        .str.replace(r"\band\b", "and", flags=re.IGNORECASE, regex=True)  # Force lowercase "and"
-        .str.replace(r"\s+", " ", regex=True)       # Collapse all space to single
-        .str.strip()
-    )
+# Columns to compare
+key_columns = ["reappointed", "name", "position", "org", "year"]
 
-def normalize_and_standardize(df):
-    """Standardize relevant columns for fair comparison."""
-    df = df.rename(columns={
+def normalize_cell(value):
+    if pd.isna(value):
+        return "nan"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ["nan", "unknown", "missing", "unknown_org"]:
+            return "nan"
+        return normalized
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))  # e.g., 2024.0 → '2024'
+    return str(value).lower()
+
+sort_priority = ["name", "position", "org", "reappointed", "year"]
+
+def create_sort_key(df):
+    normalized_df = df[sort_priority].applymap(normalize_cell)
+    return normalized_df.apply(lambda row: tuple(row), axis=1)
+
+def safe_rename_columns(df):
+    rename_dict = {
         "organization": "org",
-        "source_year": "year"
-    })
+        "source_year": "year",
+        "data_year": "year"
+    }
+    return df.rename(columns={col: rename_dict[col] for col in rename_dict if col in df.columns})
 
-    df = df[["reappointed", "name", "position", "org", "year"]].copy()
+# Load correct answer
+correct_path = "summary/step_specific/step3/correct_answer/answer1.csv"
+try:
+    correct_df = pd.read_csv(correct_path)
+    correct_df = safe_rename_columns(correct_df)
+    correct_df = correct_df[key_columns].copy()
+except Exception as e:
+    print(f"Failed to read correct answer file: {e}")
+    exit(1)
 
-    for col in ["name", "position", "org"]:
-        df[col] = normalize_text_column(df[col])
+# Normalize and sort correct answer
+sort_key = create_sort_key(correct_df)
+correct_df = correct_df.iloc[sort_key.argsort()].reset_index(drop=True)
+normalized_correct_df = correct_df[key_columns].applymap(normalize_cell)
 
-    # Now re-title-case only after full normalization (optional, or keep lowercase if comparing)
-    df["position"] = df["position"].str.title()
-    df["name"] = df["name"].str.title()
-    df["org"] = df["org"].str.title()
+# Load step3 skip list
+skip_step3_path = "summary/step_specific/step3/executions_to_skip.csv"
+skip_step3_set = set()
+if os.path.exists(skip_step3_path):
+    try:
+        skip_df = pd.read_csv(skip_step3_path)
+        skip_step3_set = set(skip_df["execution"].astype(str))
+        print(f"🔁 Skipping {len(skip_step3_set)} executions listed in step3 skip file")
+    except Exception as e:
+        print(f"⚠️ Failed to load step3 skip list: {e}")
 
-    df["reappointed"] = df["reappointed"].astype(bool)
-    df["year"] = df["year"].astype(int)
+# Prepare expected executions
+expected_branches = [
+    ("gpt4o", "version1"),
+    ("gpt4o", "version2"),
+    ("gpt4o", "version3"),
+    ("claudeopus4", "version1"),
+    ("claudeopus4", "version2"),
+    ("claudeopus4", "version3"),
+    ("claudesonnet4", "version1"),
+    ("claudesonnet4", "version2"),
+    ("claudesonnet4", "version3")
+]
 
-    return df
+expected_executions = {
+    f"scripts/{model}/{version}/execution{n}"
+    for model, version in expected_branches
+    for n in range(1, 11)
+}
 
+found_executions = set()
+current_step_failures = []  # step 4 specific issues
 
-def is_visibly_missing(org_val):
-    return str(org_val).strip().lower() in ["", "nan", "unknown"]
-
-def drop_rows_with_missing_org(df):
-    return df[~df["org"].apply(is_visibly_missing)]
-
-# Load and normalize full correct dataset
-correct_path = "scripts/human/version1/analysis_data/step3_repeats_marked.csv"
-correct_df = pd.read_csv(correct_path)
-correct_df = normalize_and_standardize(correct_df)
-filtered_correct_df = drop_rows_with_missing_org(correct_df)
-
-# Root directory of all outputs
 root_dir = "scripts"
 
-# Track wrong rows and successes
-wrong_row_counts = []
-total_executions = 0
-correct_executions = 0
-
-# Traverse and compare
 for model in os.listdir(root_dir):
     model_path = os.path.join(root_dir, model)
     if not os.path.isdir(model_path):
@@ -76,52 +94,77 @@ for model in os.listdir(root_dir):
             if not folder.startswith("execution"):
                 continue
 
-            exec_path = os.path.join(version_path, folder)
-            test_file = os.path.join(exec_path, "analysis_data", "step3_repeats_marked.csv")
-
-            if not os.path.exists(test_file):
+            execution_dir = f"{model}/{version}/{folder}"
+            if execution_dir in skip_step3_set:
+                print(f"⏩ Skipping {execution_dir} (previously failed in step 3)")
                 continue
 
-            total_executions += 1
+            found_executions.add(f"scripts/{execution_dir}")
+            step3_file = os.path.join(version_path, folder, "analysis_data", "step3_repeats_marked.csv")
+
+            if not os.path.exists(step3_file):
+                continue
 
             try:
-                test_df = pd.read_csv(test_file)
-                test_df = normalize_and_standardize(test_df)
-                num_rows = len(test_df)
+                df = pd.read_csv(step3_file)
+                df = safe_rename_columns(df)
 
-                # Choose reference
-                if num_rows == 3718:
-                    reference_df = correct_df
-                    label = "full correct answer"
-                else:
-                    print(f"{test_file}: ⚠️ Unexpected row count ({num_rows})")
+                if not all(col in df.columns for col in key_columns):
+                    print(f"{step3_file}: Missing columns")
                     continue
 
-                merged = reference_df.merge(
-                    test_df.drop_duplicates(),
-                    on=["reappointed", "name", "position", "org", "year"],
-                    how="left",
-                    indicator=True
-                )
-                missing_rows = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+                df = df[key_columns].copy()
+                sort_key = create_sort_key(df)
+                df = df.iloc[sort_key.argsort()].reset_index(drop=True)
+                normalized_df = df[key_columns].applymap(normalize_cell)
 
-                visibly_missing = missing_rows["org"].apply(is_visibly_missing)
-                num_wrong = len(missing_rows[~visibly_missing])
+                if len(df) != len(correct_df):
+                    print(f"{step3_file}: Row count mismatch ({len(df)} vs {len(correct_df)})")
+                    current_step_failures.append(execution_dir)
+                    continue
 
-                if num_wrong == 0:
-                    print(f"{test_file}: ✅ All valid rows from {label} are present in tested dataset")
-                    correct_executions += 1
-                else:
-                    print(f"{test_file}: ❌ {num_wrong} missing valid rows from {label}")
-                    print(missing_rows[~visibly_missing].head(5))
+                mismatches = (normalized_df != normalized_correct_df)
+                if mismatches.any().any():
+                    print(f"{step3_file}: Value mismatch found")
+                    current_step_failures.append(execution_dir)
 
-                wrong_row_counts.append(num_wrong)
+                    mismatch_count = 0
+                    for idx in mismatches.index:
+                        for col in key_columns:
+                            if mismatches.at[idx, col]:
+                                found_val = normalize_cell(df.at[idx, col])
+                                expected_val = normalize_cell(correct_df.at[idx, col])
+                                if found_val != expected_val:
+                                    print(f"  Row {idx}, Column '{col}': found = '{df.at[idx, col]}', expected = '{correct_df.at[idx, col]}'")
+                                    mismatch_count += 1
+                                    if mismatch_count >= 5:
+                                        break
+                        if mismatch_count >= 5:
+                            break
 
             except Exception as e:
-                print(f"{test_file}: ❌ Failed to process ({e})")
+                print(f"{step3_file}: Failed to read/compare ({e})")
 
-# Summarize results
-print("\n=== SUMMARY ===")
-print(f"Total Executions Checked: {total_executions}")
-print(f"Executions with All Correct Rows: {correct_executions}")
-print(f"Executions with Errors: {total_executions - correct_executions}")
+# Report missing executions (excluding skipped ones)
+missing = expected_executions - found_executions - {f"scripts/{e}" for e in skip_step3_set}
+if missing:
+    print(f"\nMissing {len(missing)} executions (excluding skipped):")
+    for m in sorted(missing):
+        print(f"  {m}/analysis_data/step3_repeats_marked.csv")
+else:
+    print(f"\n✓ All expected executions were found or skipped")
+
+# Combine and save total skip list for step 4
+all_skips_step4_8 = sorted(set(current_step_failures).union(skip_step3_set))
+
+output_dir1 = "summary/step_specific/step4"
+output_dir2 = "summary/step_specific/step8"
+os.makedirs(output_dir1, exist_ok=True)
+os.makedirs(output_dir2, exist_ok=True)
+skip_path1 = os.path.join(output_dir1, "executions_to_skip.csv")
+skip_path2 = os.path.join(output_dir2, "executions_to_skip.csv")
+
+pd.DataFrame({"execution": all_skips_step4_8}).to_csv(skip_path1, index=False)
+pd.DataFrame({"execution": all_skips_step4_8}).to_csv(skip_path2, index=False)
+print(f"\n🚫 Saved {len(all_skips_step4_8)} total skipped executions to: {skip_path1}")
+print(f"\n🚫 Saved {len(all_skips_step4_8)} total skipped executions to: {skip_path2}")

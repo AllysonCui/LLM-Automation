@@ -18,7 +18,7 @@ def count_reappointments_by_org_year():
     # Define paths
     input_path = Path("scripts/claudeopus4/version2/execution1/analysis_data")
     input_file = input_path / "step3_repeats_marked.csv"
-    employee_counts_file = input_path / "step4_employee_counts.csv"
+    appointment_counts_file = input_path / "step4_appointment_counts.csv"
     output_file = input_path / "step5_reappointment_counts.csv"
     
     print("\n" + "="*60)
@@ -31,9 +31,9 @@ def count_reappointments_by_org_year():
         print("Please run step3_mark_repeats.py first!")
         sys.exit(1)
     
-    if not employee_counts_file.exists():
-        print(f"❌ ERROR: Appointment counts file not found: {employee_counts_file}")
-        print("Please run step4_count_employees.py first!")
+    if not appointment_counts_file.exists():
+        print(f"❌ ERROR: Appointment counts file not found: {appointment_counts_file}")
+        print("Please run step4_count_appointments.py first!")
         sys.exit(1)
     
     # Read the dataset
@@ -45,13 +45,13 @@ def count_reappointments_by_org_year():
         print(f"❌ Error reading file: {str(e)}")
         sys.exit(1)
     
-    # Read employee counts for comparison
-    print(f"📄 Reading employee counts from: {employee_counts_file}")
+    # Read appointment counts for comparison
+    print(f"📄 Reading appointment counts from: {appointment_counts_file}")
     try:
-        employee_counts = pd.read_csv(employee_counts_file, encoding='utf-8')
+        appointment_counts = pd.read_csv(appointment_counts_file, encoding='utf-8')
         print(f"✓ Appointment counts loaded successfully")
     except Exception as e:
-        print(f"❌ Error reading employee counts: {str(e)}")
+        print(f"❌ Error reading appointment counts: {str(e)}")
         sys.exit(1)
     
     # Verify required columns exist
@@ -94,10 +94,10 @@ def count_reappointments_by_org_year():
     # Sort by year and organization
     reappointment_counts = reappointment_counts.sort_values(['year', 'org']).reset_index(drop=True)
     
-    # Merge with employee counts to get complete picture
-    print(f"\n🔄 Merging with total employee counts...")
+    # Merge with appointment counts to get complete picture
+    print(f"\n🔄 Merging with total appointment counts...")
     merged_data = pd.merge(
-        employee_counts[['year', 'org', 'total_employees']],
+        appointment_counts[['year', 'org', 'total_appointments']],
         reappointment_counts,
         on=['year', 'org'],
         how='left'
@@ -107,7 +107,7 @@ def count_reappointments_by_org_year():
     merged_data['reappointments'] = merged_data['reappointments'].fillna(0).astype(int)
     
     # Calculate reappointment rate
-    merged_data['reappointment_rate'] = (merged_data['reappointments'] / merged_data['total_employees'] * 100).round(2)
+    merged_data['reappointment_rate'] = (merged_data['reappointments'] / merged_data['total_appointments'] * 100).round(2)
     
     # Summary statistics
     print(f"\n📊 Summary statistics:")
@@ -121,33 +121,33 @@ def count_reappointments_by_org_year():
     print(f"\n🏆 Top 10 organizations by total reappointments (across all years):")
     org_totals = merged_data.groupby('org')['reappointments'].sum().sort_values(ascending=False).head(10)
     for org, total in org_totals.items():
-        total_employees = merged_data[merged_data['org'] == org]['total_employees'].sum()
-        overall_rate = (total / total_employees * 100) if total_employees > 0 else 0
+        total_appointments = merged_data[merged_data['org'] == org]['total_appointments'].sum()
+        overall_rate = (total / total_appointments * 100) if total_appointments > 0 else 0
         print(f"  - {org}: {int(total)} reappointments ({overall_rate:.1f}% overall rate)")
     
-    # Organizations with highest reappointment rates (minimum 10 total employees)
-    print(f"\n📊 Top 10 organizations by reappointment rate (min 10 total employees):")
+    # Organizations with highest reappointment rates (minimum 10 total appointments)
+    print(f"\n📊 Top 10 organizations by reappointment rate (min 10 total appointments):")
     org_rates = merged_data.groupby('org').agg({
         'reappointments': 'sum',
-        'total_employees': 'sum'
+        'total_appointments': 'sum'
     })
-    org_rates = org_rates[org_rates['total_employees'] >= 10]
-    org_rates['overall_rate'] = (org_rates['reappointments'] / org_rates['total_employees'] * 100).round(2)
+    org_rates = org_rates[org_rates['total_appointments'] >= 10]
+    org_rates['overall_rate'] = (org_rates['reappointments'] / org_rates['total_appointments'] * 100).round(2)
     top_rates = org_rates.sort_values('overall_rate', ascending=False).head(10)
     
     for org, row in top_rates.iterrows():
-        print(f"  - {org}: {row['overall_rate']:.1f}% ({int(row['reappointments'])}/{int(row['total_employees'])})")
+        print(f"  - {org}: {row['overall_rate']:.1f}% ({int(row['reappointments'])}/{int(row['total_appointments'])})")
     
     # Yearly trends
     print(f"\n📅 Reappointment trends by year:")
     yearly_stats = merged_data.groupby('year').agg({
         'reappointments': 'sum',
-        'total_employees': 'sum'
+        'total_appointments': 'sum'
     })
-    yearly_stats['yearly_rate'] = (yearly_stats['reappointments'] / yearly_stats['total_employees'] * 100).round(2)
+    yearly_stats['yearly_rate'] = (yearly_stats['reappointments'] / yearly_stats['total_appointments'] * 100).round(2)
     
     for year, row in yearly_stats.iterrows():
-        print(f"  - {int(year)}: {int(row['reappointments'])} reappointments out of {int(row['total_employees'])} "
+        print(f"  - {int(year)}: {int(row['reappointments'])} reappointments out of {int(row['total_appointments'])} "
               f"({row['yearly_rate']:.1f}%)")
     
     # Organizations with increasing/decreasing trends
@@ -192,14 +192,14 @@ def count_reappointments_by_org_year():
         print(f"  - {category}: {count} org-years ({pct:.1f}%)")
     
     # Organizations with 100% reappointment rate
-    perfect_reapp = merged_data[(merged_data['reappointment_rate'] == 100) & (merged_data['total_employees'] > 1)]
+    perfect_reapp = merged_data[(merged_data['reappointment_rate'] == 100) & (merged_data['total_appointments'] > 1)]
     if len(perfect_reapp) > 0:
-        print(f"\n🌟 Organizations with 100% reappointment rate (more than 1 employee):")
+        print(f"\n🌟 Organizations with 100% reappointment rate (more than 1 appointment):")
         for _, row in perfect_reapp.head(10).iterrows():
-            print(f"  - {row['org']} ({int(row['year'])}): {int(row['reappointments'])}/{int(row['total_employees'])}")
+            print(f"  - {row['org']} ({int(row['year'])}): {int(row['reappointments'])}/{int(row['total_appointments'])}")
     
     # Create output with key columns
-    output_columns = ['year', 'org', 'total_employees', 'reappointments', 'reappointment_rate']
+    output_columns = ['year', 'org', 'total_appointments', 'reappointments', 'reappointment_rate']
     final_output = merged_data[output_columns].copy()
     
     # Save the reappointment counts
